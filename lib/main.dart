@@ -124,12 +124,29 @@ class _GAnimeAppState extends State<GAnimeApp> {
         onProfile: (id) => setState(() => _profileId = id),
       ),
     ];
+    // Web parity theme: bg #0d0d0d, cards #222222, accent teal #14b8a6
+    // (web --bg-surface / --bg-card / --accent). Home has no top bar
+    // because the hero sits at the very top, like the web home.
     return MaterialApp(
       title: 'GAnime',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: const Color(0xFF0D0D0D),
+        cardColor: const Color(0xFF222222),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF14B8A6),
+          secondary: Color(0xFF14B8A6),
+          surface: Color(0xFF0D0D0D),
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          backgroundColor: Color(0xFF0D0D0D),
+          indicatorColor: Color(0x3314B8A6),
+        ),
+      ),
       home: Scaffold(
-        appBar: AppBar(title: const Text('GAnime')),
+        appBar: _tab == 0
+            ? null
+            : AppBar(title: const Text('GAnime')),
         body: screens[_tab],
         bottomNavigationBar: NavigationBar(
           selectedIndex: _tab,

@@ -70,7 +70,7 @@ class AnimeGrid extends StatelessWidget {
   }
 }
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   final String profileId;
   final AppSettings settings;
   final Future<void> Function(Anime, int)? onMarkWatched;
@@ -81,9 +81,91 @@ class HomeScreen extends StatelessWidget {
       this.onMarkWatched});
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _heroPage = PageController();
+  int _heroIndex = 0;
+
+  @override
+  void dispose() {
+    _heroPage.dispose();
+    super.dispose();
+  }
+
+  void _openSeeAll(String title, List<Anime> items) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: ListView(
+            padding: const EdgeInsets.all(12),
+            children: [
+              AnimeGrid(
+                items: items,
+                profileId: widget.profileId,
+                settings: widget.settings,
+                onMarkWatched: widget.onMarkWatched,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _rail(String title, List<Anime> items) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(title.toUpperCase(),
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2)),
+            TextButton(
+              onPressed: () => _openSeeAll(title, items),
+              child: const Text('View All',
+                  style: TextStyle(color: Color(0xFF14B8A6))),
+            ),
+          ],
+        ),
+        SizedBox(
+          height: 200,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: items.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (_, i) => SizedBox(
+              width: 120,
+              child: AnimeCard(
+                anime: items[i],
+                onTap: () => openDetails(context,
+                    anime: items[i],
+                    profileId: widget.profileId,
+                    settings: widget.settings,
+                    onMarkWatched: widget.onMarkWatched),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<List<Anime>>>(
-      future: Future.wait([AniList.trending(), AniList.popular()]),
+    return FutureBuilder<List<dynamic>>(
+      future: Future.wait([
+        AniList.trending(),
+        AniList.popular(),
+        Store.localLibrary(widget.profileId),
+      ]),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -91,26 +173,260 @@ class HomeScreen extends StatelessWidget {
         if (snap.hasError) {
           return Center(child: Text('Could not load AniList: ${snap.error}'));
         }
-        final trending = snap.data![0];
-        final popular = snap.data![1];
+        final trending = snap.data![0] as List<Anime>;
+        final popular = snap.data![1] as List<Anime>;
+        final local = snap.data![2] as List<LibraryEntry>;
+        final cw = local.where((e) => e.progress > 0).toList();
+        final heroItems = trending.take(4).toList();
         return ListView(
-          padding: const EdgeInsets.all(12),
           children: [
-            const Text('Trending',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            AnimeGrid(
-                items: trending,
-                profileId: profileId,
-                settings: settings,
-                onMarkWatched: onMarkWatched),
-            const SizedBox(height: 16),
-            const Text('Popular',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            AnimeGrid(
-                items: popular,
-                profileId: profileId,
-                settings: settings,
-                onMarkWatched: onMarkWatched),
+            // Hero carousel, like the web home: banner art, shade,
+            // kicker + title + meta + synopsis + View Details + dots.
+            if (heroItems.isNotEmpty)
+              SizedBox(
+                height: 340,
+                child: Stack(
+                  children: [
+                    PageView.builder(
+                      controller: _heroPage,
+                      itemCount: heroItems.length,
+                      onPageChanged: (i) => setState(() => _heroIndex = i),
+                      itemBuilder: (_, i) {
+                        final a = heroItems[i];
+                        final art = a.banner.isNotEmpty ? a.banner : a.cover;
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (art.isNotEmpty)
+                              Image.network(art,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => Container(
+                                      color: Colors.grey.shade900))
+                            else
+                              Container(color: Colors.grey.shade900),
+                            Container(
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Color(0xB8000000),
+                                  ],
+                                  stops: [0.45, 1.0],
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: 16,
+                              right: 16,
+                              bottom: 28,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('TRENDING NOW',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 2,
+                                          color: Color(0xFF14B8A6))),
+                                  const SizedBox(height: 8),
+                                  Text(a.title,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 26,
+                                          fontWeight: FontWeight.w800,
+                                          shadows: [
+                                            Shadow(
+                                                blurRadius: 10,
+                                                color: Colors.black54)
+                                          ])),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    [
+                                      if (a.format.isNotEmpty) a.format,
+                                      if (a.year != null) '${a.year}',
+                                      if (a.score != null)
+                                        '★ ${a.score!.toStringAsFixed(0)}%',
+                                    ].join(' · '),
+                                    style: const TextStyle(
+                                        fontSize: 13, color: Color(0xFFECECEC)),
+                                  ),
+                                  if (a.description.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(a.description,
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 14,
+                                            color: Color(0xFFE8E8E8))),
+                                  ],
+                                  const SizedBox(height: 12),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      foregroundColor: Colors.black,
+                                    ),
+                                    onPressed: () => openDetails(context,
+                                        anime: a,
+                                        profileId: widget.profileId,
+                                        settings: widget.settings,
+                                        onMarkWatched: widget.onMarkWatched),
+                                    child: const Text('View Details'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    Positioned(
+                      left: 16,
+                      bottom: 8,
+                      child: Row(
+                        children: [
+                          for (int i = 0; i < heroItems.length; i++)
+                            Container(
+                              margin: const EdgeInsets.only(right: 7),
+                              width: i == _heroIndex ? 18 : 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(4),
+                                color: i == _heroIndex
+                                    ? const Color(0xFF14B8A6)
+                                    : Colors.white54,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Continue Watching, only when there is local progress
+                  // (web hides the section when empty, same here).
+                  if (cw.isNotEmpty) ...[
+                    const Text('CONTINUE WATCHING',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2)),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 120,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: cw.length,
+                        separatorBuilder: (_, _) =>
+                            const SizedBox(width: 10),
+                        itemBuilder: (_, i) {
+                          final e = cw[i];
+                          final total = e.total ?? 0;
+                          final done = total > 0 && e.progress >= total;
+                          final pct =
+                              total > 0 ? e.progress / total : 0.0;
+                          final anime = Anime(
+                            id: e.anilistId ?? 0,
+                            title: e.title,
+                            cover: e.cover,
+                            episodes: total,
+                          );
+                          return SizedBox(
+                            width: 280,
+                            child: InkWell(
+                              onTap: () => openDetails(context,
+                                  anime: anime,
+                                  profileId: widget.profileId,
+                                  settings: widget.settings,
+                                  onMarkWatched: widget.onMarkWatched),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF222222),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                padding: const EdgeInsets.all(10),
+                                child: Row(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: e.cover.isNotEmpty
+                                          ? Image.network(e.cover,
+                                              width: 64,
+                                              height: 96,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (_, _, _) =>
+                                                  Container(
+                                                      width: 64,
+                                                      height: 96,
+                                                      color: Colors
+                                                          .grey.shade800))
+                                          : Container(
+                                              width: 64,
+                                              height: 96,
+                                              color: Colors.grey.shade800,
+                                              child: const Icon(
+                                                  Icons.play_arrow,
+                                                  color: Colors.white)),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Text(e.title,
+                                              maxLines: 2,
+                                              overflow:
+                                                  TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontWeight:
+                                                      FontWeight.w600)),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            done
+                                                ? 'Completed ✓'
+                                                : 'EP ${e.progress + 1}'
+                                                    '${total > 0 ? ' · ${e.progress}/$total watched' : ''}',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                color:
+                                                    Colors.grey.shade400),
+                                          ),
+                                          const SizedBox(height: 8),
+                                          LinearProgressIndicator(
+                                            value: pct,
+                                            backgroundColor:
+                                                Colors.grey.shade800,
+                                            color:
+                                                const Color(0xFF14B8A6),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  _rail('Trending Now', trending),
+                  _rail('Popular', popular),
+                ],
+              ),
+            ),
           ],
         );
       },
