@@ -41,20 +41,29 @@ class AniList {
 
   static Future<List<Anime>> _page(
     Map<String, dynamic> vars,
-    String sort,
-  ) async {
+    String sort, {
+    String? season,
+    int? seasonYear,
+    String? format,
+    bool? isAdult,
+  }) async {
     const q = '''
-query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort]) {
+query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort], \$season: MediaSeason, \$seasonYear: Int, \$format: MediaFormat, \$isAdult: Boolean) {
   Page(page: \$page, perPage: \$perPage) {
-    media(type: ANIME, search: \$search, sort: \$sort) { $_fields }
+    media(type: ANIME, search: \$search, sort: \$sort, season: \$season, seasonYear: \$seasonYear, format: \$format, isAdult: \$isAdult) { $_fields }
   }
 }''';
-    final data = await _post(q, {
+    final requestVars = <String, dynamic>{
       'page': 1,
       'perPage': 20,
       'sort': [sort],
-      if (vars['search'] != null) 'search': vars['search'],
-    });
+    };
+    if (vars['search'] != null) requestVars['search'] = vars['search'];
+    if (season != null) requestVars['season'] = season;
+    if (seasonYear != null) requestVars['seasonYear'] = seasonYear;
+    if (format != null) requestVars['format'] = format;
+    if (isAdult != null) requestVars['isAdult'] = isAdult;
+    final data = await _post(q, requestVars);
     final page = data['Page'] as Map<String, dynamic>? ?? {};
     final media = (page['media'] as List?) ?? [];
     return media
@@ -67,6 +76,41 @@ query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort]) {
   static Future<List<Anime>> search(String q) =>
       _page({'search': q}, 'SEARCH_MATCH');
 
+  /// Current season, mirroring the web app's currentSeason().
+  static ({String season, int year}) currentSeason([DateTime? now]) {
+    final d = now ?? DateTime.now();
+    if (d.month <= 1) return (season: 'WINTER', year: d.year);
+    if (d.month <= 4) return (season: 'SPRING', year: d.year);
+    if (d.month <= 7) return (season: 'SUMMER', year: d.year);
+    return (season: 'FALL', year: d.year);
+  }
+
+  static ({String season, int year}) nextSeason([DateTime? now]) {
+    final cur = currentSeason(now);
+    const order = ['WINTER', 'SPRING', 'SUMMER', 'FALL'];
+    final i = order.indexOf(cur.season);
+    if (i == 3) return (season: 'WINTER', year: cur.year + 1);
+    return (season: order[i + 1], year: cur.year);
+  }
+
+  static Future<List<Anime>> popularThisSeason() {
+    final s = currentSeason();
+    return _page({}, 'POPULARITY_DESC',
+        season: s.season, seasonYear: s.year, isAdult: false);
+  }
+
+  static Future<List<Anime>> upcomingNextSeason() {
+    final s = nextSeason();
+    return _page({}, 'POPULARITY_DESC',
+        season: s.season, seasonYear: s.year, isAdult: false);
+  }
+
+  static Future<List<Anime>> topRated() =>
+      _page({}, 'SCORE_DESC', isAdult: false);
+
+  static Future<List<Anime>> topMovies() =>
+      _page({}, 'SCORE_DESC', format: 'MOVIE', isAdult: false);
+
   static Future<Anime> details(int id) async {
     const q = 'query (\$id: Int) { Media(id: \$id, type: ANIME) { $_fields } }';
     final data = await _post(q, {'id': id});
@@ -74,8 +118,16 @@ query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort]) {
   }
 
   /// Airing schedule for the next 7 days, as (weekday, anime) pairs.
-  static Future<List<Anime>> airing() async {
+  /// Pass [from]/[to] (seconds since epoch) for any other week, e.g.
+  /// the Calendar week selector.
+  static Future<List<Anime>> airing({int? from, int? to}) async {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final f = from ?? now;
+    final t = to ?? (now + 7 * 86400);
+    return airingRange(f, t);
+  }
+
+  static Future<List<Anime>> airingRange(int from, int to) async {
     const q = '''
 query (\$from: Int, \$to: Int) {
   Page(page: 1, perPage: 50) {
@@ -84,7 +136,7 @@ query (\$from: Int, \$to: Int) {
     }
   }
 }''';
-    final data = await _post(q, {'from': now, 'to': now + 7 * 86400});
+    final data = await _post(q, {'from': from, 'to': to});
     final page = data['Page'] as Map<String, dynamic>? ?? {};
     final list = (page['airingSchedules'] as List?) ?? [];
     return list.map((e) {

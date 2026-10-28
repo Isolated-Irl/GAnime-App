@@ -38,9 +38,16 @@ class AnimeCard extends StatelessWidget {
           if (badge != null)
             Text(badge!,
                 style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
-          if (anime.score != null)
-            Text('★ ${anime.score!.toStringAsFixed(0)}%',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+          // Web rail cards show score as ★7.5 · 2026, not 75%.
+          if (anime.score != null || anime.year != null)
+            Text(
+              [
+                if (anime.score != null)
+                  '★ ${(anime.score! / 10).toStringAsFixed(1)}',
+                if (anime.year != null) '${anime.year}',
+              ].join(' · '),
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+            ),
         ],
       ),
     );

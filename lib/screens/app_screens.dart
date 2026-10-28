@@ -158,12 +158,24 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<List<Anime>> _safe(Future<List<Anime>> f) async {
+    try {
+      return await f;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<dynamic>>(
       future: Future.wait([
-        AniList.trending(),
-        AniList.popular(),
+        _safe(AniList.trending()),
+        _safe(AniList.popularThisSeason()),
+        _safe(AniList.upcomingNextSeason()),
+        _safe(AniList.popular()),
+        _safe(AniList.topRated()),
+        _safe(AniList.topMovies()),
         Store.localLibrary(widget.profileId),
       ]),
       builder: (context, snap) {
@@ -174,8 +186,12 @@ class _HomeScreenState extends State<HomeScreen> {
           return Center(child: Text('Could not load AniList: ${snap.error}'));
         }
         final trending = snap.data![0] as List<Anime>;
-        final popular = snap.data![1] as List<Anime>;
-        final local = snap.data![2] as List<LibraryEntry>;
+        final popularThisSeason = snap.data![1] as List<Anime>;
+        final upcoming = snap.data![2] as List<Anime>;
+        final popular = snap.data![3] as List<Anime>;
+        final topRated = snap.data![4] as List<Anime>;
+        final topMovies = snap.data![5] as List<Anime>;
+        final local = snap.data![6] as List<LibraryEntry>;
         final cw = local.where((e) => e.progress > 0).toList();
         final heroItems = trending.take(4).toList();
         return ListView(
@@ -243,12 +259,40 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 color: Colors.black54)
                                           ])),
                                   const SizedBox(height: 6),
+                                  // Web hero chips: first genres, small
+                                  // dark chips, exactly like the web.
+                                  if (a.genres.isNotEmpty)
+                                    Wrap(
+                                      spacing: 6,
+                                      children: [
+                                        for (final g in a.genres.take(3))
+                                          Container(
+                                            padding:
+                                                const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black45,
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: Colors.white24),
+                                            ),
+                                            child: Text(g,
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.white)),
+                                          ),
+                                      ],
+                                    ),
+                                  const SizedBox(height: 6),
                                   Text(
                                     [
-                                      if (a.format.isNotEmpty) a.format,
-                                      if (a.year != null) '${a.year}',
                                       if (a.score != null)
-                                        '★ ${a.score!.toStringAsFixed(0)}%',
+                                        '★ ${(a.score! / 10).toStringAsFixed(1)}',
+                                      if (a.format.isNotEmpty) a.format,
+                                      if (a.status.isNotEmpty) a.status,
+                                      if (a.year != null) '${a.year}',
                                     ].join(' · '),
                                     style: const TextStyle(
                                         fontSize: 13, color: Color(0xFFECECEC)),
@@ -263,17 +307,44 @@ class _HomeScreenState extends State<HomeScreen> {
                                             color: Color(0xFFE8E8E8))),
                                   ],
                                   const SizedBox(height: 12),
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.white,
-                                      foregroundColor: Colors.black,
-                                    ),
-                                    onPressed: () => openDetails(context,
-                                        anime: a,
-                                        profileId: widget.profileId,
-                                        settings: widget.settings,
-                                        onMarkWatched: widget.onMarkWatched),
-                                    child: const Text('View Details'),
+                                  Row(
+                                    children: [
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.white,
+                                          foregroundColor: Colors.black,
+                                        ),
+                                        onPressed: () => openDetails(context,
+                                            anime: a,
+                                            profileId: widget.profileId,
+                                            settings: widget.settings,
+                                            onMarkWatched:
+                                                widget.onMarkWatched),
+                                        child: const Text('Details'),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.white,
+                                          side: const BorderSide(
+                                              color: Colors.white38),
+                                          backgroundColor:
+                                              const Color(0x24FFFFFF),
+                                        ),
+                                        // My List is a post-skeleton
+                                        // feature: labelled placeholder,
+                                        // not a silent no-op.
+                                        onPressed: () =>
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                                'My List comes after the skeleton phase.'),
+                                          ),
+                                        ),
+                                        child: const Text('+ My List'),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -422,8 +493,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 20),
                   ],
-                  _rail('Trending Now', trending),
-                  _rail('Popular', popular),
+                  // Web rail order. A rail that failed to load is
+                  // skipped (empty list), never filled with fake data.
+                  if (trending.isNotEmpty)
+                    _rail('Trending Now', trending),
+                  if (popularThisSeason.isNotEmpty)
+                    _rail('Popular This Season', popularThisSeason),
+                  if (upcoming.isNotEmpty)
+                    _rail('Upcoming Next Season', upcoming),
+                  if (popular.isNotEmpty)
+                    _rail('All Time Popular', popular),
+                  if (topRated.isNotEmpty)
+                    _rail('Top 100 Anime', topRated),
+                  if (topMovies.isNotEmpty)
+                    _rail('Top 100 Movies', topMovies),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
@@ -474,15 +558,45 @@ class _SearchScreenState extends State<SearchScreen> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        TextField(
-          controller: _ctrl,
-          decoration: InputDecoration(
-            hintText: 'Search AniList…',
-            suffixIcon: IconButton(
-                icon: const Icon(Icons.search), onPressed: _search),
-            border: const OutlineInputBorder(),
-          ),
-          onSubmitted: (_) => _search(),
+        // Web search bar: rounded dark field + filter button on the
+        // right. Filter is a skeleton placeholder in this phase.
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                decoration: InputDecoration(
+                  hintText: 'Search anime...',
+                  prefixIcon: const Icon(Icons.search),
+                  filled: true,
+                  fillColor: const Color(0xFF222222),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                onSubmitted: (_) => _search(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: const Color(0xFF222222),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.tune),
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                        'Filter comes after the skeleton phase.'),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         if (_loading) const Padding(
             padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
@@ -498,13 +612,84 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 }
 
-class CalendarScreen extends StatelessWidget {
-  const CalendarScreen({super.key});
+class CalendarScreen extends StatefulWidget {
+  final String profileId;
+  final AppSettings settings;
+  final Future<void> Function(Anime, int)? onMarkWatched;
+  const CalendarScreen(
+      {super.key,
+      required this.profileId,
+      required this.settings,
+      this.onMarkWatched});
+
+  @override
+  State<CalendarScreen> createState() => _CalendarScreenState();
+}
+
+String _formatTime(DateTime dt) {
+  final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+  final minute = dt.minute.toString().padLeft(2, '0');
+  final ampm = dt.hour < 12 ? 'AM' : 'PM';
+  return '$hour12:$minute $ampm';
+}
+
+String _monthName(int m) {
+  const names = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  return names[m - 1];
+}
+
+String _weekdayShort(int w) {
+  const names = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+  return names[w - 1];
+}
+
+String _weekdayLong(int w) {
+  const names = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+    'Friday', 'Saturday', 'Sunday',
+  ];
+  return names[w - 1];
+}
+
+String _monthLong(int m) {
+  const names = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return names[m - 1];
+}
+
+class _CalendarScreenState extends State<CalendarScreen> {
+  // Week offset from the current week (Monday-start). 0 = this week.
+  int _weekOffset = 0;
+  DateTime? _selectedDay;
+
+  DateTime _mondayOfWeek(int offset) {
+    final now = DateTime.now();
+    final monday = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: now.weekday - 1));
+    return monday.add(Duration(days: 7 * offset));
+  }
 
   @override
   Widget build(BuildContext context) {
+    final monday = _mondayOfWeek(_weekOffset);
+    final days = List.generate(7, (i) => monday.add(Duration(days: i)));
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    _selectedDay ??= days.contains(todayDate) ? todayDate : monday;
+    final selected = _selectedDay!;
+    final weekEnd = monday.add(const Duration(days: 6));
+    final weekLabel =
+        '${_monthName(monday.month)} ${monday.day} – ${_monthName(weekEnd.month)} ${weekEnd.day}, ${weekEnd.year}'
+        '${_weekOffset == 0 ? ' · This week' : _weekOffset == 1 ? ' · Next week' : _weekOffset == -1 ? ' · Last week' : ''}';
+    final from = monday.millisecondsSinceEpoch ~/ 1000;
+    final to = monday.add(const Duration(days: 7)).millisecondsSinceEpoch ~/ 1000;
     return FutureBuilder<List<Anime>>(
-      future: AniList.airing(),
+      future: AniList.airing(from: from, to: to),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -513,55 +698,172 @@ class CalendarScreen extends StatelessWidget {
           return Center(child: Text('Calendar failed: ${snap.error}'));
         }
         final items = snap.data!;
-        if (items.isEmpty) {
-          return const Center(child: Text('No airing titles in the next 7 days.'));
-        }
-        final byDay = <int, List<Anime>>{};
-        for (final a in items) {
-          final day = a.airingAt == null
-              ? 0
-              : DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000).weekday;
-          (byDay[day] ??= []).add(a);
-        }
-        const names = {
-          1: 'Monday',
-          2: 'Tuesday',
-          3: 'Wednesday',
-          4: 'Thursday',
-          5: 'Friday',
-          6: 'Saturday',
-          7: 'Sunday',
-          0: 'Unknown day',
-        };
+        final dayItems = items.where((a) {
+          if (a.airingAt == null) return false;
+          final d = DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000);
+          return DateTime(d.year, d.month, d.day) == selected;
+        }).toList()
+          ..sort((a, b) => (a.airingAt ?? 0).compareTo(b.airingAt ?? 0));
         return ListView(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(16),
           children: [
-            for (final day in byDay.keys)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(names[day] ?? 'Day $day',
+            const Text('Anime Release Calendar',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF222222), shape: BoxShape.circle),
+                  child: IconButton(
+                    icon: const Icon(Icons.chevron_left),
+                    onPressed: () => setState(() {
+                      _weekOffset--;
+                      _selectedDay = null;
+                    }),
+                  ),
+                ),
+                Expanded(
+                  child: Text(weekLabel,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold)),
-                  for (final a in byDay[day]!)
-                    ListTile(
-                      leading: a.cover.isNotEmpty
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: Image.network(a.cover,
-                                  width: 40, height: 56, fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const Icon(Icons.image)),
-                            )
-                          : const Icon(Icons.image),
-                      title: Text(a.title),
-                      subtitle: Text(
-                          'EP ${a.nextEpisode ?? '?'}'
-                          '${a.airingAt != null ? ' · ${DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000)}' : ''}'),
+                          fontSize: 16, fontWeight: FontWeight.w700)),
+                ),
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF222222), shape: BoxShape.circle),
+                  child: IconButton(
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: () => setState(() {
+                      _weekOffset++;
+                      _selectedDay = null;
+                    }),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                for (final d in days)
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selectedDay = d),
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        padding:
+                            const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF222222),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: d == selected
+                                ? Colors.white
+                                : Colors.transparent,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(_weekdayShort(d.weekday),
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: d == selected
+                                        ? Colors.white
+                                        : Colors.grey.shade500)),
+                            const SizedBox(height: 4),
+                            Text('${d.day}',
+                                style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800)),
+                          ],
+                        ),
+                      ),
                     ),
-                  const SizedBox(height: 12),
-                ],
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '${_weekdayLong(selected.weekday).toUpperCase()}, '
+              '${_monthLong(selected.month).toUpperCase()} ${selected.day} '
+              '· LIVE FROM ANILIST',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0,
+                  color: Colors.grey.shade400),
+            ),
+            const SizedBox(height: 12),
+            if (dayItems.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('No releases on this day.'),
               ),
+            for (final a in dayItems)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF222222),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => openDetails(context,
+                      anime: a,
+                      profileId: widget.profileId,
+                      settings: widget.settings,
+                      onMarkWatched: widget.onMarkWatched),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: a.cover.isNotEmpty
+                              ? Image.network(a.cover,
+                                  width: 72,
+                                  height: 100,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => Container(
+                                      width: 72,
+                                      height: 100,
+                                      color: Colors.grey.shade800))
+                              : Container(
+                                  width: 72,
+                                  height: 100,
+                                  color: Colors.grey.shade800,
+                                  child: const Icon(Icons.image)),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(a.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700)),
+                              const SizedBox(height: 4),
+                              Text(
+                                'EP ${a.nextEpisode ?? '?'}'
+                                '${a.airingAt != null ? ' · ${_formatTime(DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000))}' : ''}',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey.shade400)),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.chevron_right,
+                            color: Colors.grey.shade500),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 16),
           ],
         );
       },
@@ -582,9 +884,10 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs;
+class _LibraryScreenState extends State<LibraryScreen> {
+  // Web tab order: Local, AniList, MAL, Simkl.
+  int _tab = 0;
+  String _statusFilter = 'All';
   List<LibraryEntry> _entries = [];
   bool _loading = false;
   String? _error;
@@ -592,13 +895,11 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
-    _tabs.addListener(_loadTab);
     _loadTab();
   }
 
   Future<void> _loadTab() async {
-    final tab = _tabs.index;
+    final tab = _tab;
     setState(() {
       _loading = true;
       _error = null;
@@ -618,14 +919,6 @@ class _LibraryScreenState extends State<LibraryScreen>
           }
           _entries = await Trackers.anilistLists(token, userId);
         } else if (tab == 2) {
-          final client = (t['simklClientId'] as String?) ?? '';
-          final token = (t['simklToken'] as String?) ?? '';
-          if (client.isEmpty || token.isEmpty) {
-            throw Exception(
-                'Simkl not connected. Go to Settings > Trackers and complete the Simkl PIN flow.');
-          }
-          _entries = await Trackers.simklLists(client, token);
-        } else {
           final user = (t['malUsername'] as String?) ?? '';
           final client = (t['malClientId'] as String?) ?? '';
           if (user.isEmpty || client.isEmpty) {
@@ -633,6 +926,14 @@ class _LibraryScreenState extends State<LibraryScreen>
                 'MAL not connected. Go to Settings > Trackers and enter your MAL username + client id. MAL is read-only here.');
           }
           _entries = await Trackers.malLists(user, client);
+        } else {
+          final client = (t['simklClientId'] as String?) ?? '';
+          final token = (t['simklToken'] as String?) ?? '';
+          if (client.isEmpty || token.isEmpty) {
+            throw Exception(
+                'Simkl not connected. Go to Settings > Trackers and complete the Simkl PIN flow.');
+          }
+          _entries = await Trackers.simklLists(client, token);
         }
       }
     } catch (e) {
@@ -643,67 +944,210 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    const tabNames = ['Local', 'AniList', 'MAL', 'Simkl'];
+    final watching =
+        _entries.where((e) => e.status == 'CURRENT' || e.status == 'REPEATING').length;
+    final completed = _entries.where((e) => e.status == 'COMPLETED').length;
+    final filtered = _statusFilter == 'All'
+        ? _entries
+        : _statusFilter == 'Watching'
+            ? _entries
+                .where((e) =>
+                    e.status == 'CURRENT' || e.status == 'REPEATING')
+                .toList()
+            : _entries.where((e) => e.status == 'COMPLETED').toList();
+    Widget pill(String label, bool selected, VoidCallback onTap) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? Colors.white : const Color(0xFF222222),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: selected ? Colors.black : Colors.white)),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
       children: [
-        TabBar(
-          controller: _tabs,
-          tabs: const [
-            Tab(text: 'Local'),
-            Tab(text: 'AniList'),
-            Tab(text: 'Simkl'),
-            Tab(text: 'MAL'),
+        const Text('Library',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (int i = 0; i < tabNames.length; i++) ...[
+                      pill(tabNames[i], i == _tab, () {
+                        setState(() {
+                          _tab = i;
+                          _statusFilter = 'All';
+                        });
+                        _loadTab();
+                      }),
+                      const SizedBox(width: 8),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: const BoxDecoration(
+                  color: Color(0xFF222222), shape: BoxShape.circle),
+              child: IconButton(
+                icon: const Icon(Icons.sort),
+                // Sort is a post-skeleton feature: labelled placeholder.
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Sort comes after the skeleton phase.'),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(_error!),
-                      ),
-                    )
-                  : _entries.isEmpty
-                      ? const Center(child: Text('Nothing here yet.'))
-                      : ListView(
-                          children: [
-                            for (final e in _entries)
-                              ListTile(
-                                leading: e.cover.isNotEmpty
-                                    ? ClipRRect(
-                                        borderRadius:
-                                            BorderRadius.circular(6),
-                                        child: Image.network(e.cover,
-                                            width: 40, height: 56,
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (_, _, _) =>
-                                                const Icon(Icons.image)),
-                                      )
-                                    : const Icon(Icons.image),
-                                title: Text(e.title),
-                                subtitle: Text(
-                                    '${e.status} • EP ${e.progress}${e.total != null ? '/${e.total}' : ''} • ${e.source}'),
-                                onTap: e.anilistId == null
-                                    ? null
-                                    : () async {
-                                        final a = await AniList.details(
-                                            e.anilistId!);
-                                        if (!context.mounted) return;
-                                        await openDetails(context,
-                                            anime: a,
-                                            profileId: widget.profileId,
-                                            settings: widget.settings,
-                                            onMarkWatched:
-                                                widget.onMarkWatched);
-                                      },
-                              ),
-                          ],
-                        ),
+        const SizedBox(height: 12),
+        // Skeleton label from the web UI. This is not a live check
+        // of Firebase sync state; real sync status comes later.
+        const Text('✓ Synced',
+            style: TextStyle(fontSize: 14, color: Colors.grey)),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              pill('All · ${_entries.length}', _statusFilter == 'All',
+                  () => setState(() => _statusFilter = 'All')),
+              const SizedBox(width: 8),
+              pill('Watching · $watching', _statusFilter == 'Watching',
+                  () => setState(() => _statusFilter = 'Watching')),
+              const SizedBox(width: 8),
+              pill('Completed · $completed', _statusFilter == 'Completed',
+                  () => setState(() => _statusFilter = 'Completed')),
+            ],
+          ),
         ),
+        const SizedBox(height: 16),
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(_error!),
+          )
+        else if (filtered.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              _tab == 0
+                  ? 'Nothing in your Local library yet — Add to Library on any title puts it here.'
+                  : 'Nothing here yet.',
+              style: const TextStyle(fontSize: 15, color: Colors.grey),
+            ),
+          )
+        else
+          for (final e in filtered)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF222222),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: ListTile(
+                leading: e.cover.isNotEmpty
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.network(e.cover,
+                            width: 40,
+                            height: 56,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                const Icon(Icons.image)),
+                      )
+                    : const Icon(Icons.image),
+                title: Text(e.title),
+                subtitle: Text(
+                    '${e.status} • EP ${e.progress}${e.total != null ? '/${e.total}' : ''} • ${e.source}'),
+                onTap: e.anilistId == null
+                    ? null
+                    : () async {
+                        final a = await AniList.details(e.anilistId!);
+                        if (!context.mounted) return;
+                        await openDetails(context,
+                            anime: a,
+                            profileId: widget.profileId,
+                            settings: widget.settings,
+                            onMarkWatched: widget.onMarkWatched);
+                      },
+              ),
+            ),
       ],
     );
   }
+}
+
+
+Widget _settingGroup({
+  required IconData icon,
+  required String title,
+  required String subtitle,
+  required List<Widget> children,
+}) {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    decoration: BoxDecoration(
+      color: const Color(0xFF222222),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A2A2A),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.w700)),
+                  Text(subtitle,
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.grey.shade400)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ...children,
+      ],
+    ),
+  );
 }
 
 class SettingsScreen extends StatefulWidget {
@@ -775,7 +1219,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Profiles',
+        const Text('Settings',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 16),
+        _settingGroup(
+          icon: Icons.person,
+          title: 'Account',
+          subtitle: 'Profile, sign in, cloud sync',
+          children: [
+const Text('Profiles',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         for (final p in _profiles)
           ListTile(
@@ -800,133 +1252,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
           child: const Text('Add profile'),
         ),
-        const Divider(),
-        const Text('Playback — audio and subtitle are SEPARATE settings',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        DropdownButtonFormField<String>(
-          initialValue: s.audioLanguage,
-          decoration: const InputDecoration(labelText: 'Audio language'),
-          items: const [
-            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
-            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
-            DropdownMenuItem(value: '', child: Text('Auto / device')),
-          ],
-          onChanged: (v) =>
-              _saveSettings(s.copyWith(audioLanguage: v ?? 'jpn')),
-        ),
-        DropdownButtonFormField<String>(
-          initialValue: s.subtitleLanguage,
-          decoration: const InputDecoration(labelText: 'Subtitle language'),
-          items: const [
-            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
-            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
-            DropdownMenuItem(value: '', child: Text('None')),
-          ],
-          onChanged: (v) =>
-              _saveSettings(s.copyWith(subtitleLanguage: v ?? 'eng')),
-        ),
-        SwitchListTile(
-          title: const Text('AniSkip enabled'),
-          value: s.aniskipEnabled,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipEnabled: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Auto-skip opening'),
-          value: s.aniskipAutoOp,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoOp: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Auto-skip ending'),
-          value: s.aniskipAutoEd,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoEd: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Show skip buttons'),
-          value: s.aniskipShowButton,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipShowButton: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Detect recaps'),
-          value: s.aniskipDetectRecap,
-          onChanged: (v) =>
-              _saveSettings(s.copyWith(aniskipDetectRecap: v)),
-        ),
-        const Divider(),
-        const Text('Player Test',
+const Text('Firebase sync (optional)',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const Text(
-            'Opens the media_kit player with a public test video (not a GAnime stream).'),
-        FilledButton(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => PlayerScreen(
-                  anime: const Anime(id: 0, title: 'Player Test'),
-                  episode: 1,
-                  streams: const [
-                    StreamSource(
-                      name: 'Big Buck Bunny (test MP4)',
-                      url:
-                          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-                    ),
-                  ],
-                  settings: s,
-                ),
-              ),
-            );
-          },
-          child: const Text('Open Player Test'),
-        ),
-        const Divider(),
-        const Text('Addons — user-installed only',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const Text(
-            'This app ships with NO stream sources and recommends none. '
-            'Paste a Stremio manifest URL you found yourself.'),
+            'Enter YOUR Firebase project config here on-device. It is never '
+            'written into the repo. One doc: users/{uid}.'),
         TextField(
-          controller: _addonCtrl,
+          controller: _fbApiCtrl,
           decoration: const InputDecoration(
-              hintText: 'https://…/manifest.json',
-              border: OutlineInputBorder()),
+              labelText: 'Firebase apiKey', border: OutlineInputBorder()),
         ),
-        FilledButton(
-          onPressed: () async {
-            try {
-              final rec =
-                  await AddonsService.fetchManifest(_addonCtrl.text);
-              final list = List<AddonRecord>.from(_addons);
-              if (list.any((a) => a.manifestUrl == rec.manifestUrl)) {
-                setState(() => _msg = 'Addon already installed.');
-                return;
-              }
-              list.add(rec);
-              await Store.saveAddons(widget.profileId, list);
-              setState(() {
-                _addons = list;
-                _msg = 'Installed: ${rec.name}';
-              });
-            } catch (e) {
-              setState(() => _msg = 'Addon install failed: $e');
-            }
-          },
-          child: const Text('Install addon'),
+        TextField(
+          controller: _fbProjectCtrl,
+          decoration: const InputDecoration(
+              labelText: 'Firebase projectId', border: OutlineInputBorder()),
         ),
-        for (final a in _addons)
-          ListTile(
-            title: Text(a.name),
-            subtitle: Text(a.manifestUrl),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete),
+        TextField(
+          controller: _fbEmailCtrl,
+          decoration:
+              const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+        ),
+        TextField(
+          controller: _fbPassCtrl,
+          obscureText: true,
+          decoration: const InputDecoration(
+              labelText: 'Password', border: OutlineInputBorder()),
+        ),
+        Wrap(
+          spacing: 8,
+          children: [
+            FilledButton(
               onPressed: () async {
-                final list =
-                    _addons.where((x) => x.id != a.id).toList();
-                await Store.saveAddons(widget.profileId, list);
-                setState(() => _addons = list);
+                try {
+                  await widget.firebase
+                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
+                  await widget.firebase.signIn(
+                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
+                  setState(() => _msg = 'Firebase signed in.');
+                } catch (e) {
+                  setState(() => _msg = 'Firebase sign-in failed: $e');
+                }
               },
+              child: const Text('Sign in'),
             ),
-          ),
-        const Divider(),
-        const Text('Trackers',
+            OutlinedButton(
+              onPressed: () async {
+                try {
+                  await widget.firebase
+                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
+                  await widget.firebase.signUp(
+                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
+                  setState(() => _msg = 'Firebase account created + signed in.');
+                } catch (e) {
+                  setState(() => _msg = 'Firebase sign-up failed: $e');
+                }
+              },
+              child: const Text('Create account'),
+            ),
+            OutlinedButton(
+              onPressed: () async {
+                try {
+                  final profiles = await Store.profiles(widget.account);
+                  final watched = await Store.allWatched(widget.profileId);
+                  final lib = await Store.localLibrary(widget.profileId);
+                  final ads = await Store.addons(widget.profileId);
+                  final tombs = await Store.tombstones();
+                  await widget.firebase.push(
+                    account: widget.account,
+                    settings: s,
+                    profiles: profiles,
+                    watched: watched,
+                    localLibrary: lib,
+                    addons: ads,
+                    tombstones: tombs,
+                  );
+                  setState(() => _msg = 'Sync Now pushed to users/{uid}.');
+                } catch (e) {
+                  setState(() => _msg = 'Sync failed: $e');
+                }
+              },
+              child: const Text('Sync Now'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+          ],
+        ),
+        _settingGroup(
+          icon: Icons.sync,
+          title: 'Tracking',
+          subtitle: 'AniList, MyAnimeList, Simkl',
+          children: [
+const Text('Trackers',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         TextField(
           controller: _anilistTokenCtrl,
@@ -1012,95 +1429,178 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
           child: const Text('Save MAL (read-only)'),
         ),
-        const Divider(),
-        const Text('Firebase sync (optional)',
+          ],
+        ),
+        _settingGroup(
+          icon: Icons.grid_view,
+          title: 'Layout',
+          subtitle: 'Theme, hero, rails, detail pages',
+          children: const [
+            Text(
+              'Layout options come after the skeleton phase. '
+              'This card is a placeholder, not a setting yet.',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ],
+        ),
+        _settingGroup(
+          icon: Icons.add,
+          title: 'Addon',
+          subtitle: 'Install and manage addons',
+          children: [
+const Text('Addons — user-installed only',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const Text(
-            'Enter YOUR Firebase project config here on-device. It is never '
-            'written into the repo. One doc: users/{uid}.'),
+            'This app ships with NO stream sources and recommends none. '
+            'Paste a Stremio manifest URL you found yourself.'),
         TextField(
-          controller: _fbApiCtrl,
+          controller: _addonCtrl,
           decoration: const InputDecoration(
-              labelText: 'Firebase apiKey', border: OutlineInputBorder()),
+              hintText: 'https://…/manifest.json',
+              border: OutlineInputBorder()),
         ),
-        TextField(
-          controller: _fbProjectCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Firebase projectId', border: OutlineInputBorder()),
+        FilledButton(
+          onPressed: () async {
+            try {
+              final rec =
+                  await AddonsService.fetchManifest(_addonCtrl.text);
+              final list = List<AddonRecord>.from(_addons);
+              if (list.any((a) => a.manifestUrl == rec.manifestUrl)) {
+                setState(() => _msg = 'Addon already installed.');
+                return;
+              }
+              list.add(rec);
+              await Store.saveAddons(widget.profileId, list);
+              setState(() {
+                _addons = list;
+                _msg = 'Installed: ${rec.name}';
+              });
+            } catch (e) {
+              setState(() => _msg = 'Addon install failed: $e');
+            }
+          },
+          child: const Text('Install addon'),
         ),
-        TextField(
-          controller: _fbEmailCtrl,
-          decoration:
-              const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+        for (final a in _addons)
+          ListTile(
+            title: Text(a.name),
+            subtitle: Text(a.manifestUrl),
+            trailing: IconButton(
+              icon: const Icon(Icons.delete),
+              onPressed: () async {
+                final list =
+                    _addons.where((x) => x.id != a.id).toList();
+                await Store.saveAddons(widget.profileId, list);
+                setState(() => _addons = list);
+              },
+            ),
+          ),
+          ],
         ),
-        TextField(
-          controller: _fbPassCtrl,
-          obscureText: true,
-          decoration: const InputDecoration(
-              labelText: 'Password', border: OutlineInputBorder()),
-        ),
-        Wrap(
-          spacing: 8,
+        _settingGroup(
+          icon: Icons.play_circle,
+          title: 'Playback',
+          subtitle: 'Player, subtitles, and auto-play',
           children: [
-            FilledButton(
-              onPressed: () async {
-                try {
-                  await widget.firebase
-                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
-                  await widget.firebase.signIn(
-                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
-                  setState(() => _msg = 'Firebase signed in.');
-                } catch (e) {
-                  setState(() => _msg = 'Firebase sign-in failed: $e');
-                }
-              },
-              child: const Text('Sign in'),
+const Text('Playback — audio and subtitle are SEPARATE settings',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        DropdownButtonFormField<String>(
+          initialValue: s.audioLanguage,
+          decoration: const InputDecoration(labelText: 'Audio language'),
+          items: const [
+            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
+            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
+            DropdownMenuItem(value: '', child: Text('Auto / device')),
+          ],
+          onChanged: (v) =>
+              _saveSettings(s.copyWith(audioLanguage: v ?? 'jpn')),
+        ),
+        DropdownButtonFormField<String>(
+          initialValue: s.subtitleLanguage,
+          decoration: const InputDecoration(labelText: 'Subtitle language'),
+          items: const [
+            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
+            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
+            DropdownMenuItem(value: '', child: Text('None')),
+          ],
+          onChanged: (v) =>
+              _saveSettings(s.copyWith(subtitleLanguage: v ?? 'eng')),
+        ),
+        SwitchListTile(
+          title: const Text('AniSkip enabled'),
+          value: s.aniskipEnabled,
+          onChanged: (v) => _saveSettings(s.copyWith(aniskipEnabled: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Auto-skip opening'),
+          value: s.aniskipAutoOp,
+          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoOp: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Auto-skip ending'),
+          value: s.aniskipAutoEd,
+          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoEd: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Show skip buttons'),
+          value: s.aniskipShowButton,
+          onChanged: (v) => _saveSettings(s.copyWith(aniskipShowButton: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Detect recaps'),
+          value: s.aniskipDetectRecap,
+          onChanged: (v) =>
+              _saveSettings(s.copyWith(aniskipDetectRecap: v)),
+        ),
+        const Divider(),
+        const Text('Player Test',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const Text(
+            'Opens the media_kit player with a public test video (not a GAnime stream).'),
+        FilledButton(
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => PlayerScreen(
+                  anime: const Anime(id: 0, title: 'Player Test'),
+                  episode: 1,
+                  streams: const [
+                    StreamSource(
+                      name: 'Big Buck Bunny (test MP4)',
+                      url:
+                          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                    ),
+                  ],
+                  settings: s,
+                ),
+              ),
+            );
+          },
+          child: const Text('Open Player Test'),
+        ),
+          ],
+        ),
+        _settingGroup(
+          icon: Icons.info,
+          title: 'About & Credits',
+          subtitle: 'Version, credits, and links',
+          children: const [
+            Text(
+              'GAnime Android — test/full port in progress. '
+              'Web app at ganime.pages.dev is untouched by this app.',
+              style: TextStyle(color: Colors.grey),
             ),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await widget.firebase
-                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
-                  await widget.firebase.signUp(
-                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
-                  setState(() => _msg = 'Firebase account created + signed in.');
-                } catch (e) {
-                  setState(() => _msg = 'Firebase sign-up failed: $e');
-                }
-              },
-              child: const Text('Create account'),
-            ),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  final profiles = await Store.profiles(widget.account);
-                  final watched = await Store.allWatched(widget.profileId);
-                  final lib = await Store.localLibrary(widget.profileId);
-                  final ads = await Store.addons(widget.profileId);
-                  final tombs = await Store.tombstones();
-                  await widget.firebase.push(
-                    account: widget.account,
-                    settings: s,
-                    profiles: profiles,
-                    watched: watched,
-                    localLibrary: lib,
-                    addons: ads,
-                    tombstones: tombs,
-                  );
-                  setState(() => _msg = 'Sync Now pushed to users/{uid}.');
-                } catch (e) {
-                  setState(() => _msg = 'Sync failed: $e');
-                }
-              },
-              child: const Text('Sync Now'),
-            ),
+            SizedBox(height: 12),
+            Text('Made with ♥ by Isolated',
+                style: TextStyle(fontSize: 15)),
+            SizedBox(height: 4),
+            Text('GAnime 0.1.0',
+                style: TextStyle(fontSize: 15, color: Colors.grey)),
           ],
         ),
         const SizedBox(height: 12),
         Text(_msg),
         const SizedBox(height: 24),
-        const Text(
-            'GAnime Android — test/full port in progress. Web app at ganime.pages.dev is untouched by this app.'),
       ],
     );
   }

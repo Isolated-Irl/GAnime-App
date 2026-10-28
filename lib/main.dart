@@ -19,6 +19,66 @@ void main() {
   runApp(const GAnimeApp());
 }
 
+/// Web logo mark, drawn (no asset, no SVG package): the folded-G path
+/// from the web top bar, gradient #064E3B → #059669 → #10B981 → #A3E635.
+/// Used with the text "nime" beside it, exactly like the web brand.
+class LogoMark extends StatelessWidget {
+  final double size;
+  const LogoMark({super.key, this.size = 32});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: _LogoMarkPainter()),
+    );
+  }
+}
+
+class _LogoMarkPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 512;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 50 * s
+      ..strokeCap = StrokeCap.butt
+      ..strokeJoin = StrokeJoin.miter
+      ..shader = const LinearGradient(
+        begin: Alignment.bottomLeft,
+        end: Alignment.topRight,
+        colors: [
+          Color(0xFF064E3B),
+          Color(0xFF059669),
+          Color(0xFF10B981),
+          Color(0xFFA3E635),
+        ],
+        stops: [0.0, 0.45, 0.75, 1.0],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+    final path = Path()
+      ..moveTo(300 * s, 300 * s)
+      ..lineTo(105 * s, 430 * s)
+      ..lineTo(265 * s, 95 * s)
+      ..lineTo(415 * s, 415 * s);
+    canvas.drawPath(path, paint);
+    final diamond = Path()
+      ..moveTo(448 * s, 398 * s)
+      ..lineTo(465 * s, 415 * s)
+      ..lineTo(448 * s, 432 * s)
+      ..lineTo(431 * s, 415 * s)
+      ..close();
+    canvas.drawPath(
+        diamond,
+        Paint()
+          ..style = PaintingStyle.fill
+          ..shader = paint.shader);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 class GAnimeApp extends StatefulWidget {
   const GAnimeApp({super.key});
   @override
@@ -110,7 +170,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
           profileId: _profileId,
           settings: _settings,
           onMarkWatched: _onMarkWatched),
-      const CalendarScreen(),
+      CalendarScreen(
+          profileId: _profileId,
+          settings: _settings,
+          onMarkWatched: _onMarkWatched),
       LibraryScreen(
           profileId: _profileId,
           settings: _settings,
@@ -144,23 +207,115 @@ class _GAnimeAppState extends State<GAnimeApp> {
         ),
       ),
       home: Scaffold(
+        // Web top bar (all tabs except Home, where the hero sits at
+        // the top): logo mark + "nime" left, profile avatar right.
+        // Avatar is a skeleton placeholder: profile switch comes
+        // after the skeleton phase, it does not silently do nothing.
         appBar: _tab == 0
             ? null
-            : AppBar(title: const Text('GAnime')),
+            : AppBar(
+                backgroundColor: const Color(0xFF0D0D0D),
+                elevation: 0,
+                titleSpacing: 16,
+                title: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LogoMark(size: 32),
+                    Text('nime',
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w800)),
+                  ],
+                ),
+                actions: [
+                  Builder(
+                    builder: (ctx) => IconButton(
+                      onPressed: () =>
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Profile switch comes after the skeleton phase.'),
+                        ),
+                      ),
+                      icon: const CircleAvatar(
+                        backgroundColor: Color(0xFFF9A8D4),
+                        child: Icon(Icons.person, color: Colors.black87),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ),
         body: screens[_tab],
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _tab,
-          onDestinationSelected: (i) => setState(() => _tab = i),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
-            NavigationDestination(icon: Icon(Icons.search), label: 'Search'),
-            NavigationDestination(
-                icon: Icon(Icons.calendar_month), label: 'Calendar'),
-            NavigationDestination(
-                icon: Icon(Icons.library_books), label: 'Library'),
-            NavigationDestination(
-                icon: Icon(Icons.settings), label: 'Settings'),
-          ],
+        // Web bottom nav is a floating pill, not a full-width bar.
+        bottomNavigationBar: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1E1E),
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(color: Colors.grey.shade800),
+              boxShadow: const [
+                BoxShadow(color: Colors.black54, blurRadius: 16)
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                for (int i = 0; i < 5; i++)
+                  Expanded(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(24),
+                      onTap: () => setState(() => _tab = i),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: i == _tab
+                                  ? const Color(0xFF2A2A2A)
+                                  : Colors.transparent,
+                            ),
+                            child: Icon(
+                              [
+                                Icons.home,
+                                Icons.search,
+                                Icons.calendar_month,
+                                Icons.library_books,
+                                Icons.settings,
+                              ][i],
+                              color: i == _tab
+                                  ? Colors.white
+                                  : Colors.grey.shade400,
+                            ),
+                          ),
+                          Text(
+                            [
+                              'Home',
+                              'Search',
+                              'Calendar',
+                              'Library',
+                              'Settings',
+                            ][i],
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: i == _tab
+                                  ? FontWeight.w700
+                                  : FontWeight.normal,
+                              color: i == _tab
+                                  ? Colors.white
+                                  : Colors.grey.shade400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
