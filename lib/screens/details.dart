@@ -281,9 +281,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
     //    addons, the reported "no stream addon found" bug);
     // 3) every id dialect the addon understands (kitsu:/tt:/anilist:/
     //    mal:), merged and de-duplicated.
-    final addons = (await Store.addons(widget.profileId))
+    // 4) Fallback: if the current profile has no addons, check other
+    //    profiles (addons are per-profile in storage, but the user
+    //    expects an installed addon to work everywhere).
+    var addons = (await Store.addons(widget.profileId))
         .where((a) => a.enabled)
         .toList();
+    if (addons.isEmpty) {
+      // Fallback: try addons from any profile.
+      final all = await Store.allAddons();
+      addons = all.where((a) => a.enabled).toList();
+    }
     if (addons.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -644,7 +652,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               borderRadius: BorderRadius.circular(14),
             ),
             child: SizedBox(
-              height: 172,
+              height: 200,
               child: Stack(
                 children: [
                   Positioned.fill(
@@ -652,9 +660,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         ? GaImage(
                             url: ep.still,
                             fit: BoxFit.cover,
-                            errorFallback: _stillFallback(height: 172),
+                            errorFallback: _stillFallback(height: 200),
                           )
-                        : _stillFallback(height: 172),
+                        : _stillFallback(height: 200),
                   ),
                   // Website `.ep-big-shade`: transparent 26% -> black 85%.
                   Positioned.fill(
@@ -1444,7 +1452,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           // Website `.ep-big-strip`: horizontal strip of
                           // 84vw cards (website mobile: 84vw).
                           SizedBox(
-                            height: 172,
+                            height: 200,
                             child: ListView.separated(
                               scrollDirection: Axis.horizontal,
                               itemCount: numbers.length,
