@@ -3,11 +3,22 @@
 // episodes for the title, so Details never blocks on it.
 import '../models.dart';
 import 'kitsu.dart';
+import 'addon_ids.dart';
 
 class EpisodesService {
   static Future<List<EpisodeInfo>> forAnime(Anime a) async {
     try {
-      final eps = await Kitsu.episodes(a.id);
+      // Calendar/Tracker items carry AniList IDs, not Kitsu IDs.
+      // Resolve to Kitsu first so we get real episodes (titles, stills)
+      // instead of hanging on a wrong ID.
+      int kitsuId = a.id;
+      try {
+        final resolved = await AddonIdResolver.resolve(a);
+        if (resolved.kitsu != null) {
+          kitsuId = int.tryParse(resolved.kitsu!) ?? a.id;
+        }
+      } catch (_) {}
+      final eps = await Kitsu.episodes(kitsuId);
       if (eps.isNotEmpty) return eps;
     } catch (_) {
       // Fall through to the numbered fallback below.

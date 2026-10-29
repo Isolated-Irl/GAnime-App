@@ -20,7 +20,12 @@ class AniList {
     Map<String, dynamic> vars, {
     String? token,
   }) async {
-    final headers = <String, String>{'Content-Type': 'application/json'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    };
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
@@ -150,7 +155,11 @@ query (\$from: Int, \$to: Int) {
     final list = (page['airingSchedules'] as List?) ?? [];
     return list.map((e) {
       final j = e as Map<String, dynamic>;
-      final a = Anime.fromJson(j['media'] as Map<String, dynamic>);
+      // Media can be null for delisted/private/adult-flagged broadcasts.
+      // Skip instead of crashing the whole calendar fetch.
+      final mediaRaw = j['media'] as Map<String, dynamic>?;
+      if (mediaRaw == null) return null;
+      final a = Anime.fromJson(mediaRaw);
       return Anime(
         id: a.id,
         title: a.title,
@@ -169,7 +178,7 @@ query (\$from: Int, \$to: Int) {
         season: a.season,
       );
       // Calendar is a general-audience surface: never show adult titles.
-    }).where((a) => !a.genres.any((g) => g.toLowerCase() == 'hentai')).toList();
+    }).whereType<Anime>().where((a) => !a.genres.any((g) => g.toLowerCase() == 'hentai')).toList();
   }
 
   static Future<Map<String, dynamic>> viewer(String token) async {

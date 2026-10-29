@@ -8,6 +8,14 @@ import 'package:http/http.dart' as http;
 import '../models.dart';
 
 class AddonsService {
+  // Realistic browser headers — Cloudflare and Stremio scrapers reject
+  // Dart's default User-Agent with 403 Forbidden.
+  static const _headers = {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+  };
+
   static String normalizeManifestUrl(String input) {
     var u = input.trim();
     if (u.startsWith('stremio://')) {
@@ -22,7 +30,7 @@ class AddonsService {
 
   static Future<AddonRecord> fetchManifest(String input) async {
     final url = normalizeManifestUrl(input);
-    final r = await http.get(Uri.parse(url));
+    final r = await http.get(Uri.parse(url), headers: _headers);
     if (r.statusCode != 200) {
       throw Exception('Manifest fetch failed (${r.statusCode})');
     }
@@ -41,7 +49,12 @@ class AddonsService {
         ((j['types'] as List?) ?? []).map((e) => '$e').toList();
     // idPrefixes come from the resource entries, e.g. Torrentio's
     // {"name":"stream","types":["movie","series"],"idPrefixes":["tt"]}.
+    // ALSO check the manifest root — many addons declare idPrefixes there.
     final prefixSet = <String>{};
+    for (final p in ((j['idPrefixes'] as List?) ?? [])) {
+      final s = '$p';
+      if (s.isNotEmpty) prefixSet.add(s);
+    }
     for (final e in resRaw) {
       if (e is Map) {
         for (final p in ((e['idPrefixes'] as List?) ?? [])) {
@@ -93,18 +106,23 @@ class AddonsService {
   static Future<List<StreamSource>> streams(
       AddonRecord addon, String type, String streamId) async {
     final url = '${addon.baseUrl}/stream/$type/$streamId.json';
-    final r = await http.get(Uri.parse(url));
+    final r = await http.get(Uri.parse(url), headers: _headers);
     if (r.statusCode != 200) return [];
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <StreamSource>[];
     for (final s in (j['streams'] as List?) ?? []) {
       final m = s as Map<String, dynamic>;
-      final streamUrl = (m['url'] as String?) ?? (m['externalUrl'] as String?);
+      var streamUrl = (m['url'] as String?) ?? (m['externalUrl'] as String?);
+      // Handle infoHash for P2P/torrent streams (no Debrid).
+      // Torrentio returns { "infoHash": "..." } without a direct URL.
+      if ((streamUrl == null || streamUrl.isEmpty) && m['infoHash'] != null) {
+        streamUrl = 'magnet:?xt=urn:btih:${m['infoHash']}';
+      }
       if (streamUrl == null || streamUrl.isEmpty) continue;
       out.add(StreamSource(
         name: (m['name'] as String?) ?? addon.name,
         url: streamUrl,
-        quality: (m['description'] as String?) ?? '',
+        quality: (m['description'] as String?) ?? (m['title'] as String?) ?? '',
       ));
     }
     return out;

@@ -60,13 +60,20 @@ class AddonIdResolver {
     int? epOffset;
 
     // 0) AniList id via the app's existing Kitsu mapping helper.
+    // If a.id is a Kitsu ID, this resolves to AniList.
+    // If a.id is ALREADY an AniList ID (Calendar, Tracker), this fails —
+    // so fall back to using a.id directly as the AniList ID.
     try {
       anilist = await Kitsu.resolveAnilistId(a.id);
     } catch (_) {}
+    // Fallback: assume a.id is an AniList ID (e.g., from Calendar).
+    // The ani.zip query below will validate it — if it's wrong, no
+    // mappings will be found and we'll use the original kitsu value.
+    anilist ??= a.id;
 
     // 1) ani.zip: anilist id -> kitsu / imdb / mal + season info.
     // (Also backfills the kitsu id when the catalogue id is stale.)
-    if (anilist != null) {
+    {
       final j = await _getJson(
           'https://api.ani.zip/mappings?anilist_id=$anilist');
       final m = (j?['mappings'] as Map?)?.cast<String, dynamic>();
