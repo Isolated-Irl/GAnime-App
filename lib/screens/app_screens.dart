@@ -10,6 +10,7 @@ import '../services/kitsu.dart';
 import '../services/trackers.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
+import '../widgets/ga_image.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/skeletons.dart';
 import 'details.dart';
@@ -318,17 +319,23 @@ class _HomeScreenState extends State<HomeScreen> {
                                 setState(() => _heroIndex = i),
                             itemBuilder: (_, i) {
                               final a = heroItems[i];
-                              final art =
-                                  a.banner.isNotEmpty ? a.banner : a.cover;
+                              // Full-res hero art: Kitsu coverImage.original
+                              // (bannerXL), then banner, then poster.
+                              final art = a.bannerXL.isNotEmpty
+                                  ? a.bannerXL
+                                  : (a.banner.isNotEmpty
+                                      ? a.banner
+                                      : a.cover);
                               return Stack(
                                 fit: StackFit.expand,
                                 children: [
                                   if (art.isNotEmpty)
-                                    Image.network(art,
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, _, _) =>
-                                            Container(
-                                                color: Colors.grey.shade900))
+                                    GaImage(
+                                      url: art,
+                                      fit: BoxFit.cover,
+                                      errorFallback: Container(
+                                          color: Colors.grey.shade900),
+                                    )
                                   else
                                     Container(color: Colors.grey.shade900),
                                   Container(
@@ -338,9 +345,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                         end: Alignment.bottomCenter,
                                         colors: [
                                           Colors.transparent,
-                                          Color(0xB8000000),
+                                          Color(0xE6000000),
                                         ],
-                                        stops: [0.45, 1.0],
+                                        stops: [0.3, 1.0],
                                       ),
                                     ),
                                   ),
@@ -592,16 +599,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ClipRRect(
                                       borderRadius: BorderRadius.circular(8),
                                       child: e.cover.isNotEmpty
-                                          ? Image.network(e.cover,
+                                          ? GaImage(
+                                              url: e.cover,
                                               width: 64,
                                               height: 96,
                                               fit: BoxFit.cover,
-                                              errorBuilder: (_, _, _) =>
-                                                  Container(
-                                                      width: 64,
-                                                      height: 96,
-                                                      color: Colors
-                                                          .grey.shade800))
+                                              errorFallback: Container(
+                                                  width: 64,
+                                                  height: 96,
+                                                  color: Colors
+                                                      .grey.shade800),
+                                            )
                                           : Container(
                                               width: 64,
                                               height: 96,
@@ -1299,8 +1307,14 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-            const Text('Anime Release Calendar',
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: const Text('Anime Release Calendar',
+                  maxLines: 1,
+                  style:
+                      TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            ),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -1308,6 +1322,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   decoration: BoxDecoration(
                     color: GaColors.of(context).card, shape: BoxShape.circle),
                   child: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 40, height: 40),
                     icon: const Icon(Icons.chevron_left),
                     onPressed: () => setState(() {
                       _weekOffset--;
@@ -1317,17 +1334,24 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
                 Expanded(
                   // Website parity (.cal2-range): single line, 15px/800; never wraps.
-                  child: Text(weekLabel,
-                      textAlign: TextAlign.center,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w800)),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(weekLabel,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w800)),
+                  ),
                 ),
                 Container(
                   decoration: BoxDecoration(
                     color: GaColors.of(context).card, shape: BoxShape.circle),
                   child: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 40, height: 40),
                     icon: const Icon(Icons.chevron_right),
                     onPressed: () => setState(() {
                       _weekOffset++;
@@ -1481,14 +1505,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         ClipRRect(
                           borderRadius: BorderRadius.circular(10),
                           child: a.cover.isNotEmpty
-                              ? Image.network(a.cover,
+                              ? GaImage(
+                                  url: a.cover,
                                   width: 72,
                                   height: 100,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => Container(
+                                  errorFallback: Container(
                                       width: 72,
                                       height: 100,
-                                      color: Colors.grey.shade800))
+                                      color: Colors.grey.shade800),
+                                )
                               : Container(
                                   width: 72,
                                   height: 100,
@@ -1711,6 +1737,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
               decoration: BoxDecoration(
                   color: GaColors.of(context).card, shape: BoxShape.circle),
               child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 40, height: 40),
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh this tab',
                 onPressed: () => _loadTab(force: true),
@@ -1721,6 +1750,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
               decoration: BoxDecoration(
                   color: GaColors.of(context).card, shape: BoxShape.circle),
               child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 40, height: 40),
                 icon: const Icon(Icons.sort),
                 // Sort is a post-skeleton feature: labelled placeholder.
                 onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
@@ -1803,12 +1835,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 leading: e.cover.isNotEmpty
                     ? ClipRRect(
                         borderRadius: BorderRadius.circular(6),
-                        child: Image.network(e.cover,
-                            width: 40,
-                            height: 56,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.image)),
+                        child: GaImage(
+                          url: e.cover,
+                          width: 40,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          errorFallback: const Icon(Icons.image),
+                        ),
                       )
                     : const Icon(Icons.image),
                 title: Text(e.title),

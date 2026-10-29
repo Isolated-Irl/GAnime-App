@@ -8,6 +8,7 @@ import '../models.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
 import '../widgets/logo.dart';
+import '../widgets/ga_image.dart';
 
 /// Website's built-in avatar catalog: (name, emoji, background color).
 const gaAvatars = <({String name, String emoji, int bg})>[
@@ -60,11 +61,13 @@ class ProfileAvatar extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: profile.avatarUrl.isNotEmpty
-          ? Image.network(profile.avatarUrl,
+          ? GaImage(
+              url: profile.avatarUrl,
               fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Center(
+              errorFallback: Center(
                   child: Text(av.emoji,
-                      style: TextStyle(fontSize: size * 0.5))))
+                      style: TextStyle(fontSize: size * 0.5))),
+            )
           : Center(
               child:
                   Text(av.emoji, style: TextStyle(fontSize: size * 0.5))),

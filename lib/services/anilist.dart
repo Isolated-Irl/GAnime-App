@@ -8,7 +8,7 @@ import '../models.dart';
 const _endpoint = 'https://graphql.anilist.co';
 const _fields = '''
 id idMal title { romaji english userPreferred }
-coverImage { large medium } bannerImage description format status
+coverImage { extraLarge large medium } bannerImage description format status
 episodes season seasonYear averageScore genres
 nextAiringEpisode { episode airingAt }
 ''';

@@ -8,6 +8,7 @@ import '../../theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../store.dart';
 import '../../models.dart';
+import '../../widgets/ga_image.dart';
 import '../../services/addons.dart';
 import 'settings_shell.dart';
 
@@ -204,12 +205,12 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
   Widget _logo(AddonRecord a) => ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: a.logoUrl.isNotEmpty
-            ? Image.network(
-                a.logoUrl,
+            ? GaImage(
+                url: a.logoUrl,
                 width: 56,
                 height: 56,
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => _logoFallback(),
+                errorFallback: _logoFallback(),
               )
             : _logoFallback(),
       );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models.dart';
+import 'ga_image.dart';
 
 /// Poster art ratio, matching the website's `.poster-art` (`aspect-ratio:
 /// 2 / 3`). Every poster card app-wide uses this — images crop to fill
@@ -39,11 +40,11 @@ class AnimeCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               child: anime.cover.isEmpty
                   ? Container(color: Colors.grey.shade800)
-                  : Image.network(
-                      anime.cover,
+                  : GaImage(
+                      url: anime.cover,
                       fit: BoxFit.cover,
                       width: double.infinity,
-                      errorBuilder: (_, _, _) =>
+                      errorFallback:
                           Container(color: Colors.grey.shade800),
                     ),
             ),

@@ -15,6 +15,7 @@ import '../services/episodes.dart';
 import '../services/kitsu.dart';
 import '../services/addons.dart';
 import '../services/addon_ids.dart';
+import '../widgets/ga_image.dart';
 import '../services/trackers.dart';
 import '../store.dart';
 import 'player.dart';
@@ -77,8 +78,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _layout = widget.settings.episodeLayout == 'minimum'
-        ? 'minimum'
+    _layout = const {'minimum', 'compact'}
+            .contains(widget.settings.episodeLayout)
+        ? widget.settings.episodeLayout
         : 'detailed';
     _load();
   }
@@ -580,9 +582,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
           height: 28,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
+            // Opaque enough to stay visible on bright thumbnails.
             color: active
                 ? activeColor
-                : const Color.fromRGBO(16, 18, 24, 0.62),
+                : const Color.fromRGBO(10, 12, 18, 0.85),
             border: Border.all(
               color: active
                   ? activeBorder
@@ -630,10 +633,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 children: [
                   Positioned.fill(
                     child: ep.still.isNotEmpty
-                        ? Image.network(ep.still,
+                        ? GaImage(
+                            url: ep.still,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _stillFallback(height: 172))
+                            errorFallback: _stillFallback(height: 172),
+                          )
                         : _stillFallback(height: 172),
                   ),
                   // Website `.ep-big-shade`: transparent 26% -> black 85%.
@@ -792,10 +796,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 children: [
                   Positioned.fill(
                     child: ep.still.isNotEmpty
-                        ? Image.network(ep.still,
+                        ? GaImage(
+                            url: ep.still,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _stillFallback(height: 120))
+                            errorFallback: _stillFallback(height: 120),
+                          )
                         : _stillFallback(height: 120),
                   ),
                   Positioned(
@@ -880,6 +885,88 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
+  // Compact episode layout: dense ~60px rows for long episode lists.
+  Widget _compactRow(EpisodeInfo ep) {
+    final watched = _watched.contains(ep.number);
+    final saved = _saved.contains(ep.number);
+    final accent = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: () => _playEpisode(ep.number),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: GaColors.of(context).card,
+            borderRadius: BorderRadius.circular(10),
+            border:
+                Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: watched
+                      ? accent.withValues(alpha: 0.2)
+                      : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: watched
+                    ? Icon(Icons.check, size: 18, color: accent)
+                    : Text('${ep.number}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 13)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        ep.title.isNotEmpty
+                            ? ep.title
+                            : 'Episode ${ep.number}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    if (ep.airdate.isNotEmpty)
+                      Text(formatEpDate(ep.airdate),
+                          style: TextStyle(
+                              color: Colors.grey.shade500,
+                              fontSize: 11)),
+                  ],
+                ),
+              ),
+              if (saved)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Icon(Icons.bookmark,
+                      size: 16, color: Color(0xFFE8B93C)),
+                ),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 32, height: 32),
+                tooltip: watched ? 'Watched — tap to unmark' : 'Mark as watched',
+                icon: Icon(
+                    watched ? Icons.visibility : Icons.visibility_outlined,
+                    size: 18,
+                    color: watched ? accent : Colors.grey.shade400),
+                onPressed: () => _toggleWatched(ep.number),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _countPill(
       {required String label,
       required int count,
@@ -944,12 +1031,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
               children: [
                 // Clean banner (website mobile): full image, nothing else.
                 if (a.banner.isNotEmpty)
-                  Image.network(a.banner,
-                      height: 200,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) =>
-                          Container(height: 120, color: GaColors.of(context).card))
+                  GaImage(
+                    url: a.banner,
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorFallback: Container(
+                        height: 120, color: GaColors.of(context).card),
+                  )
                 else
                   Container(height: 120, color: GaColors.of(context).card),
                 Padding(
@@ -1166,17 +1255,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Text('Watching Progress',
-                                      style: TextStyle(
-                                          color:
-                                              Colors.grey.shade400,
-                                          fontSize: 14)),
+                                  Flexible(
+                                    child: Text('Watching Progress',
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            color:
+                                                Colors.grey.shade400,
+                                            fontSize: 14)),
+                                  ),
                                   const SizedBox(width: 8),
                                   Text('$count / $total',
                                       style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.bold)),
-                                  const Spacer(),
+                                  const SizedBox(width: 12),
                                   OutlinedButton.icon(
                                     style: OutlinedButton.styleFrom(
                                       side: BorderSide(
@@ -1310,6 +1402,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 const SizedBox(height: 4),
                                 _designRow('minimum', 'Minimum',
                                     'Compact rows'),
+                                _designRow('compact', 'Compact',
+                                    'Dense rows'),
                                 _designRow('detailed', 'Detailed',
                                     'Big cards with synopsis'),
                               ],
@@ -1344,6 +1438,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       0.84),
                             ),
                           )
+                        else if (_layout == 'compact')
+                          ...numbers
+                              .map((n) => _compactRow(_epFor(n)))
                         else
                           ...numbers
                               .map((n) => _minimumCard(_epFor(n))),

@@ -8,6 +8,7 @@ class Anime {
   final String romaji;
   final String cover;
   final String banner;
+  final String bannerXL; // Kitsu coverImage.original — full-res hero source
   final String description;
   final String format;
   final String status;
@@ -27,6 +28,7 @@ class Anime {
     this.romaji = '',
     this.cover = '',
     this.banner = '',
+    this.bannerXL = '',
     this.description = '',
     this.format = '',
     this.status = '',
@@ -54,8 +56,12 @@ class Anime {
           ? t['english'] as String
           : ((t['romaji'] as String?) ?? (t['userPreferred'] as String?) ?? ''),
       romaji: (t['romaji'] as String?) ?? '',
-      cover: (img['large'] as String?) ?? (img['medium'] as String?) ?? '',
+      cover: (img['extraLarge'] as String?) ??
+          (img['large'] as String?) ??
+          (img['medium'] as String?) ??
+          '',
       banner: (j['bannerImage'] as String?) ?? '',
+      bannerXL: '',
       description: clean(j['description'] as String?),
       format: (j['format'] as String?) ?? '',
       status: (j['status'] as String?) ?? '',
@@ -79,6 +85,7 @@ class Anime {
         'romaji': romaji,
         'cover': cover,
         'banner': banner,
+        'bannerXL': bannerXL,
         'description': description,
         'format': format,
         'status': status,
@@ -99,6 +106,7 @@ class Anime {
         romaji: (j['romaji'] as String?) ?? '',
         cover: (j['cover'] as String?) ?? '',
         banner: (j['banner'] as String?) ?? '',
+        bannerXL: (j['bannerXL'] as String?) ?? '',
         description: (j['description'] as String?) ?? '',
         format: (j['format'] as String?) ?? '',
         status: (j['status'] as String?) ?? '',
@@ -119,6 +127,7 @@ class Anime {
     String? romaji,
     String? cover,
     String? banner,
+    String? bannerXL,
     String? description,
     String? format,
     String? status,
@@ -138,6 +147,7 @@ class Anime {
         romaji: romaji ?? this.romaji,
         cover: cover ?? this.cover,
         banner: banner ?? this.banner,
+        bannerXL: bannerXL ?? this.bannerXL,
         description: description ?? this.description,
         format: format ?? this.format,
         status: status ?? this.status,

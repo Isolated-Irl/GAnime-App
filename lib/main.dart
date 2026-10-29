@@ -212,7 +212,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
     // like the website settings screens).
     final accent = themeAccent(_settings.theme);
     final ga = GaColors.forMode(amoled: _settings.amoledBlack);
-    final theme = ThemeData.dark(useMaterial3: true).copyWith(
+    final base = ThemeData.dark(useMaterial3: true);
+    final theme = base.copyWith(
+      textTheme:
+          base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
       scaffoldBackgroundColor: ga.surface,
       cardColor: ga.card,
       dialogTheme: DialogThemeData(backgroundColor: ga.card),
@@ -409,7 +412,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
                 onTap: () => setState(() => _tab = i),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 8),
+                      horizontal: 2, vertical: 8),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(24),
                     color: i == _tab
@@ -436,20 +439,25 @@ class _GAnimeAppState extends State<GAnimeApp> {
                             : Colors.grey.shade400,
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        [
-                          'Home',
-                          'Search',
-                          'Calendar',
-                          'Library',
-                          'Settings',
-                        ][i],
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: i == _tab
-                              ? Theme.of(context).colorScheme.primary
-                              : Colors.grey.shade400,
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          [
+                            'Home',
+                            'Search',
+                            'Calendar',
+                            'Library',
+                            'Settings',
+                          ][i],
+                          maxLines: 1,
+                          softWrap: false,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: i == _tab
+                                ? Theme.of(context).colorScheme.primary
+                                : Colors.grey.shade400,
+                          ),
                         ),
                       ),
                     ],

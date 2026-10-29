@@ -34,6 +34,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   String? _email;
   String? _lastSyncIso;
   bool _busy = false;
+  bool _advancedOpen = false; // Firebase project config lives here.
 
   @override
   void initState() {
@@ -260,14 +261,47 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           gaMsg(_msg),
         ] else ...[
           gaSectionLabel('Firebase sync (optional)'),
-          const GACard(
-            child: Text(
-              'Enter YOUR Firebase project config here on-device. It is never written into the repo. One doc: users/{uid}.',
-              style: TextStyle(color: gaGrey, fontSize: 13),
+          // Advanced (collapsed by default): the project-config fields and
+          // the developer note live here; sign-in stays one tap away.
+          InkWell(
+            onTap: () =>
+                setState(() => _advancedOpen = !_advancedOpen),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('Advanced',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 14)),
+                  ),
+                  Icon(
+                      _advancedOpen
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      color: Colors.grey.shade400),
+                ],
+              ),
             ),
           ),
-          gaTextField(context: context, controller: _fbApiCtrl, hint: 'Firebase apiKey'),
-          gaTextField(context: context, controller: _fbProjectCtrl, hint: 'Firebase projectId'),
+          if (_advancedOpen) ...[
+            const GACard(
+              child: Text(
+                'Enter YOUR Firebase project config here on-device. It is never written into the repo. One doc: users/{uid}.',
+                style: TextStyle(color: gaGrey, fontSize: 13),
+              ),
+            ),
+            gaTextField(
+                context: context,
+                controller: _fbApiCtrl,
+                hint: 'Firebase apiKey'),
+            gaTextField(
+                context: context,
+                controller: _fbProjectCtrl,
+                hint: 'Firebase projectId'),
+          ],
           gaTextField(context: context, 
               controller: _fbEmailCtrl,
               hint: 'Email',

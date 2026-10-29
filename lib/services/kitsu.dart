@@ -143,6 +143,12 @@ class Kitsu {
       cover:
           (poster['large'] as String?) ?? (poster['medium'] as String?) ?? '',
       banner: (cover['large'] as String?) ?? '',
+      // Full-res hero source: Kitsu coverImage.original, else the large URL.
+      bannerXL: ((cover['original'] as String?)?.isNotEmpty == true
+              ? cover['original'] as String?
+              : null) ??
+          (cover['large'] as String?) ??
+          '',
       description: (a['synopsis'] as String?) ?? '',
       format: ((a['subtype'] as String?) ?? '').toUpperCase(),
       status: status,
