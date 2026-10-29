@@ -162,7 +162,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final decoded = jsonDecode(raw) as List;
         cachedRails = decoded
             .map((r) => ((r as List)
-                .map((e) => Anime.fromJson(e as Map<String, dynamic>))
+                .map((e) => Anime.fromStored(e as Map<String, dynamic>))
                 .toList()))
             .toList();
       }
@@ -275,7 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -307,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 120 / kPosterArtRatio + kPosterTextReserve,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             itemCount: items.length,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (_, i) => SizedBox(
@@ -1542,6 +1542,11 @@ class _SearchScreenState extends State<SearchScreen> {
                     constraints: const BoxConstraints(maxHeight: 280),
                     child: ListView.builder(
                       shrinkWrap: true,
+                      // Never scroll independently — the sheet's outer
+                      // SingleChildScrollView handles all scrolling. Nested
+                      // scrollables fight for gestures and the panel gets
+                      // cut off by the fixed Clear/Apply bar.
+                      physics: const NeverScrollableScrollPhysics(),
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       itemCount: options.length,
                       itemBuilder: (c, i) {
@@ -1671,7 +1676,9 @@ class _SearchScreenState extends State<SearchScreen> {
         if (_loading)
           // Ghost of AnimeGrid in the same 12px inset — no extra padding,
           // or the ghost cells would be narrower than the real ones.
-          skeletonPosterGrid(count: 9),
+          // 12px gap above so skeletons don't crowd the search bar.
+          const SizedBox(height: 12),
+        if (_loading) skeletonPosterGrid(count: 9),
         if (_error != null) Text('Search failed: $_error'),
         if (_searched && !_loading && _error == null) _resultsToolbar(),
         if (!_loading &&
