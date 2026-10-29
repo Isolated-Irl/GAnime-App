@@ -23,6 +23,12 @@ class FirebaseSync {
   String? _projectId;
   String? _idToken;
   String? _uid;
+  // Website parity (firebase.js): the full session — refresh token +
+  // expiry — is persisted on-device and the idToken is proactively
+  // refreshed when it expires within 60s. The app previously kept the
+  // session memory-only, so sign-in was lost on every restart.
+  String? _refreshToken;
+  int _expiresAtMs = 0;
 
   String? get uid => _uid;
   bool get configured => _apiKey != null && _projectId != null;
@@ -39,6 +45,53 @@ class FirebaseSync {
     _projectId = (cfg['projectId'] as String?)?.isNotEmpty == true
         ? cfg['projectId'] as String
         : kFirebaseProjectId;
+    // Restore the persisted auth session (website parity: the session
+    // survives restarts; only explicit Sign Out clears it).
+    final s = await Store.firebaseSession();
+    _idToken = s['idToken'] as String?;
+    _refreshToken = s['refreshToken'] as String?;
+    _uid = s['uid'] as String?;
+    _expiresAtMs = (s['expiresAt'] as num?)?.toInt() ?? 0;
+  }
+
+  /// Returns a usable idToken, refreshing it via the refresh token when
+  /// it expires within 60s (website parity: firebase.js getIdToken).
+  /// Returns null when there is no session or no refresh token and the
+  /// current token is expired.
+  Future<String?> getIdToken() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_idToken != null && _expiresAtMs > now + 60000) return _idToken;
+    if (_refreshToken == null || !configured) {
+      return (_idToken != null && _expiresAtMs > now) ? _idToken : null;
+    }
+    try {
+      final r = await http.post(
+        Uri.parse('https://securetoken.googleapis.com/v1/token?key=$_apiKey'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body:
+            'grant_type=refresh_token&refresh_token=${Uri.encodeComponent(_refreshToken!)}',
+      );
+      final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      if (r.statusCode != 200) throw Exception('refresh failed');
+      _idToken = j['id_token'] as String?;
+      final rt = j['refresh_token'] as String?;
+      if (rt != null && rt.isNotEmpty) _refreshToken = rt;
+      final expiresIn = int.tryParse('${j['expires_in'] ?? '3600'}') ?? 3600;
+      _expiresAtMs = DateTime.now().millisecondsSinceEpoch + expiresIn * 1000;
+      await _persistSession();
+      return _idToken;
+    } catch (_) {
+      return (_idToken != null && _expiresAtMs > now) ? _idToken : null;
+    }
+  }
+
+  Future<void> _persistSession() async {
+    await Store.saveFirebaseSession({
+      'idToken': _idToken,
+      'refreshToken': _refreshToken,
+      'expiresAt': _expiresAtMs,
+      'uid': _uid,
+    });
   }
 
   /// Email used at the last successful auth, persisted on-device only
@@ -69,15 +122,22 @@ class FirebaseSync {
     }
     _idToken = j['idToken'] as String?;
     _uid = j['localId'] as String?;
+    _refreshToken = j['refreshToken'] as String?;
+    final expiresIn = int.tryParse('${j['expiresIn'] ?? '3600'}') ?? 3600;
+    _expiresAtMs = DateTime.now().millisecondsSinceEpoch + expiresIn * 1000;
+    await _persistSession();
     // Remember the email on-device so Settings > Account can show it.
     final cfg = await Store.firebaseConfig();
     cfg['email'] = email;
     await Store.saveFirebaseConfig(cfg);
   }
 
-  void signOut() {
+  Future<void> signOut() async {
     _idToken = null;
     _uid = null;
+    _refreshToken = null;
+    _expiresAtMs = 0;
+    await Store.clearFirebaseSession();
   }
 
   /// Sends a Firebase password-reset email (Identity Toolkit
@@ -192,11 +252,13 @@ class FirebaseSync {
         'updatedAt': {'integerValue': '$now'},
       },
     };
+    final token = await getIdToken();
+    if (token == null) throw Exception('Firebase session expired. Sign in again.');
     final r = await http.patch(
       Uri.parse(_docUrl),
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_idToken',
+        'Authorization': 'Bearer $token',
       },
       body: jsonEncode(body),
     );
@@ -211,9 +273,11 @@ class FirebaseSync {
 
   Future<Map<String, dynamic>?> pullRaw() async {
     if (!signedIn) return null;
+    final token = await getIdToken();
+    if (token == null) return null;
     final r = await http.get(
       Uri.parse(_docUrl),
-      headers: {'Authorization': 'Bearer $_idToken'},
+      headers: {'Authorization': 'Bearer $token'},
     );
     if (r.statusCode == 404) return null;
     if (r.statusCode != 200) throw Exception('Firestore pull failed');

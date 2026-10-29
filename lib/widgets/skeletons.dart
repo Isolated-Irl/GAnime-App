@@ -256,15 +256,20 @@ Widget skeletonPosterGrid({int count = 9}) {
   return Skeleton(
     child: LayoutBuilder(
       builder: (context, constraints) {
-        const count = 3;
+        // NOTE: local is `columns`, not `count` — the `count` parameter
+        // above is the number of skeleton cells (default 9 = 3 rows).
+        // A previous `const count = 3` shadowed the parameter, so
+        // itemCount silently became 3 and the grid showed a single row
+        // followed by dead space.
+        const columns = 3;
         const spacing = 8.0;
         final cellWidth =
-            (constraints.maxWidth - spacing * (count - 1)) / count;
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
         return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: count,
+            crossAxisCount: columns,
             childAspectRatio: posterGridChildAspectRatio(cellWidth),
             crossAxisSpacing: spacing,
             mainAxisSpacing: 8,

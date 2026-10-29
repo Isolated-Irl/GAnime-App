@@ -118,7 +118,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
 
   /// Website parity: Sign Out clears the session and shows the gate.
   Future<void> _signOut() async {
-    widget.firebase.signOut();
+    await widget.firebase.signOut();
     await Store.setGuest(false);
     widget.onBackToGate();
   }
@@ -158,7 +158,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       ),
     );
     if (ok != true || !mounted) return;
-    widget.firebase.signOut();
+    await widget.firebase.signOut();
     await Store.wipeAll();
     widget.onBackToGate();
   }

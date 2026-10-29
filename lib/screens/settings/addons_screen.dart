@@ -150,6 +150,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
         resources: fresh.resources,
         types: fresh.types,
         idPrefixes: fresh.idPrefixes,
+        configurable: fresh.configurable,
       );
       await _persist();
       _checkStatus();
@@ -162,8 +163,10 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
   }
 
   Future<void> _configure(AddonRecord a) async {
+    // Website parity (Stremio convention): the configure page lives at
+    // the addon's base URL + /configure.
     await launchUrl(
-      Uri.parse(a.baseUrl),
+      Uri.parse('${a.baseUrl}/configure'),
       mode: LaunchMode.externalApplication,
     );
   }
@@ -335,8 +338,11 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
               }),
               const SizedBox(width: 8),
               _sqBtn(Icons.refresh, true, () => _refresh(a, i)),
-              const SizedBox(width: 8),
-              _sqBtn(Icons.settings, true, () => _configure(a)),
+              // Website parity: only configurable addons get the
+              // Configure button (behaviorHints.configurationRequired).
+              if (a.configurable) const SizedBox(width: 8),
+              if (a.configurable)
+                _sqBtn(Icons.settings, true, () => _configure(a)),
               const SizedBox(width: 8),
               _sqBtn(Icons.delete_outline, true,
                   () => _confirmDelete(a, i)),

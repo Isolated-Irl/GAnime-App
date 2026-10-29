@@ -210,6 +210,9 @@ class LibraryEntry {
   final int progress;
   final int? total;
   final double? score;
+  /// Seconds-since-epoch of the last list update (AniList MediaList.updatedAt).
+  /// Drives the website-parity library sort (default UPDATED_DESC).
+  final int updatedAt;
   const LibraryEntry({
     required this.key,
     required this.source,
@@ -220,6 +223,7 @@ class LibraryEntry {
     this.total,
     this.score,
     this.anilistId,
+    this.updatedAt = 0,
   });
 }
 
@@ -541,6 +545,10 @@ class AddonRecord {
   /// Per-resource id prefixes (e.g. ["tt"]) — decides which id forms
   /// (kitsu:/tt:/anilist:/mal:) an addon understands.
   final List<String> idPrefixes;
+  /// Website parity: manifest behaviorHints.configurationRequired (or
+  /// configurable) — only these addons get a Configure button, which
+  /// opens baseUrl + '/configure' (Stremio convention).
+  final bool configurable;
   const AddonRecord({
     required this.manifestUrl,
     required this.baseUrl,
@@ -554,6 +562,7 @@ class AddonRecord {
     this.resources = const [],
     this.types = const [],
     this.idPrefixes = const [],
+    this.configurable = false,
   });
   AddonRecord copyWith({
     bool? enabled,
@@ -561,6 +570,7 @@ class AddonRecord {
     String? logoUrl,
     List<String>? types,
     List<String>? idPrefixes,
+    bool? configurable,
   }) =>
       AddonRecord(
         manifestUrl: manifestUrl,
@@ -575,6 +585,7 @@ class AddonRecord {
         resources: resources,
         types: types ?? this.types,
         idPrefixes: idPrefixes ?? this.idPrefixes,
+        configurable: configurable ?? this.configurable,
       );
   Map<String, dynamic> toJson() => {
         'manifestUrl': manifestUrl,
@@ -589,6 +600,7 @@ class AddonRecord {
         'resources': resources,
         'types': types,
         'idPrefixes': idPrefixes,
+        'configurable': configurable,
       };
   factory AddonRecord.fromJson(Map<String, dynamic> j) => AddonRecord(
         manifestUrl: (j['manifestUrl'] as String?) ?? '',
@@ -608,6 +620,8 @@ class AddonRecord {
         types: ((j['types'] as List?) ?? []).map((e) => '$e').toList(),
         idPrefixes:
             ((j['idPrefixes'] as List?) ?? []).map((e) => '$e').toList(),
+        // Migration-safe: old records default to not configurable.
+        configurable: (j['configurable'] as bool?) ?? false,
       );
 }
 

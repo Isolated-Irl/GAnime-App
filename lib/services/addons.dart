@@ -50,6 +50,12 @@ class AddonsService {
         }
       }
     }
+    // Website parity: an addon declares configurability in behaviorHints
+    // (configurationRequired is the documented flag; some use
+    // configurable). Only those addons get a Configure button.
+    final bh = (j['behaviorHints'] as Map<String, dynamic>?) ?? {};
+    final configurable = bh['configurationRequired'] == true ||
+        bh['configurable'] == true;
     return AddonRecord(
       manifestUrl: url,
       baseUrl: baseOf(url),
@@ -63,6 +69,7 @@ class AddonsService {
       resources: resources,
       types: types,
       idPrefixes: prefixSet.toList(),
+      configurable: configurable,
     );
   }
 

@@ -22,8 +22,16 @@ class Kitsu {
   };
 
   static Future<Map<String, dynamic>> _get(String path) async {
-    final r = await http.get(Uri.parse('$_base$path'), headers: _headers);
-    if (r.statusCode != 200) throw Exception('Kitsu ${r.statusCode}');
+    // Website parity (anilist.js _post): retry ONCE on 429 only, honoring
+    // Retry-After when present, else ~2s. Never retry 400/401/404.
+    http.Response? r;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      r = await http.get(Uri.parse('$_base$path'), headers: _headers);
+      if (r.statusCode != 429 || attempt == 1) break;
+      final ra = int.tryParse(r.headers['retry-after'] ?? '');
+      await Future.delayed(Duration(seconds: ra ?? 2));
+    }
+    if (r!.statusCode != 200) throw Exception('Kitsu ${r.statusCode}');
     return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 

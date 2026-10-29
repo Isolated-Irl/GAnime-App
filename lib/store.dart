@@ -260,4 +260,64 @@ class Store {
     final p = await prefs;
     await p.clear();
   }
+
+  // ------------------------------------------------------------------
+  // Firebase auth session (website parity: firebase.js persists the
+  // full session — idToken + refreshToken + expiresAt + email + uid —
+  // in localStorage and proactively refreshes the idToken when it
+  // expires within 60s). Stored on-device ONLY, never synced to the
+  // cloud doc (same rule as the web app).
+  // ------------------------------------------------------------------
+  static const _kFirebaseSession = 'ganime_firebase_session';
+
+  static Future<Map<String, dynamic>> firebaseSession() async =>
+      _read(_kFirebaseSession);
+
+  static Future<void> saveFirebaseSession(Map<String, dynamic> v) async =>
+      _write(_kFirebaseSession, v);
+
+  static Future<void> clearFirebaseSession() async {
+    final p = await prefs;
+    await p.remove(_kFirebaseSession);
+  }
+
+  // ------------------------------------------------------------------
+  // Home rails cache (website parity: loadLiveHome() renders cached
+  // rails instantly and skips the network entirely when the cache is
+  // < 120s old — this is what makes the website feel fast).
+  // ------------------------------------------------------------------
+  static const _kHomeRails = 'ganime_home_rails';
+  static const _kHomeRailsTs = 'ganime_home_rails_ts';
+
+  static Future<String?> homeRailsJson() async {
+    final p = await prefs;
+    return p.getString(_kHomeRails);
+  }
+
+  static Future<int> homeRailsTs() async {
+    final p = await prefs;
+    return p.getInt(_kHomeRailsTs) ?? 0;
+  }
+
+  static Future<void> saveHomeRails(String json, int tsMs) async {
+    final p = await prefs;
+    await p.setString(_kHomeRails, json);
+    await p.setInt(_kHomeRailsTs, tsMs);
+  }
+
+  // ------------------------------------------------------------------
+  // Library sort preference (website parity: librarySort, default
+  // UPDATED_DESC, with the 8-option LIBRARY_SORTS menu).
+  // ------------------------------------------------------------------
+  static const _kLibrarySort = 'ganime_library_sort';
+
+  static Future<String> librarySort() async {
+    final p = await prefs;
+    return p.getString(_kLibrarySort) ?? 'UPDATED_DESC';
+  }
+
+  static Future<void> setLibrarySort(String v) async {
+    final p = await prefs;
+    await p.setString(_kLibrarySort, v);
+  }
 }

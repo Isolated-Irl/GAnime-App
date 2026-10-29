@@ -100,6 +100,33 @@ class _GAnimeAppState extends State<GAnimeApp> {
     setState(() {
       _phase = guest ? _BootPhase.picker : _BootPhase.gate;
     });
+    // Website parity (Sync.bootSync): when signed in, do a best-effort
+    // background pull/merge/push so the cloud copy is fresh. Never blocks
+    // boot and never surfaces errors — Sync Now remains the explicit path.
+    if (_firebase.signedIn && !guest) {
+      _bootSync(_profileId, settings);
+    }
+  }
+
+  Future<void> _bootSync(String profileId, AppSettings settings) async {
+    try {
+      final profiles = await Store.profiles(_account);
+      final watched = await Store.allWatched(profileId);
+      final lib = await Store.localLibrary(profileId);
+      final ads = await Store.addons(profileId);
+      final tombs = await Store.tombstones();
+      await _firebase.push(
+        account: _account,
+        settings: settings,
+        profiles: profiles,
+        watched: watched,
+        localLibrary: lib,
+        addons: ads,
+        tombstones: tombs,
+      );
+    } catch (_) {
+      // Best-effort only.
+    }
   }
 
   /// Refresh the profile list from the store (after add/rename/delete).
@@ -401,6 +428,11 @@ class _GAnimeAppState extends State<GAnimeApp> {
         // Liquid Glass (same Settings > Layout toggle as the bottom pill):
         // iOS-style frosted bar — 28px blur, sheen, hairline bottom edge.
         appBar: AppBar(
+                // Compact header (user report: the default 56px toolbar
+                // felt too tall). 48px still fits the 32px logo mark and
+                // 36px avatar; the status-bar / cutout inset above is
+                // untouched (Scaffold SafeArea behavior preserved).
+                toolbarHeight: 48,
                 backgroundColor: _settings.liquidGlassTabBar
                     ? Colors.transparent
                     : GaColors.of(context).surface,
@@ -583,8 +615,16 @@ class _GAnimeAppState extends State<GAnimeApp> {
               ],
             )
           : null,
-      boxShadow: const [
-        BoxShadow(color: Colors.black54, blurRadius: 16)
+      // Shadow: website parity (`.floating-pill-nav` =
+      // `0 10px 32px rgba(0,0,0,0.55)`) — downward-only. The previous
+      // zero-offset blur spread 16px in ALL directions, painting a dark
+      // halo above the pill that read as a second strip behind it.
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.55),
+          blurRadius: 32,
+          offset: const Offset(0, 10),
+        )
       ],
     );
     final pill = Container(decoration: decoration, child: tabs);

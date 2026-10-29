@@ -24,12 +24,20 @@ class AniList {
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
-    final r = await http.post(
-      Uri.parse(_endpoint),
-      headers: headers,
-      body: jsonEncode({'query': query, 'variables': vars}),
-    );
-    if (r.statusCode != 200) {
+    // Website parity (anilist.js _post): retry ONCE on 429 only, honoring
+    // Retry-After when present, else ~2s. Never retry 400/401/404.
+    http.Response? r;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      r = await http.post(
+        Uri.parse(_endpoint),
+        headers: headers,
+        body: jsonEncode({'query': query, 'variables': vars}),
+      );
+      if (r.statusCode != 429 || attempt == 1) break;
+      final ra = int.tryParse(r.headers['retry-after'] ?? '');
+      await Future.delayed(Duration(seconds: ra ?? 2));
+    }
+    if (r!.statusCode != 200) {
       throw Exception('AniList ${r.statusCode}: ${r.body}');
     }
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
@@ -179,7 +187,7 @@ query (\$from: Int, \$to: Int) {
 query (\$userId: Int) {
   MediaListCollection(userId: \$userId, type: ANIME) {
     lists { entries {
-      status progress score media { $_fields }
+      status progress score updatedAt media { $_fields }
     } }
   }
 }''';
@@ -202,6 +210,7 @@ query (\$userId: Int) {
           total: m.episodes,
           score: (j['score'] as num?)?.toDouble(),
           anilistId: m.id,
+          updatedAt: (j['updatedAt'] as num?)?.toInt() ?? 0,
         ));
       }
     }

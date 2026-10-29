@@ -2,6 +2,8 @@
 // Library tabs: Local, AniList, Simkl, MAL. Tracker lists load only
 // when the user has connected that tracker in Settings; otherwise the
 // tab explains how to connect. MAL is read-only in this app.
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../models.dart';
@@ -130,14 +132,102 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _homeFuture = _loadHome();
+    _homeFuture = _loadHomeCached();
   }
 
   @override
   void didUpdateWidget(HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.profileId != widget.profileId) {
-      _homeFuture = _loadHome();
+      _homeFuture = _loadHomeCached();
+    }
+  }
+
+  /// Website parity (loadLiveHome): instant restore — cached rails render
+  /// immediately (even when stale) and a refresh within 120s costs ZERO
+  /// network requests. Stale cache triggers a background refresh that
+  /// swaps in fresh data when it lands. In-flight guard prevents
+  /// duplicate fetches; the freshness timestamp is stamped only on
+  /// success so a failed fetch retries next visit.
+  static bool _homeFetching = false;
+  static const _homeFreshMs = 120000;
+
+  Future<List<dynamic>> _loadHomeCached() async {
+    List<List<Anime>>? cachedRails;
+    int cachedTs = 0;
+    try {
+      final raw = await Store.homeRailsJson();
+      cachedTs = await Store.homeRailsTs();
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw) as List;
+        cachedRails = decoded
+            .map((r) => ((r as List)
+                .map((e) => Anime.fromJson(e as Map<String, dynamic>))
+                .toList()))
+            .toList();
+      }
+    } catch (_) {
+      cachedRails = null; // corrupt cache — fetch fresh below
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final local = await Store.localLibrary(widget.profileId);
+    if (cachedRails != null && cachedRails.length == 6) {
+      if (now - cachedTs < _homeFreshMs) {
+        return [...cachedRails, local]; // fresh: zero Kitsu requests
+      }
+      // Stale: serve instantly, refresh in background.
+      _refreshHomeInBackground();
+      return [...cachedRails, local];
+    }
+    // No cache: fetch (skeleton shows meanwhile).
+    return _fetchAndCacheHome();
+  }
+
+  Future<void> _refreshHomeInBackground() async {
+    if (_homeFetching) return;
+    _homeFetching = true;
+    try {
+      final fresh = await _loadHome();
+      // Stamp ONLY on success.
+      final railsJson = jsonEncode(
+        (fresh.sublist(0, 6))
+            .map((r) => (r as List<Anime>).map((a) => a.toJson()).toList())
+            .toList(),
+      );
+      await Store.saveHomeRails(
+          railsJson, DateTime.now().millisecondsSinceEpoch);
+      if (!mounted) return;
+      setState(() {
+        _homeFuture = Future.value(fresh);
+      });
+    } catch (_) {
+      // Background refresh failed: keep showing the stale cache.
+    } finally {
+      _homeFetching = false;
+    }
+  }
+
+  Future<List<dynamic>> _fetchAndCacheHome() async {
+    if (_homeFetching) {
+      // Another fetch is in flight; wait for it via a fresh load to
+      // avoid a deadlock on the static guard.
+      return _loadHome();
+    }
+    _homeFetching = true;
+    try {
+      final fresh = await _loadHome();
+      // Stamp ONLY on success; persist the 6 Kitsu rails (not the local
+      // library — that stays live).
+      final railsJson = jsonEncode(
+        (fresh.sublist(0, 6))
+            .map((r) => (r as List<Anime>).map((a) => a.toJson()).toList())
+            .toList(),
+      );
+      await Store.saveHomeRails(
+          railsJson, DateTime.now().millisecondsSinceEpoch);
+      return fresh;
+    } finally {
+      _homeFetching = false;
     }
   }
 
@@ -1798,7 +1888,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 fontSize: 15, fontWeight: FontWeight.w800)),
                       ),
                       if (_weekOffset == 0)
-                        const Text('· This week',
+                        const Text('This week',
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -2037,6 +2127,70 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<LibraryEntry> _entries = [];
   bool _loading = false;
   String? _error;
+  // Website parity: 8-option library sort (LIBRARY_SORTS), default
+  // UPDATED_DESC, persisted per device.
+  String _sort = 'UPDATED_DESC';
+
+  static const _sortLabels = {
+    'UPDATED_DESC': 'Last Updated',
+    'COMPLETED_DESC': 'Recently Finished',
+    'ADDED_DESC': 'Last Added',
+    'PROGRESS_DESC': 'Progress',
+    'SCORE_DESC': 'Your Score',
+    'AVG_SCORE_DESC': 'Average Score',
+    'TITLE_ASC': 'Title (A-Z)',
+    'YEAR_DESC': 'Release Year',
+  };
+
+  /// Website parity (sortLibraryEntries): sorts a copy of [entries].
+  /// Fields the app doesn't track (completedAt/createdAt/entryId) fall
+  /// back to updatedAt/title so every mode still orders sensibly.
+  List<LibraryEntry> _sorted(List<LibraryEntry> entries) {
+    final out = entries.toList();
+    switch (_sort) {
+      case 'COMPLETED_DESC':
+        out.sort((a, b) {
+          final ac = a.status == 'COMPLETED' ? a.updatedAt : -1;
+          final bc = b.status == 'COMPLETED' ? b.updatedAt : -1;
+          return bc.compareTo(ac);
+        });
+        break;
+      case 'ADDED_DESC':
+        // No createdAt tracked; updatedAt is the closest proxy.
+        out.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        break;
+      case 'PROGRESS_DESC':
+        out.sort((a, b) {
+          final c = b.progress.compareTo(a.progress);
+          return c != 0 ? c : b.updatedAt.compareTo(a.updatedAt);
+        });
+        break;
+      case 'SCORE_DESC':
+        out.sort((a, b) {
+          final c = (b.score ?? -1).compareTo(a.score ?? -1);
+          return c != 0 ? c : b.updatedAt.compareTo(a.updatedAt);
+        });
+        break;
+      case 'AVG_SCORE_DESC':
+        // App LibraryEntry has no average score; fall back to your score.
+        out.sort((a, b) {
+          final c = (b.score ?? -1).compareTo(a.score ?? -1);
+          return c != 0 ? c : b.updatedAt.compareTo(a.updatedAt);
+        });
+        break;
+      case 'TITLE_ASC':
+        out.sort((a, b) => a.title.compareTo(b.title));
+        break;
+      case 'YEAR_DESC':
+        // App LibraryEntry has no year; fall back to title order.
+        out.sort((a, b) => a.title.compareTo(b.title));
+        break;
+      case 'UPDATED_DESC':
+      default:
+        out.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    }
+    return out;
+  }
 
   // Per-tab cache: switching tabs must NOT re-download each list.
   // A tab is fetched once (per profile) and served from the cache on
@@ -2048,6 +2202,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void initState() {
     super.initState();
     _cacheProfile = widget.profileId;
+    Store.librarySort().then((v) {
+      if (!mounted) return;
+      setState(() => _sort = v);
+    });
     _loadTab();
   }
 
@@ -2156,9 +2314,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ? _entries.length
         : _entries.where((e) => matches(filter, e.status)).length;
 
-    final filtered = _entries
+    final filtered = _sorted(_entries
         .where((e) => matches(_statusFilter, e.status))
-        .toList();
+        .toList());
     const statusFilters = [
       'All',
       'Watching',
@@ -2210,17 +2368,37 @@ class _LibraryScreenState extends State<LibraryScreen> {
             Container(
               decoration: BoxDecoration(
                   color: GaColors.of(context).card, shape: BoxShape.circle),
-              child: IconButton(
+              child: PopupMenuButton<String>(
                 padding: EdgeInsets.zero,
                 constraints:
                     const BoxConstraints.tightFor(width: 40, height: 40),
                 icon: const Icon(Icons.sort),
-                // Sort is a post-skeleton feature: labelled placeholder.
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Sort comes after the skeleton phase.'),
-                  ),
-                ),
+                tooltip: 'Sort library',
+                color: GaColors.of(context).card,
+                onSelected: (v) async {
+                  await Store.setLibrarySort(v);
+                  if (!mounted) return;
+                  setState(() => _sort = v);
+                },
+                itemBuilder: (ctx) => [
+                  for (final e in _sortLabels.entries)
+                    PopupMenuItem<String>(
+                      value: e.key,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(e.value,
+                                style: const TextStyle(color: Colors.white)),
+                          ),
+                          if (e.key == _sort)
+                            Icon(Icons.check,
+                                size: 18,
+                                color:
+                                    Theme.of(context).colorScheme.primary),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ),
           ],

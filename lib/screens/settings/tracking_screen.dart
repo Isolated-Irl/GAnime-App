@@ -161,10 +161,27 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   }
 
   // ---- AniList manage form ----
+  // Website parity: the client ID is baked into the public website
+  // config (Config.OAUTH.ANILIST_CLIENT_ID), so one-click connect works
+  // with no form. Same here — implicit grant, response_type=token shows
+  // the token on AniList's PIN page for pasting.
+  static const _anilistClientId = '54686';
+
   Future<void> _saveAnilist() async {
-    final tok = _alToken.text.trim();
+    var tok = _alToken.text.trim();
     if (tok.isEmpty) {
       setState(() => _msg = 'Paste your AniList token first.');
+      return;
+    }
+    // Website parity (anilist.js verifyToken): accept a bare JWT or a
+    // pasted URL whose fragment carries it; reject authorization codes
+    // with a helpful explanation.
+    final frag = RegExp(r'access_token=([^&\s]+)').firstMatch(tok);
+    if (frag != null) tok = Uri.decodeComponent(frag.group(1)!);
+    if (RegExp(r'^[0-9a-f]{32,}$', caseSensitive: false).hasMatch(tok) ||
+        !tok.contains('.')) {
+      setState(() => _msg =
+          'That looks like an authorization code, not a token. Tap "Connect with AniList" and approve again — the page shows the long token (starts with eyJ).');
       return;
     }
     if (_busy) return;
@@ -203,19 +220,25 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        gaTextField(context: context, 
-            controller: _alToken,
-            hint: 'AniList token (paste from PIN page)'),
-        Center(
-          child: TextButton(
-            onPressed: () => launchUrl(
-              Uri.parse('https://anilist.co/api/v2/oauth/pin'),
-              mode: LaunchMode.externalApplication,
-            ),
-            child: Text('Open AniList PIN page in browser',
-                style: TextStyle(color: Theme.of(context).colorScheme.primary)),
-          ),
+        // Website parity (connectAnilistOneClick): one tap opens AniList's
+        // approval page with our client ID; the PIN page shows the token
+        // to paste below. No client-ID form needed.
+        gaGreenButton(
+          context: context,
+          label: 'Connect with AniList',
+          onPressed: _busy
+              ? null
+              : () => launchUrl(
+                    Uri.parse(
+                        'https://anilist.co/api/v2/oauth/authorize?client_id=$_anilistClientId&response_type=token'),
+                    mode: LaunchMode.externalApplication,
+                  ),
         ),
+        const SizedBox(height: 12),
+        gaTextField(context: context,
+            controller: _alToken,
+            hint: 'Paste the token from AniList'),
+        const SizedBox(height: 12),
         gaGreenButton(context: context, 
             label: 'Save AniList token',
             onPressed: _busy ? null : _saveAnilist),
