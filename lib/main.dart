@@ -297,7 +297,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
               );
         break;
       case _BootPhase.home:
-        home = _buildShell();
+        // Builder gives the shell a context BELOW MaterialApp, so
+        // GaColors.of(context) / Theme.of(context) resolve the real theme.
+        // (The root context is above MaterialApp: GaColors.of is null there.)
+        home = Builder(builder: (ctx) => _buildShell(ctx));
         break;
     }
 
@@ -311,7 +314,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
   }
 
   /// The main 5-tab shell (app bar + tab body + floating pill nav).
-  Widget _buildShell() {
+  Widget _buildShell(BuildContext context) {
     final screens = [
       HomeScreen(
           profileId: _profileId,
