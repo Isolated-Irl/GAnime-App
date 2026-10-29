@@ -101,6 +101,22 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       );
       _syncRecord = await Store.syncRecord();
       _msg = 'Sync Now pushed to users/{uid}.';
+      // Pull the merged result back — the cloud now has the union of
+      // local + remote profiles, but the device still has only the old list.
+      try {
+        final remote = await widget.firebase.pullRaw();
+        if (remote != null) {
+          final remoteProfiles = (remote['profiles'] as List?) ?? [];
+          final profiles = remoteProfiles
+              .map((e) => Profile.fromJson(e as Map<String, dynamic>))
+              .toList();
+          if (profiles.isNotEmpty) {
+            await Store.saveProfiles(widget.account, profiles);
+          }
+        }
+      } catch (_) {
+        // Pull failed — push already succeeded, profiles will merge on next sync.
+      }
     } catch (e) {
       final detail = '$e'.replaceFirst('Exception: ', '');
       _msg = 'Sync failed: $detail';
