@@ -23,7 +23,13 @@ class EpisodesService {
     } catch (_) {
       // Fall through to the numbered fallback below.
     }
-    final total = a.episodes ?? 0;
+    // For releasing titles, episode count is often unknown (null).
+    // Use nextEpisode from the airing schedule if available —
+    // the calendar knows EP 5 is out even if the total is unknown.
+    var total = a.episodes ?? 0;
+    if (total <= 0 && (a.nextEpisode ?? 0) > 0) {
+      total = a.nextEpisode!;
+    }
     if (total <= 0) return [];
     return List.generate(
       total,
