@@ -3,17 +3,21 @@
 // when the user has connected that tracker in Settings; otherwise the
 // tab explains how to connect. MAL is read-only in this app.
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../services/anilist.dart';
 import '../services/kitsu.dart';
 import '../services/trackers.dart';
-import '../services/addons.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
 import '../widgets/anime_card.dart';
+import '../widgets/skeletons.dart';
 import 'details.dart';
-import 'player.dart';
+import 'settings/about_screen.dart';
+import 'settings/account_screen.dart';
+import 'settings/addons_screen.dart';
+import 'settings/layout_screen.dart';
+import 'settings/playback_screen.dart';
+import 'settings/tracking_screen.dart';
 
 Future<void> openDetails(
   BuildContext context, {
@@ -103,6 +107,37 @@ class HomeScreen extends StatefulWidget {  final String profileId;
 class _HomeScreenState extends State<HomeScreen> {
   final _heroPage = PageController();
   int _heroIndex = 0;
+  // Home data is fetched ONCE per profile, never on rebuild. The future used
+  // to be created inline in build(), so every setState — including the one
+  // from onPageChanged on each hero swipe — created a fresh future and the
+  // FutureBuilder blanked the whole screen to a spinner.
+  late Future<List<dynamic>> _homeFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _homeFuture = _loadHome();
+  }
+
+  @override
+  void didUpdateWidget(HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.profileId != widget.profileId) {
+      _homeFuture = _loadHome();
+    }
+  }
+
+  Future<List<dynamic>> _loadHome() {
+    return Future.wait([
+      _safe(Kitsu.trending()),
+      _safe(Kitsu.popularThisSeason()),
+      _safe(Kitsu.upcomingNextSeason()),
+      _safe(Kitsu.popular()),
+      _safe(Kitsu.topRated()),
+      _safe(Kitsu.topMovies()),
+      Store.localLibrary(widget.profileId),
+    ]);
+  }
 
   @override
   void dispose() {
@@ -145,8 +180,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     letterSpacing: 1.2)),
             TextButton(
               onPressed: () => _openSeeAll(title, items),
-              child: const Text('View All',
-                  style: TextStyle(color: Color(0xFF14B8A6))),
+              child: Text('View All',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary)),
             ),
           ],
         ),
@@ -184,19 +220,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // NOTE: _homeFuture is created once in initState (refreshed only when the
+    // profile changes). It must NOT be recreated here: onPageChanged calls
+    // setState on every hero swipe, and a fresh future would blank the whole
+    // screen to a spinner on every swipe.
     return FutureBuilder<List<dynamic>>(
-      future: Future.wait([
-        _safe(Kitsu.trending()),
-        _safe(Kitsu.popularThisSeason()),
-        _safe(Kitsu.upcomingNextSeason()),
-        _safe(Kitsu.popular()),
-        _safe(Kitsu.topRated()),
-        _safe(Kitsu.topMovies()),
-        Store.localLibrary(widget.profileId),
-      ]),
+      future: _homeFuture,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          // Skeleton home: hero + rail placeholders mirroring the real
+          // layout (gated by the same Layout settings), not a spinner.
+          final ls = widget.settings;
+          final railTitles = <String>[
+            if (ls.railTrending) 'Trending Now',
+            if (ls.railPopularSeason) 'Popular This Season',
+            if (ls.railUpcoming) 'Upcoming Next Season',
+            if (ls.railAllTime) 'All Time Popular',
+            if (ls.railTop100) 'Top 100 Anime',
+            if (ls.railTopMovies) 'Top 100 Movies',
+          ];
+          return ListView(
+            children: [
+              if (ls.showHero) skeletonHero(),
+              for (final t in railTitles) skeletonRail(title: t),
+            ],
+          );
         }
         if (snap.hasError) {
           return Center(child: Text('Could not load AniList: ${snap.error}'));
@@ -462,7 +510,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
                                       color: i == _heroIndex
-                                          ? const Color(0xFF14B8A6)
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
                                           : Colors.white.withValues(alpha: 0.35),
                                     ),
                                   ),
@@ -577,7 +627,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                             backgroundColor:
                                                 Colors.grey.shade800,
                                             color:
-                                                const Color(0xFF14B8A6),
+                                                Theme.of(context)
+                                                    .colorScheme
+                                                    .primary,
                                           ),
                                         ],
                                       ),
@@ -645,6 +697,7 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _subtype; // TV | movie | OVA | ONA | special
   String? _status; // current | finished | upcoming
   String? _sort; // ratingRank | -userCount | -startDate
+  String? _season; // winter | spring | summer | fall (requires _year)
 
   @override
   void initState() {
@@ -657,6 +710,7 @@ class _SearchScreenState extends State<SearchScreen> {
   int get _activeFilterCount =>
       _genres.length +
       (_year != null ? 1 : 0) +
+      (_season != null ? 1 : 0) +
       (_subtype != null ? 1 : 0) +
       (_status != null ? 1 : 0) +
       (_sort != null ? 1 : 0);
@@ -675,6 +729,7 @@ class _SearchScreenState extends State<SearchScreen> {
         q,
         genres: _genres.isEmpty ? null : _genres.toList(),
         year: _year,
+        season: _season,
         subtype: _subtype,
         status: _status,
         sort: _sort,
@@ -693,9 +748,36 @@ class _SearchScreenState extends State<SearchScreen> {
     // Local mutable copies; committed to state only on Apply.
     final genres = Set<String>.of(_genres);
     int? year = _year;
+    String? season = _season;
     String? subtype = _subtype;
     String? status = _status;
     String? sort = _sort;
+    // Genres start collapsed (compact); expand to see the full grid.
+    bool genresExpanded = false;
+    // Season result counts for the picked year (null = not loaded yet).
+    Map<String, int>? seasonCounts;
+    // Refresh hook into the sheet's StatefulBuilder; nulled when the
+    // sheet closes so late count fetches can't touch a dead sheet.
+    void Function(void Function())? refresh;
+    void loadSeasonCounts(int y) {
+      seasonCounts = null;
+      refresh?.call(() {});
+      Kitsu.seasonCounts(y).then((m) {
+        seasonCounts = m;
+        refresh?.call(() {});
+      });
+    }
+    if (year != null) loadSeasonCounts(year);
+    String seasonLabel(String s) {
+      final name = {
+        'winter': 'Winter',
+        'spring': 'Spring',
+        'summer': 'Summer',
+        'fall': 'Fall'
+      }[s]!;
+      final c = seasonCounts?[s];
+      return (c != null && c >= 0) ? '$name $c' : name;
+    }
     final years = List.generate(27, (i) => DateTime.now().year - i);
     const formatLabels = {
       'TV': 'TV',
@@ -722,7 +804,9 @@ class _SearchScreenState extends State<SearchScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) => SafeArea(
+        builder: (ctx, setSheet) {
+          refresh = setSheet;
+          return SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
             child: Column(
@@ -744,12 +828,76 @@ class _SearchScreenState extends State<SearchScreen> {
                     style:
                         TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 16),
-                const Text('Genres',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
+                // Genres: collapsible (Maximize/Minimize). Collapsed shows
+                // only the selected chips so the section takes little space.
+                InkWell(
+                  onTap: () =>
+                      setSheet(() => genresExpanded = !genresExpanded),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        const Text('Genres',
+                            style: TextStyle(fontWeight: FontWeight.w700)),
+                        if (genres.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text('${genres.length}',
+                                style: const TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800)),
+                          ),
+                        ],
+                        const Spacer(),
+                        Text(genresExpanded ? 'Minimize' : 'Maximize',
+                            style: TextStyle(
+                                color:
+                                    Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13)),
+                        Icon(
+                          genresExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 if (_allGenres.isEmpty)
                   const Text('Loading genres…',
                       style: TextStyle(color: Colors.grey))
+                else if (!genresExpanded)
+                  genres.isEmpty
+                      ? const Text('No genres selected.',
+                          style: TextStyle(
+                              color: Colors.grey, fontSize: 12))
+                      : Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: genres
+                              .map((g) => FilterChip(
+                                    label: Text(g),
+                                    selected: true,
+                                    onSelected: (_) =>
+                                        setSheet(() => genres.remove(g)),
+                                    selectedColor: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
+                                    checkmarkColor: Colors.black,
+                                  ))
+                              .toList(),
+                        )
                 else
                   Wrap(
                     spacing: 8,
@@ -765,15 +913,77 @@ class _SearchScreenState extends State<SearchScreen> {
                                   genres.remove(g);
                                 }
                               }),
-                              selectedColor: const Color(0xFF14B8A6),
+                              selectedColor:
+                                  Theme.of(context).colorScheme.primary,
                               checkmarkColor: Colors.black,
                             ))
                         .toList(),
                   ),
                 const SizedBox(height: 16),
+                // Season: needs a year (Kitsu requires seasonYear + season
+                // together), so the pills stay disabled until one is picked.
+                Row(
+                  children: [
+                    const Text('Season',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    if (season != null && year != null) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                            '${{
+                              'winter': 'Winter',
+                              'spring': 'Spring',
+                              'summer': 'Summer',
+                              'fall': 'Fall'
+                            }[season]!} $year',
+                            style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (year == null)
+                  const Text('Select a Year below to pick a season.',
+                      style: TextStyle(color: Colors.grey, fontSize: 12))
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _seasonPill('Any', season == null,
+                          () => setSheet(() => season = null)),
+                      for (final s in const [
+                        'winter',
+                        'spring',
+                        'summer',
+                        'fall'
+                      ])
+                        _seasonPill(seasonLabel(s), season == s,
+                            () => setSheet(() => season = s)),
+                    ],
+                  ),
+                const SizedBox(height: 16),
                 _filterDropdown<int?>(
                     'Year', year, [null, ...years], (v) => v == null ? 'Any' : '$v',
-                    (v) => setSheet(() => year = v)),
+                    (v) => setSheet(() {
+                          year = v;
+                          if (v == null) {
+                            // Season needs a year; drop it with the year.
+                            season = null;
+                            seasonCounts = null;
+                          } else {
+                            loadSeasonCounts(v);
+                          }
+                        })),
                 _filterDropdown<String?>(
                     'Format',
                     subtype,
@@ -800,6 +1010,8 @@ class _SearchScreenState extends State<SearchScreen> {
                         onPressed: () => setSheet(() {
                           genres.clear();
                           year = null;
+                          season = null;
+                          seasonCounts = null;
                           subtype = null;
                           status = null;
                           sort = null;
@@ -811,7 +1023,8 @@ class _SearchScreenState extends State<SearchScreen> {
                     Expanded(
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF14B8A6),
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
                           foregroundColor: Colors.black,
                         ),
                         onPressed: () {
@@ -821,6 +1034,7 @@ class _SearchScreenState extends State<SearchScreen> {
                               ..clear()
                               ..addAll(genres);
                             _year = year;
+                            _season = season;
                             _subtype = subtype;
                             _status = status;
                             _sort = sort;
@@ -835,7 +1049,32 @@ class _SearchScreenState extends State<SearchScreen> {
               ],
             ),
           ),
+        );
+      },
+    ),
+  );
+    refresh = null;
+  }
+
+  /// Season pill for the filter sheet. Counts are honest live numbers from
+  /// Kitsu (meta.count); a failed fetch just shows the season name.
+  Widget _seasonPill(String label, bool selected, VoidCallback onTap) {
+    final accent = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? accent : const Color(0xFF222222),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: selected ? Colors.transparent : Colors.grey.shade700),
         ),
+        child: Text(label,
+            style: TextStyle(
+                color: selected ? Colors.black : Colors.white,
+                fontWeight: FontWeight.w600)),
       ),
     );
   }
@@ -928,8 +1167,8 @@ class _SearchScreenState extends State<SearchScreen> {
                     top: -4,
                     child: Container(
                       padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF14B8A6),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
                         shape: BoxShape.circle,
                       ),
                       child: Text(
@@ -946,8 +1185,11 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ],
         ),
-        if (_loading) const Padding(
-            padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
+        if (_loading)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: skeletonPosterGrid(count: 9),
+          ),
         if (_error != null) Text('Search failed: $_error'),
         if (!_loading && _error == null && _searched && _results.isEmpty)
           const Padding(
@@ -1021,11 +1263,46 @@ class _CalendarScreenState extends State<CalendarScreen> {
   int _weekOffset = 0;
   DateTime? _selectedDay;
 
+  // Week data cache: offset -> airing items. Each week is fetched at most
+  // once per screen lifetime, so switching weeks/days never blanks the
+  // header, the week strip, or the whole screen to a loader.
+  final Map<int, List<Anime>> _weekCache = {};
+  final Set<int> _loadingWeeks = {};
+  final Map<int, Object> _weekErrors = {};
+
   DateTime _mondayOfWeek(int offset) {
     final now = DateTime.now();
     final monday = DateTime(now.year, now.month, now.day)
         .subtract(Duration(days: now.weekday - 1));
     return monday.add(Duration(days: 7 * offset));
+  }
+
+  // Kicks off the fetch for a week if it isn't cached or already loading.
+  // Safe to call from build(): it is idempotent and only calls setState
+  // when the async fetch completes.
+  void _ensureWeekLoaded(int offset) {
+    if (_weekCache.containsKey(offset) || _loadingWeeks.contains(offset)) {
+      return;
+    }
+    _loadingWeeks.add(offset);
+    final monday = _mondayOfWeek(offset);
+    final from = monday.millisecondsSinceEpoch ~/ 1000;
+    final to =
+        monday.add(const Duration(days: 7)).millisecondsSinceEpoch ~/ 1000;
+    AniList.airing(from: from, to: to).then((items) {
+      if (!mounted) return;
+      setState(() {
+        _weekCache[offset] = items;
+        _loadingWeeks.remove(offset);
+        _weekErrors.remove(offset);
+      });
+    }, onError: (Object e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingWeeks.remove(offset);
+        _weekErrors[offset] = e;
+      });
+    });
   }
 
   @override
@@ -1040,27 +1317,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final weekLabel =
         '${_monthName(monday.month)} ${monday.day} – ${_monthName(weekEnd.month)} ${weekEnd.day}, ${weekEnd.year}'
         '${_weekOffset == 0 ? ' · This week' : _weekOffset == 1 ? ' · Next week' : _weekOffset == -1 ? ' · Last week' : ''}';
-    final from = monday.millisecondsSinceEpoch ~/ 1000;
-    final to = monday.add(const Duration(days: 7)).millisecondsSinceEpoch ~/ 1000;
-    return FutureBuilder<List<Anime>>(
-      future: AniList.airing(from: from, to: to),
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.hasError) {
-          return Center(child: Text('Calendar failed: ${snap.error}'));
-        }
-        final items = snap.data!;
-        final dayItems = items.where((a) {
-          if (a.airingAt == null) return false;
-          final d = DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000);
-          return DateTime(d.year, d.month, d.day) == selected;
-        }).toList()
-          ..sort((a, b) => (a.airingAt ?? 0).compareTo(b.airingAt ?? 0));
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
+    // Header, week arrows and the day strip always stay visible. Loading
+    // and errors are scoped to the episode list area below; tapping a day
+    // pill only filters the already-cached week data, never refetches.
+    _ensureWeekLoaded(_weekOffset);
+    final items = _weekCache[_weekOffset];
+    final weekError = _weekErrors[_weekOffset];
+    final dayItems = items == null
+        ? const <Anime>[]
+        : (items.where((a) {
+            if (a.airingAt == null) return false;
+            final d = DateTime.fromMillisecondsSinceEpoch(a.airingAt! * 1000);
+            return DateTime(d.year, d.month, d.day) == selected;
+          }).toList()
+            ..sort((a, b) => (a.airingAt ?? 0).compareTo(b.airingAt ?? 0)));
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
             const Text('Anime Release Calendar',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             const SizedBox(height: 16),
@@ -1149,12 +1422,38 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   color: Colors.grey.shade400),
             ),
             const SizedBox(height: 12),
-            if (dayItems.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('No releases on this day.'),
-              ),
-            for (final a in dayItems)
+            // Episode list area: loading / error state lives here, never
+            // full-screen. Day-pill taps filter the cached week instantly.
+            if (weekError != null && items == null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Column(
+                  children: [
+                    Text('Calendar failed: $weekError',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.grey)),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () => setState(() {
+                        _weekErrors.remove(_weekOffset);
+                      }),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              )
+            else if (items == null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: skeletonCalendarRows(count: 4),
+              )
+            else ...[
+              if (dayItems.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Text('No releases on this day.'),
+                ),
+              for (final a in dayItems)
               Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
@@ -1224,11 +1523,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ),
               ),
+            ],
             const SizedBox(height: 16),
           ],
         );
-      },
-    );
   }
 }
 
@@ -1360,31 +1658,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Library',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 16),
         Row(
           children: [
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (int i = 0; i < tabNames.length; i++) ...[
-                      pill(tabNames[i], i == _tab, () {
-                        setState(() {
-                          _tab = i;
-                          _statusFilter = 'All';
-                        });
-                        _loadTab();
-                      }),
-                      const SizedBox(width: 8),
-                    ],
-                  ],
-                ),
-              ),
+            const Expanded(
+              child: Text('Library',
+                  style:
+                      TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             ),
-            const SizedBox(width: 8),
             Container(
               decoration: const BoxDecoration(
                   color: Color(0xFF222222), shape: BoxShape.circle),
@@ -1399,6 +1679,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 16),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (int i = 0; i < tabNames.length; i++) ...[
+                pill(tabNames[i], i == _tab, () {
+                  setState(() {
+                    _tab = i;
+                    _statusFilter = 'All';
+                  });
+                  _loadTab();
+                }),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
         ),
         const SizedBox(height: 12),
         // Skeleton label from the web UI. This is not a live check
@@ -1422,9 +1720,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
         const SizedBox(height: 16),
         if (_loading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 32),
-            child: Center(child: CircularProgressIndicator()),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: skeletonLibraryRows(count: 5),
           )
         else if (_error != null)
           Padding(
@@ -1545,30 +1843,6 @@ class _SettingsMenuRow extends StatelessWidget {
   }
 }
 
-/// Scaffold shell for a settings sub-screen (back button + title).
-class _SettingsSubPage extends StatelessWidget {
-  final String title;
-  final List<Widget> children;
-  const _SettingsSubPage({required this.title, required this.children});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: children,
-      ),
-    );
-  }
-}
-
-Widget _subHead(String t) => Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(t,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-    );
-
 class SettingsScreen extends StatelessWidget {
   final String account;
   final String profileId;
@@ -1624,7 +1898,8 @@ class SettingsScreen extends StatelessWidget {
                 icon: Icons.sync,
                 title: 'Tracking',
                 subtitle: 'AniList, MyAnimeList, Simkl',
-                onTap: () => open(const TrackingSettingsScreen()),
+                onTap: () => open(TrackingSettingsScreen(
+                    settings: settings, onSettings: onSettings)),
               ),
               const Divider(height: 1, color: Color(0xFF333333)),
               _SettingsMenuRow(
@@ -1672,636 +1947,3 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-// ---------- Account ----------
-
-class AccountSettingsScreen extends StatefulWidget {
-  final String account;
-  final String profileId;
-  final AppSettings settings;
-  final ValueChanged<String> onProfile;
-  final FirebaseSync firebase;
-  const AccountSettingsScreen({
-    super.key,
-    required this.account,
-    required this.profileId,
-    required this.settings,
-    required this.onProfile,
-    required this.firebase,
-  });
-  @override
-  State<AccountSettingsScreen> createState() => _AccountSettingsScreenState();
-}
-
-class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
-  List<Profile> _profiles = [];
-  final _fbApiCtrl = TextEditingController();
-  final _fbProjectCtrl = TextEditingController();
-  final _fbEmailCtrl = TextEditingController();
-  final _fbPassCtrl = TextEditingController();
-  String _msg = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  @override
-  void dispose() {
-    _fbApiCtrl.dispose();
-    _fbProjectCtrl.dispose();
-    _fbEmailCtrl.dispose();
-    _fbPassCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _reload() async {
-    final ps = await Store.profiles(widget.account);
-    final fb = await Store.firebaseConfig();
-    if (!mounted) return;
-    setState(() {
-      _profiles = ps;
-      _fbApiCtrl.text = (fb['apiKey'] as String?) ?? '';
-      _fbProjectCtrl.text = (fb['projectId'] as String?) ?? '';
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.settings;
-    return _SettingsSubPage(
-      title: 'Account',
-      children: [
-        _subHead('Profiles'),
-        for (final p in _profiles)
-          ListTile(
-            title: Text(p.name),
-            trailing:
-                p.id == widget.profileId ? const Icon(Icons.check) : null,
-            onTap: () async {
-              await Store.setActiveProfile(widget.account, p.id);
-              widget.onProfile(p.id);
-              setState(() {});
-            },
-          ),
-        TextButton(
-          onPressed: () async {
-            final ps = List<Profile>.from(_profiles)
-              ..add(Profile(
-                  id: 'p${DateTime.now().millisecondsSinceEpoch}',
-                  name: 'Profile ${_profiles.length + 1}'));
-            await Store.saveProfiles(widget.account, ps);
-            setState(() => _profiles = ps);
-          },
-          child: const Text('Add profile'),
-        ),
-        const SizedBox(height: 16),
-        _subHead('Firebase sync (optional)'),
-        const Text(
-            'Enter YOUR Firebase project config here on-device. It is never '
-            'written into the repo. One doc: users/{uid}.'),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _fbApiCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Firebase apiKey', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _fbProjectCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Firebase projectId',
-              border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _fbEmailCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Email', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _fbPassCtrl,
-          obscureText: true,
-          decoration: const InputDecoration(
-              labelText: 'Password', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          children: [
-            FilledButton(
-              onPressed: () async {
-                try {
-                  await widget.firebase.saveConfig(
-                      _fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
-                  await widget.firebase.signIn(
-                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
-                  setState(() => _msg = 'Firebase signed in.');
-                } catch (e) {
-                  setState(() => _msg = 'Firebase sign-in failed: $e');
-                }
-              },
-              child: const Text('Sign in'),
-            ),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await widget.firebase.saveConfig(
-                      _fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
-                  await widget.firebase.signUp(
-                      _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
-                  setState(
-                      () => _msg = 'Firebase account created + signed in.');
-                } catch (e) {
-                  setState(() => _msg = 'Firebase sign-up failed: $e');
-                }
-              },
-              child: const Text('Create account'),
-            ),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  final profiles = await Store.profiles(widget.account);
-                  final watched = await Store.allWatched(widget.profileId);
-                  final lib = await Store.localLibrary(widget.profileId);
-                  final ads = await Store.addons(widget.profileId);
-                  final tombs = await Store.tombstones();
-                  await widget.firebase.push(
-                    account: widget.account,
-                    settings: s,
-                    profiles: profiles,
-                    watched: watched,
-                    localLibrary: lib,
-                    addons: ads,
-                    tombstones: tombs,
-                  );
-                  setState(() => _msg = 'Sync Now pushed to users/{uid}.');
-                } catch (e) {
-                  setState(() => _msg = 'Sync failed: $e');
-                }
-              },
-              child: const Text('Sync Now'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(_msg),
-      ],
-    );
-  }
-}
-
-// ---------- Tracking ----------
-
-class TrackingSettingsScreen extends StatefulWidget {
-  const TrackingSettingsScreen({super.key});
-  @override
-  State<TrackingSettingsScreen> createState() =>
-      _TrackingSettingsScreenState();
-}
-
-class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
-  final _anilistTokenCtrl = TextEditingController();
-  final _simklClientCtrl = TextEditingController();
-  final _simklCodeCtrl = TextEditingController();
-  final _malUserCtrl = TextEditingController();
-  final _malClientCtrl = TextEditingController();
-  String _msg = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  @override
-  void dispose() {
-    _anilistTokenCtrl.dispose();
-    _simklClientCtrl.dispose();
-    _simklCodeCtrl.dispose();
-    _malUserCtrl.dispose();
-    _malClientCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _reload() async {
-    final t = await Store.tracker();
-    if (!mounted) return;
-    setState(() {
-      _anilistTokenCtrl.text = (t['anilistToken'] as String?) ?? '';
-      _simklClientCtrl.text = (t['simklClientId'] as String?) ?? '';
-      _malUserCtrl.text = (t['malUsername'] as String?) ?? '';
-      _malClientCtrl.text = (t['malClientId'] as String?) ?? '';
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _SettingsSubPage(
-      title: 'Tracking',
-      children: [
-        _subHead('Trackers'),
-        TextField(
-          controller: _anilistTokenCtrl,
-          decoration: const InputDecoration(
-              labelText: 'AniList token (paste from PIN page)',
-              border: OutlineInputBorder()),
-        ),
-        TextButton(
-          onPressed: () => launchUrl(
-              Uri.parse('https://anilist.co/api/v2/oauth/pin'),
-              mode: LaunchMode.externalApplication),
-          child: const Text('Open AniList PIN page in browser'),
-        ),
-        FilledButton(
-          onPressed: () async {
-            final t = await Store.tracker();
-            t['anilistToken'] = _anilistTokenCtrl.text.trim();
-            try {
-              final v = await Trackers.anilistViewer(t['anilistToken']);
-              t['anilistUserId'] = v['id'];
-              await Store.saveTracker(t);
-              setState(() => _msg = 'AniList connected: ${v['name']}');
-            } catch (e) {
-              setState(() => _msg = 'AniList connect failed: $e');
-            }
-          },
-          child: const Text('Save AniList token'),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _simklClientCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Simkl client id', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _simklCodeCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Simkl PIN user code (optional)',
-              border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        FilledButton(
-          onPressed: () async {
-            try {
-              if (_simklCodeCtrl.text.trim().isEmpty) {
-                final pin = await Trackers.simklStartPin(
-                    _simklClientCtrl.text.trim());
-                setState(() => _msg =
-                    'Simkl PIN: user code ${pin['user_code']}. Enter it on the Simkl site, then paste the code above and tap again.');
-              } else {
-                final res = await Trackers.simklCheckPin(
-                    _simklClientCtrl.text.trim(),
-                    _simklCodeCtrl.text.trim());
-                final t = await Store.tracker();
-                t['simklClientId'] = _simklClientCtrl.text.trim();
-                t['simklToken'] = res['access_token'];
-                await Store.saveTracker(t);
-                setState(() => _msg = 'Simkl connected.');
-              }
-            } catch (e) {
-              setState(() => _msg = 'Simkl failed: $e');
-            }
-          },
-          child: const Text('Simkl PIN / connect'),
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _malUserCtrl,
-          decoration: const InputDecoration(
-              labelText: 'MAL username', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _malClientCtrl,
-          decoration: const InputDecoration(
-              labelText: 'MAL client id', border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        FilledButton(
-          onPressed: () async {
-            final t = await Store.tracker();
-            t['malUsername'] = _malUserCtrl.text.trim();
-            t['malClientId'] = _malClientCtrl.text.trim();
-            await Store.saveTracker(t);
-            setState(() => _msg = 'MAL saved (read-only list).');
-          },
-          child: const Text('Save MAL (read-only)'),
-        ),
-        const SizedBox(height: 12),
-        Text(_msg),
-      ],
-    );
-  }
-}
-
-// ---------- Layout (real options) ----------
-
-class LayoutSettingsScreen extends StatefulWidget {
-  final AppSettings settings;
-  final ValueChanged<AppSettings> onSettings;
-  const LayoutSettingsScreen(
-      {super.key, required this.settings, required this.onSettings});
-  @override
-  State<LayoutSettingsScreen> createState() => _LayoutSettingsScreenState();
-}
-
-class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
-  late AppSettings _s;
-
-  @override
-  void initState() {
-    super.initState();
-    _s = widget.settings;
-  }
-
-  Future<void> _save(AppSettings s) async {
-    await Store.saveSettings(s);
-    setState(() => _s = s);
-    widget.onSettings(s);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _SettingsSubPage(
-      title: 'Layout',
-      children: [
-        const Text(
-          'Show or hide Home sections. Everything is on by default.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        const SizedBox(height: 8),
-        SwitchListTile(
-          title: const Text('Hero carousel'),
-          value: _s.showHero,
-          onChanged: (v) => _save(_s.copyWith(showHero: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Continue Watching rail'),
-          value: _s.showContinueWatching,
-          onChanged: (v) => _save(_s.copyWith(showContinueWatching: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Trending Now rail'),
-          value: _s.railTrending,
-          onChanged: (v) => _save(_s.copyWith(railTrending: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Popular This Season rail'),
-          value: _s.railPopularSeason,
-          onChanged: (v) => _save(_s.copyWith(railPopularSeason: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Upcoming Next Season rail'),
-          value: _s.railUpcoming,
-          onChanged: (v) => _save(_s.copyWith(railUpcoming: v)),
-        ),
-        SwitchListTile(
-          title: const Text('All Time Popular rail'),
-          value: _s.railAllTime,
-          onChanged: (v) => _save(_s.copyWith(railAllTime: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Top 100 Anime rail'),
-          value: _s.railTop100,
-          onChanged: (v) => _save(_s.copyWith(railTop100: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Top 100 Movies rail'),
-          value: _s.railTopMovies,
-          onChanged: (v) => _save(_s.copyWith(railTopMovies: v)),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------- Addon ----------
-
-class AddonSettingsScreen extends StatefulWidget {
-  final String profileId;
-  const AddonSettingsScreen({super.key, required this.profileId});
-  @override
-  State<AddonSettingsScreen> createState() => _AddonSettingsScreenState();
-}
-
-class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
-  List<AddonRecord> _addons = [];
-  final _addonCtrl = TextEditingController();
-  String _msg = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  @override
-  void dispose() {
-    _addonCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _reload() async {
-    final ads = await Store.addons(widget.profileId);
-    if (!mounted) return;
-    setState(() => _addons = ads);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _SettingsSubPage(
-      title: 'Addon',
-      children: [
-        _subHead('Addons — user-installed only'),
-        const Text('This app ships with NO stream sources and recommends '
-            'none. Paste a Stremio manifest URL you found yourself.'),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _addonCtrl,
-          decoration: const InputDecoration(
-              hintText: 'https://…/manifest.json',
-              border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 8),
-        FilledButton(
-          onPressed: () async {
-            try {
-              final rec =
-                  await AddonsService.fetchManifest(_addonCtrl.text);
-              final list = List<AddonRecord>.from(_addons);
-              if (list.any((a) => a.manifestUrl == rec.manifestUrl)) {
-                setState(() => _msg = 'Addon already installed.');
-                return;
-              }
-              list.add(rec);
-              await Store.saveAddons(widget.profileId, list);
-              setState(() {
-                _addons = list;
-                _msg = 'Installed: ${rec.name}';
-              });
-            } catch (e) {
-              setState(() => _msg = 'Addon install failed: $e');
-            }
-          },
-          child: const Text('Install addon'),
-        ),
-        for (final a in _addons)
-          ListTile(
-            title: Text(a.name),
-            subtitle: Text(a.manifestUrl),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: () async {
-                final list =
-                    _addons.where((x) => x.id != a.id).toList();
-                await Store.saveAddons(widget.profileId, list);
-                setState(() => _addons = list);
-              },
-            ),
-          ),
-        const SizedBox(height: 12),
-        Text(_msg),
-      ],
-    );
-  }
-}
-
-// ---------- Playback ----------
-
-class PlaybackSettingsScreen extends StatefulWidget {
-  final AppSettings settings;
-  final ValueChanged<AppSettings> onSettings;
-  const PlaybackSettingsScreen(
-      {super.key, required this.settings, required this.onSettings});
-  @override
-  State<PlaybackSettingsScreen> createState() =>
-      _PlaybackSettingsScreenState();
-}
-
-class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
-  late AppSettings _s;
-
-  @override
-  void initState() {
-    super.initState();
-    _s = widget.settings;
-  }
-
-  Future<void> _save(AppSettings s) async {
-    await Store.saveSettings(s);
-    setState(() => _s = s);
-    widget.onSettings(s);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _SettingsSubPage(
-      title: 'Playback',
-      children: [
-        _subHead('Playback — audio and subtitle are SEPARATE settings'),
-        DropdownButtonFormField<String>(
-          initialValue: _s.audioLanguage,
-          decoration: const InputDecoration(labelText: 'Audio language'),
-          items: const [
-            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
-            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
-            DropdownMenuItem(value: '', child: Text('Auto / device')),
-          ],
-          onChanged: (v) =>
-              _save(_s.copyWith(audioLanguage: v ?? 'jpn')),
-        ),
-        const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          initialValue: _s.subtitleLanguage,
-          decoration: const InputDecoration(labelText: 'Subtitle language'),
-          items: const [
-            DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
-            DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
-            DropdownMenuItem(value: '', child: Text('None')),
-          ],
-          onChanged: (v) =>
-              _save(_s.copyWith(subtitleLanguage: v ?? 'eng')),
-        ),
-        SwitchListTile(
-          title: const Text('AniSkip enabled'),
-          value: _s.aniskipEnabled,
-          onChanged: (v) => _save(_s.copyWith(aniskipEnabled: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Auto-skip opening'),
-          value: _s.aniskipAutoOp,
-          onChanged: (v) => _save(_s.copyWith(aniskipAutoOp: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Auto-skip ending'),
-          value: _s.aniskipAutoEd,
-          onChanged: (v) => _save(_s.copyWith(aniskipAutoEd: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Show skip buttons'),
-          value: _s.aniskipShowButton,
-          onChanged: (v) => _save(_s.copyWith(aniskipShowButton: v)),
-        ),
-        SwitchListTile(
-          title: const Text('Detect recaps'),
-          value: _s.aniskipDetectRecap,
-          onChanged: (v) => _save(_s.copyWith(aniskipDetectRecap: v)),
-        ),
-        const Divider(),
-        _subHead('Player Test'),
-        const Text(
-            'Opens the media_kit player with a public test video (not a GAnime stream).'),
-        const SizedBox(height: 8),
-        FilledButton(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => PlayerScreen(
-                  anime: const Anime(id: 0, title: 'Player Test'),
-                  episode: 1,
-                  streams: const [
-                    StreamSource(
-                      name: 'Big Buck Bunny (test MP4)',
-                      url:
-                          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-                    ),
-                  ],
-                  settings: _s,
-                ),
-              ),
-            );
-          },
-          child: const Text('Open Player Test'),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------- About & Credits ----------
-
-class AboutSettingsScreen extends StatelessWidget {
-  const AboutSettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const _SettingsSubPage(
-      title: 'About & Credits',
-      children: [
-        Text(
-          'GAnime Android — test/full port in progress. '
-          'Web app at ganime.pages.dev is untouched by this app.',
-          style: TextStyle(color: Colors.grey),
-        ),
-        SizedBox(height: 12),
-        Text('Made with ♥ by Isolated', style: TextStyle(fontSize: 15)),
-        SizedBox(height: 4),
-        Text('GAnime 0.1.0',
-            style: TextStyle(fontSize: 15, color: Colors.grey)),
-      ],
-    );
-  }
-}

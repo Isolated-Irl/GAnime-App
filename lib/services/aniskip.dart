@@ -19,7 +19,7 @@ class AniSkip {
       final r = await http.get(Uri.parse(
           'https://api.aniskip.com/v2/skip-times/$malId/$episode?$qs&episodeLength=$episodeLength'));
       if (r.statusCode != 200) return [];
-      final j = jsonDecode(r.body) as Map<String, dynamic>;
+      final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
       const names = {
         'op': 'Skip Intro',
         'mixed-op': 'Skip Intro',

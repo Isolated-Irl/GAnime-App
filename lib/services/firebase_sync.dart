@@ -36,10 +36,19 @@ class FirebaseSync {
   }
 
   Future<void> saveConfig(String apiKey, String projectId) async {
-    await Store.saveFirebaseConfig({'apiKey': apiKey, 'projectId': projectId});
+    // Merge: never clobber the persisted auth email.
+    final cur = await Store.firebaseConfig();
+    cur['apiKey'] = apiKey;
+    cur['projectId'] = projectId;
+    await Store.saveFirebaseConfig(cur);
     _apiKey = apiKey;
     _projectId = projectId;
   }
+
+  /// Email used at the last successful auth, persisted on-device only
+  /// (never written into the repo). Shown in Settings > Account.
+  Future<String?> savedEmail() async =>
+      (await Store.firebaseConfig())['email'] as String?;
 
   Future<void> signUp(String email, String password) async {
     await _auth('signUp', email, password);
@@ -58,12 +67,16 @@ class FirebaseSync {
       body: jsonEncode(
           {'email': email, 'password': password, 'returnSecureToken': true}),
     );
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (r.statusCode != 200) {
       throw Exception((j['error']?['message'] as String?) ?? 'Auth failed');
     }
     _idToken = j['idToken'] as String?;
     _uid = j['localId'] as String?;
+    // Remember the email on-device so Settings > Account can show it.
+    final cfg = await Store.firebaseConfig();
+    cfg['email'] = email;
+    await Store.saveFirebaseConfig(cfg);
   }
 
   void signOut() {
@@ -187,7 +200,7 @@ class FirebaseSync {
     );
     if (r.statusCode == 404) return null;
     if (r.statusCode != 200) throw Exception('Firestore pull failed');
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// Full pull: returns the remote ganime JSON if present.

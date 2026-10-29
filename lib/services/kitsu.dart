@@ -24,7 +24,7 @@ class Kitsu {
   static Future<Map<String, dynamic>> _get(String path) async {
     final r = await http.get(Uri.parse('$_base$path'), headers: _headers);
     if (r.statusCode != 200) throw Exception('Kitsu ${r.statusCode}');
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
   /// Names from /genres (cached). Used to keep only true genres out of
@@ -151,6 +151,7 @@ class Kitsu {
       genres: _genresOf(j, catNames, genreNames),
       year: year,
       season: season,
+      trailerId: (a['youtubeVideoId'] as String?) ?? '',
     );
   }
 
@@ -218,6 +219,8 @@ class Kitsu {
 
   /// Search, with optional filters. All filter params are optional so the
   /// plain search(q) call keeps working; empty query + filters also works.
+  /// When [season] is set (winter/spring/summer/fall), [year] is sent as
+  /// filter[seasonYear] alongside it; otherwise year uses filter[year].
   static Future<List<Anime>> search(
     String q, {
     List<String>? genres,
@@ -225,6 +228,7 @@ class Kitsu {
     String? subtype,
     String? status,
     String? sort,
+    String? season,
   }) {
     final p = <String>[];
     if (q.trim().isNotEmpty) {
@@ -233,7 +237,12 @@ class Kitsu {
     if (genres != null && genres.isNotEmpty) {
       p.add('filter[genres]=${Uri.encodeQueryComponent(genres.join(','))}');
     }
-    if (year != null) p.add('filter[year]=$year');
+    if (year != null && season != null && season.isNotEmpty) {
+      p.add('filter[seasonYear]=$year');
+      p.add('filter[season]=${Uri.encodeQueryComponent(season)}');
+    } else if (year != null) {
+      p.add('filter[year]=$year');
+    }
     if (subtype != null && subtype.isNotEmpty) {
       p.add('filter[subtype]=${Uri.encodeQueryComponent(subtype)}');
     }
@@ -246,6 +255,29 @@ class Kitsu {
     p.add('page[limit]=20');
     p.add('include=categories');
     return _list('/anime?${p.join('&')}');
+  }
+
+  /// Season result counts for one year: {winter: N, spring: N, ...}.
+  /// Cached per year. Never throws — a failed season reports -1, and the
+  /// UI shows the season name without a count rather than a fake number.
+  static final Map<int, Map<String, int>> _seasonCounts = {};
+  static Future<Map<String, int>> seasonCounts(int year) async {
+    final cached = _seasonCounts[year];
+    if (cached != null) return cached;
+    const seasons = ['winter', 'spring', 'summer', 'fall'];
+    final results = await Future.wait(seasons.map((s) async {
+      try {
+        final j = await _get(
+            '/anime?filter[seasonYear]=$year&filter[season]=$s&page[limit]=1');
+        final c = (j['meta'] as Map?)?['count'];
+        return MapEntry(s, c is num ? c.toInt() : -1);
+      } catch (_) {
+        return MapEntry(s, -1);
+      }
+    }));
+    final m = {for (final e in results) e.key: e.value};
+    _seasonCounts[year] = m;
+    return m;
   }
 
   static Future<Anime> details(int id) async {
@@ -281,6 +313,7 @@ class Kitsu {
           still: (thumb['original'] as String?) ?? '',
           overview: (at['synopsis'] as String?) ?? '',
           runtime: (at['length'] as num?)?.toInt(),
+          airdate: (at['airdate'] as String?) ?? '',
         ));
       }
       offset += per;

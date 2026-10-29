@@ -11,6 +11,8 @@ class Store {
   static const _kActiveProfile = 'ganime_active_profile';
   static const _kSettings = 'ganime_settings';
   static const _kWatched = 'ganime_watched'; // {profileId: {animeId: [ep, ...]}}
+  static const _kSavedEps =
+      'ganime_saved_eps'; // {profileId: {animeId: [ep, ...]}} — bookmarked episodes
   static const _kLibraryLocal = 'ganime_library_local';
   static const _kAddons = 'ganime_addons';
   static const _kTombstones = 'ganime_tombstones';
@@ -103,6 +105,24 @@ class Store {
           ((v as List?) ?? []).map((e) => (e as num).toInt()).toSet();
     });
     return out;
+  }
+
+  /// Bookmarked ("saved") episodes per title, same shape as watched.
+  static Future<Set<int>> savedEps(String profileId, int animeId) async {
+    final m = await _read(_kSavedEps);
+    final prof = (m[profileId] as Map<String, dynamic>?) ?? {};
+    final list = (prof['$animeId'] as List?) ?? [];
+    return list.map((e) => (e as num).toInt()).toSet();
+  }
+
+  static Future<void> setSavedEps(
+      String profileId, int animeId, Set<int> eps) async {
+    final m = await _read(_kSavedEps);
+    final prof = Map<String, dynamic>.from(
+        (m[profileId] as Map<String, dynamic>?) ?? {});
+    prof['$animeId'] = eps.toList();
+    m[profileId] = prof;
+    await _write(_kSavedEps, m);
   }
 
   static Future<List<LibraryEntry>> localLibrary(String profileId) async {

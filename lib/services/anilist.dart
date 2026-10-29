@@ -31,7 +31,7 @@ class AniList {
     if (r.statusCode != 200) {
       throw Exception('AniList ${r.statusCode}: ${r.body}');
     }
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (j['errors'] != null) {
       final errs = j['errors'] as List;
       throw Exception('AniList: ${errs.isNotEmpty ? errs.first['message'] : 'query error'}');

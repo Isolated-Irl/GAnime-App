@@ -27,7 +27,7 @@ class Trackers {
       Uri.parse('https://api.simkl.com/oauth/pin?client_id=$clientId'),
     );
     if (r.statusCode != 200) throw Exception('Simkl PIN failed: ${r.body}');
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
   static Future<Map<String, dynamic>> simklCheckPin(
@@ -35,7 +35,7 @@ class Trackers {
     final r = await http.get(Uri.parse(
         'https://api.simkl.com/oauth/pin/$userCode?client_id=$clientId'));
     if (r.statusCode != 200) throw Exception('Simkl PIN not ready');
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
   static Future<List<LibraryEntry>> simklLists(
@@ -48,7 +48,7 @@ class Trackers {
       },
     );
     if (r.statusCode != 200) throw Exception('Simkl lists failed');
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <LibraryEntry>[];
     for (final item in (j['anime'] as List?) ?? []) {
       final m = item as Map<String, dynamic>;
@@ -107,7 +107,7 @@ class Trackers {
       headers: {'X-MAL-CLIENT-ID': clientId},
     );
     if (r.statusCode != 200) throw Exception('MAL list failed: ${r.body}');
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <LibraryEntry>[];
     for (final node in (j['data'] as List?) ?? []) {
       final m = node as Map<String, dynamic>;

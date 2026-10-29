@@ -26,9 +26,19 @@ class AddonsService {
     if (r.statusCode != 200) {
       throw Exception('Manifest fetch failed (${r.statusCode})');
     }
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (j['id'] == null || j['name'] == null) {
       throw Exception('Not a valid addon manifest (missing id/name)');
+    }
+    final resRaw = (j['resources'] as List?) ?? [];
+    final resources = resRaw
+        .map((e) => e is Map ? '${e['name'] ?? ''}' : '$e')
+        .where((e) => e.isNotEmpty)
+        .toList();
+    // Manifest "types" is the fallback when "resources" is absent.
+    if (resources.isEmpty) {
+      resources.addAll(
+          ((j['types'] as List?) ?? []).map((e) => '$e').toList());
     }
     return AddonRecord(
       manifestUrl: url,
@@ -37,6 +47,10 @@ class AddonsService {
       name: '${j['name']}',
       version: (j['version'] as String?) ?? '',
       addedAt: DateTime.now(),
+      enabled: true,
+      description: (j['description'] as String?) ?? '',
+      logoUrl: (j['logo'] as String?) ?? '',
+      resources: resources,
     );
   }
 
@@ -49,7 +63,7 @@ class AddonsService {
     final url = '${addon.baseUrl}/stream/$type/$streamId.json';
     final r = await http.get(Uri.parse(url));
     if (r.statusCode != 200) return [];
-    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <StreamSource>[];
     for (final s in (j['streams'] as List?) ?? []) {
       final m = s as Map<String, dynamic>;

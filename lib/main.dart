@@ -13,6 +13,8 @@ import 'services/kitsu.dart';
 import 'services/trackers.dart';
 import 'store.dart';
 import 'screens/app_screens.dart';
+import 'screens/settings/settings_shell.dart';
+import 'widgets/skeletons.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -172,8 +174,25 @@ class _GAnimeAppState extends State<GAnimeApp> {
   @override
   Widget build(BuildContext context) {
     if (!_ready) {
-      return const MaterialApp(
-        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      // Boot splash: shimmering placeholder blocks instead of a spinner.
+      return MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            child: Skeleton(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  SkeletonBlock(width: 96, height: 96, radius: 24),
+                  SizedBox(height: 20),
+                  SkeletonBlock(width: 160, height: 20, radius: 10),
+                  SizedBox(height: 10),
+                  SkeletonBlock(width: 110, height: 14, radius: 7),
+                ],
+              ),
+            ),
+          ),
+        ),
       );
     }
     final screens = [
@@ -202,23 +221,28 @@ class _GAnimeAppState extends State<GAnimeApp> {
         onProfile: (id) => setState(() => _profileId = id),
       ),
     ];
-    // Web parity theme: bg #0d0d0d, cards #222222, accent teal #14b8a6
-    // (web --bg-surface / --bg-card / --accent). Home has no top bar
-    // because the hero sits at the very top, like the web home.
+    // Web parity theme: bg #0d0d0d, cards #222222. Accent follows
+    // Settings > Layout > THEME (default emerald green, like the website
+    // settings screens). AMOLED Black makes the background pure black.
+    // Home has no top bar because the hero sits at the very top, like
+    // the web home.
+    final accent = themeAccent(_settings.theme);
     return MaterialApp(
       title: 'GAnime',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0D0D0D),
+        scaffoldBackgroundColor: _settings.amoledBlack
+            ? Colors.black
+            : const Color(0xFF0D0D0D),
         cardColor: const Color(0xFF222222),
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF14B8A6),
-          secondary: Color(0xFF14B8A6),
-          surface: Color(0xFF0D0D0D),
+        colorScheme: ColorScheme.dark(
+          primary: accent,
+          secondary: accent,
+          surface: const Color(0xFF0D0D0D),
         ),
-        navigationBarTheme: const NavigationBarThemeData(
-          backgroundColor: Color(0xFF0D0D0D),
-          indicatorColor: Color(0x3314B8A6),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: const Color(0xFF0D0D0D),
+          indicatorColor: accent.withValues(alpha: 0.2),
         ),
       ),
       home: Scaffold(
