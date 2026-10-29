@@ -3,6 +3,7 @@
 // when the user has connected that tracker in Settings; otherwise the
 // tab explains how to connect. MAL is read-only in this app.
 import 'package:flutter/material.dart';
+import '../theme.dart';
 import '../models.dart';
 import '../services/anilist.dart';
 import '../services/kitsu.dart';
@@ -53,24 +54,36 @@ class AnimeGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.62,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: items.length,
-      itemBuilder: (_, i) => AnimeCard(
-        anime: items[i],
-        onTap: () => openDetails(context,
+    // The poster art is a fixed 2:3 (website parity), so the cell ratio is
+    // derived from the actual cell width: image height + reserved text
+    // block. This keeps every poster identical on any screen width with
+    // no overflow.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const count = 3;
+        const spacing = 8.0;
+        final cellWidth =
+            (constraints.maxWidth - spacing * (count - 1)) / count;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: count,
+            childAspectRatio: posterGridChildAspectRatio(cellWidth),
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: 8,
+          ),
+          itemCount: items.length,
+          itemBuilder: (_, i) => AnimeCard(
             anime: items[i],
-            profileId: profileId,
-            settings: settings,
-            onMarkWatched: onMarkWatched),
-      ),
+            onTap: () => openDetails(context,
+                anime: items[i],
+                profileId: profileId,
+                settings: settings,
+                onMarkWatched: onMarkWatched),
+          ),
+        );
+      },
     );
   }
 }
@@ -187,7 +200,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         SizedBox(
-          height: 200,
+          // Fixed 2:3 poster art (120 -> 180) + reserved text block, so
+          // every poster is identical in size (website parity).
+          height: 120 / kPosterArtRatio + kPosterTextReserve,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: items.length,
@@ -568,7 +583,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   onMarkWatched: widget.onMarkWatched),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF222222),
+                                  color: GaColors.of(context).card,
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 padding: const EdgeInsets.all(10),
@@ -799,7 +814,7 @@ class _SearchScreenState extends State<SearchScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: GaColors.of(context).field,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -920,58 +935,24 @@ class _SearchScreenState extends State<SearchScreen> {
                         .toList(),
                   ),
                 const SizedBox(height: 16),
-                // Season: needs a year (Kitsu requires seasonYear + season
-                // together), so the pills stay disabled until one is picked.
-                Row(
-                  children: [
-                    const Text('Season',
-                        style: TextStyle(fontWeight: FontWeight.w700)),
-                    if (season != null && year != null) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                            '${{
-                              'winter': 'Winter',
-                              'spring': 'Spring',
-                              'summer': 'Summer',
-                              'fall': 'Fall'
-                            }[season]!} $year',
-                            style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800)),
-                      ),
-                    ],
-                  ],
+                // Season: a proper dropdown box like Year/Format/Status.
+                // Kitsu needs seasonYear + season together, so the box
+                // stays disabled until a year is picked.
+                _filterDropdown<String?>(
+                  'Season',
+                  season,
+                  const [null, 'winter', 'spring', 'summer', 'fall'],
+                  (s) => s == null ? 'Any' : seasonLabel(s),
+                  (v) => setSheet(() => season = v),
+                  enabled: year != null,
                 ),
-                const SizedBox(height: 8),
                 if (year == null)
-                  const Text('Select a Year below to pick a season.',
-                      style: TextStyle(color: Colors.grey, fontSize: 12))
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _seasonPill('Any', season == null,
-                          () => setSheet(() => season = null)),
-                      for (final s in const [
-                        'winter',
-                        'spring',
-                        'summer',
-                        'fall'
-                      ])
-                        _seasonPill(seasonLabel(s), season == s,
-                            () => setSheet(() => season = s)),
-                    ],
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: Text('Select a Year below to pick a season.',
+                        style:
+                            TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
-                const SizedBox(height: 16),
                 _filterDropdown<int?>(
                     'Year', year, [null, ...years], (v) => v == null ? 'Any' : '$v',
                     (v) => setSheet(() {
@@ -1056,32 +1037,9 @@ class _SearchScreenState extends State<SearchScreen> {
     refresh = null;
   }
 
-  /// Season pill for the filter sheet. Counts are honest live numbers from
-  /// Kitsu (meta.count); a failed fetch just shows the season name.
-  Widget _seasonPill(String label, bool selected, VoidCallback onTap) {
-    final accent = Theme.of(context).colorScheme.primary;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? accent : const Color(0xFF222222),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: selected ? Colors.transparent : Colors.grey.shade700),
-        ),
-        child: Text(label,
-            style: TextStyle(
-                color: selected ? Colors.black : Colors.white,
-                fontWeight: FontWeight.w600)),
-      ),
-    );
-  }
-
-  Widget _filterDropdown<T>(
-      String label, T value, List<T> options, String Function(T) labelOf,
-      ValueChanged<T> onChanged) {
+  Widget _filterDropdown<T>(String label, T value, List<T> options,
+      String Function(T) labelOf, ValueChanged<T> onChanged,
+      {bool enabled = true}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
@@ -1089,27 +1047,33 @@ class _SearchScreenState extends State<SearchScreen> {
           SizedBox(
             width: 90,
             child: Text(label,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: enabled ? Colors.white : Colors.grey)),
           ),
           Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF222222),
+                color: GaColors.of(context).card,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<T>(
                   value: value,
                   isExpanded: true,
-                  dropdownColor: const Color(0xFF222222),
+                  dropdownColor: GaColors.of(context).card,
+                  style: TextStyle(
+                      color: enabled ? Colors.white : Colors.grey,
+                      fontSize: 16),
                   items: options
                       .map((o) => DropdownMenuItem<T>(
                             value: o,
                             child: Text(labelOf(o)),
                           ))
                       .toList(),
-                  onChanged: (v) => onChanged(v as T),
+                  onChanged:
+                      enabled ? (v) => onChanged(v as T) : null,
                 ),
               ),
             ),
@@ -1136,7 +1100,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   hintText: 'Search anime...',
                   prefixIcon: const Icon(Icons.search),
                   filled: true,
-                  fillColor: const Color(0xFF222222),
+                  fillColor: GaColors.of(context).card,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
                     borderSide: BorderSide.none,
@@ -1153,7 +1117,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   width: 56,
                   height: 56,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF222222),
+                    color: GaColors.of(context).card,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: IconButton(
@@ -1186,10 +1150,9 @@ class _SearchScreenState extends State<SearchScreen> {
           ],
         ),
         if (_loading)
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: skeletonPosterGrid(count: 9),
-          ),
+          // Ghost of AnimeGrid in the same 12px inset — no extra padding,
+          // or the ghost cells would be narrower than the real ones.
+          skeletonPosterGrid(count: 9),
         if (_error != null) Text('Search failed: $_error'),
         if (!_loading && _error == null && _searched && _results.isEmpty)
           const Padding(
@@ -1314,9 +1277,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
     _selectedDay ??= days.contains(todayDate) ? todayDate : monday;
     final selected = _selectedDay!;
     final weekEnd = monday.add(const Duration(days: 6));
+    // Website parity: only the current week gets the suffix, and the label
+    // never wraps (single line, 15px like the site's .cal2-range).
     final weekLabel =
         '${_monthName(monday.month)} ${monday.day} – ${_monthName(weekEnd.month)} ${weekEnd.day}, ${weekEnd.year}'
-        '${_weekOffset == 0 ? ' · This week' : _weekOffset == 1 ? ' · Next week' : _weekOffset == -1 ? ' · Last week' : ''}';
+        '${_weekOffset == 0 ? ' · This week' : ''}';
     // Header, week arrows and the day strip always stay visible. Loading
     // and errors are scoped to the episode list area below; tapping a day
     // pill only filters the already-cached week data, never refetches.
@@ -1340,8 +1305,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
             Row(
               children: [
                 Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF222222), shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: GaColors.of(context).card, shape: BoxShape.circle),
                   child: IconButton(
                     icon: const Icon(Icons.chevron_left),
                     onPressed: () => setState(() {
@@ -1351,14 +1316,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ),
                 Expanded(
+                  // Website parity (.cal2-range): single line, 15px/800; never wraps.
                   child: Text(weekLabel,
                       textAlign: TextAlign.center,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w700)),
+                          fontSize: 15, fontWeight: FontWeight.w800)),
                 ),
                 Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF222222), shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: GaColors.of(context).card, shape: BoxShape.circle),
                   child: IconButton(
                     icon: const Icon(Icons.chevron_right),
                     onPressed: () => setState(() {
@@ -1367,6 +1335,34 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     }),
                   ),
                 ),
+                // Website parity (.btn-mini): shown only when viewing a week
+                // other than the current one; tapping returns to the current
+                // week and selects today's date (week 0 is already cached).
+                if (_weekOffset != 0) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      _weekOffset = 0;
+                      _selectedDay = todayDate;
+                    }),
+                    style: TextButton.styleFrom(
+                      backgroundColor: GaColors.of(context).card,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 7),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.12)),
+                      ),
+                      textStyle: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    child: const Text('Today'),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 16),
@@ -1381,11 +1377,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         padding:
                             const EdgeInsets.symmetric(vertical: 10),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF222222),
+                          color: GaColors.of(context).card,
                           borderRadius: BorderRadius.circular(12),
+                          // Website parity (.cal2-day.selected): accent-green
+                          // border and accent-green day name, date stays white.
                           border: Border.all(
                             color: d == selected
-                                ? Colors.white
+                                ? Theme.of(context).colorScheme.primary
                                 : Colors.transparent,
                           ),
                         ),
@@ -1396,7 +1394,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                     fontSize: 11,
                                     fontWeight: FontWeight.w700,
                                     color: d == selected
-                                        ? Colors.white
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primary
                                         : Colors.grey.shade500)),
                             const SizedBox(height: 4),
                             Text('${d.day}',
@@ -1445,7 +1445,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             else if (items == null)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                child: skeletonCalendarRows(count: 4),
+                child: skeletonCalendarRows(context, count: 4),
               )
             else ...[
               if (dayItems.isEmpty)
@@ -1457,7 +1457,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF222222),
+                  color: GaColors.of(context).card,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: InkWell(
@@ -1551,22 +1551,52 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool _loading = false;
   String? _error;
 
+  // Per-tab cache: switching tabs must NOT re-download each list.
+  // A tab is fetched once (per profile) and served from the cache on
+  // every later visit; the refresh button forces a re-download.
+  final Map<int, List<LibraryEntry>> _cache = {};
+  String _cacheProfile = '';
+
   @override
   void initState() {
     super.initState();
+    _cacheProfile = widget.profileId;
     _loadTab();
   }
 
-  Future<void> _loadTab() async {
+  @override
+  void didUpdateWidget(LibraryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.profileId != widget.profileId) {
+      _cache.clear();
+      _cacheProfile = widget.profileId;
+      _loadTab();
+    }
+  }
+
+  Future<void> _loadTab({bool force = false}) async {
     final tab = _tab;
+    final profile = widget.profileId;
+    // Serve from the per-tab cache: tab switches are instant, no network.
+    if (!force &&
+        _cacheProfile == widget.profileId &&
+        _cache.containsKey(tab)) {
+      setState(() {
+        _entries = _cache[tab]!;
+        _loading = false;
+        _error = null;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
       _entries = [];
     });
+    List<LibraryEntry> fetched;
     try {
       if (tab == 0) {
-        _entries = await Store.localLibrary(widget.profileId);
+        fetched = await Store.localLibrary(widget.profileId);
       } else {
         final t = await Store.tracker();
         if (tab == 1) {
@@ -1576,7 +1606,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             throw Exception(
                 'AniList not connected. Go to Settings > Trackers and paste your AniList token.');
           }
-          _entries = await Trackers.anilistLists(token, userId);
+          fetched = await Trackers.anilistLists(token, userId);
         } else if (tab == 2) {
           final user = (t['malUsername'] as String?) ?? '';
           final client = (t['malClientId'] as String?) ?? '';
@@ -1584,7 +1614,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             throw Exception(
                 'MAL not connected. Go to Settings > Trackers and enter your MAL username + client id. MAL is read-only here.');
           }
-          _entries = await Trackers.malLists(user, client);
+          fetched = await Trackers.malLists(user, client);
         } else {
           final client = (t['simklClientId'] as String?) ?? '';
           final token = (t['simklToken'] as String?) ?? '';
@@ -1592,13 +1622,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
             throw Exception(
                 'Simkl not connected. Go to Settings > Trackers and complete the Simkl PIN flow.');
           }
-          _entries = await Trackers.simklLists(client, token);
+          fetched = await Trackers.simklLists(client, token);
         }
       }
     } catch (e) {
-      setState(() => _error = '$e');
+      // A failed fetch is not cached: the next visit retries.
+      if (mounted && tab == _tab) setState(() => _error = '$e');
+      if (mounted) setState(() => _loading = false);
+      return;
     }
-    if (mounted) setState(() => _loading = false);
+    // Guard against a stale fetch landing after a tab switch or a
+    // profile change: never show one tab's (or profile's) list while
+    // another is selected.
+    if (!mounted || tab != _tab || _cacheProfile != profile) return;
+    _cache[tab] = fetched;
+    _cacheProfile = profile;
+    setState(() {
+      _entries = fetched;
+      _loading = false;
+    });
   }
 
   @override
@@ -1644,7 +1686,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: selected ? Colors.white : const Color(0xFF222222),
+            color: selected ? Colors.white : GaColors.of(context).card,
             borderRadius: BorderRadius.circular(24),
           ),
           child: Text(label,
@@ -1666,8 +1708,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             ),
             Container(
-              decoration: const BoxDecoration(
-                  color: Color(0xFF222222), shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                  color: GaColors.of(context).card, shape: BoxShape.circle),
+              child: IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh this tab',
+                onPressed: () => _loadTab(force: true),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              decoration: BoxDecoration(
+                  color: GaColors.of(context).card, shape: BoxShape.circle),
               child: IconButton(
                 icon: const Icon(Icons.sort),
                 // Sort is a post-skeleton feature: labelled placeholder.
@@ -1722,7 +1774,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         if (_loading)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: skeletonLibraryRows(count: 5),
+            child: skeletonLibraryRows(context, count: 5),
           )
         else if (_error != null)
           Padding(
@@ -1744,7 +1796,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             Container(
               margin: const EdgeInsets.only(bottom: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF222222),
+                color: GaColors.of(context).card,
                 borderRadius: BorderRadius.circular(16),
               ),
               child: ListTile(
@@ -1815,7 +1867,7 @@ class _SettingsMenuRow extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: const Color(0xFF1A1A1A),
+                color: GaColors.of(context).field,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(icon, color: Colors.white, size: 22),
@@ -1870,12 +1922,13 @@ class SettingsScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Website sub-screen header scale: compact ~22px bold title.
         const Text('Settings',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 16),
         Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF222222),
+            color: GaColors.of(context).card,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFF333333)),
           ),

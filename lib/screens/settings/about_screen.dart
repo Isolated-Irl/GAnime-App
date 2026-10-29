@@ -49,8 +49,6 @@ class AboutSettingsScreen extends StatelessWidget {
             'Crowdsourced timestamp intervals for opening (OP) and ending (ED) skip buttons.'),
         _credit('media_kit',
             'The playback engine behind the Android app (mpv).'),
-        _credit('movi-player by MrUjjwalG',
-            'Creator of movi-player — the player engine behind the GAnime web app, credited here and in the GitHub About. Without a player, the app would be just a fancy showcase.'),
         _credit('Built with Muse & Gemini',
             'Designed and built by Isolated in a three-way collaboration — Muse (build & verification) and Gemini (analysis & benchmarking).'),
         _credit('♥ NuvioWeb Inspiration',

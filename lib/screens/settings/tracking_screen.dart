@@ -78,17 +78,19 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   String get _malName =>
       _malConnected ? "@${_t['malUsername']}" : 'Not connected';
 
+  // Website `.tsc-dot`: 9px, top-right of the name row, green glow when on.
   Widget _dot(bool c) => Container(
-        width: 10,
-        height: 10,
+        width: 9,
+        height: 9,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: c ? gaGreen : gaGreyDark,
+          color: c ? Theme.of(context).colorScheme.primary : const Color(0xFF5B5B66),
           boxShadow: c
               ? [
                   BoxShadow(
-                      color: gaGreen.withValues(alpha: 0.6),
-                      blurRadius: 6)
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 0.8),
+                      blurRadius: 8)
                 ]
               : null,
         ),
@@ -105,28 +107,28 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Website `.tsc-top`: name left, dot top-right (space-between,
+          // top-aligned), state text below.
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(name,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 4),
-                    Text(username,
-                        style: const TextStyle(
-                            color: gaGrey, fontSize: 13)),
-                  ],
-                ),
+                child: Text(name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800)),
               ),
-              _dot(connected),
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: _dot(connected),
+              ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 7),
+          Text(username,
+              style: const TextStyle(color: gaGrey, fontSize: 12.5)),
+          const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerLeft,
             child: OutlinedButton(
@@ -201,7 +203,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        gaTextField(
+        gaTextField(context: context, 
             controller: _alToken,
             hint: 'AniList token (paste from PIN page)'),
         Center(
@@ -210,11 +212,11 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
               Uri.parse('https://anilist.co/api/v2/oauth/pin'),
               mode: LaunchMode.externalApplication,
             ),
-            child: const Text('Open AniList PIN page in browser',
-                style: TextStyle(color: gaGreen)),
+            child: Text('Open AniList PIN page in browser',
+                style: TextStyle(color: Theme.of(context).colorScheme.primary)),
           ),
         ),
-        gaGreenButton(
+        gaGreenButton(context: context, 
             label: 'Save AniList token',
             onPressed: _busy ? null : _saveAnilist),
         if (_alConnected)
@@ -273,11 +275,11 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        gaTextField(controller: _skClient, hint: 'Simkl client id'),
-        gaTextField(
+        gaTextField(context: context, controller: _skClient, hint: 'Simkl client id'),
+        gaTextField(context: context, 
             controller: _skCode,
             hint: 'Simkl PIN user code (optional)'),
-        gaGreenButton(
+        gaGreenButton(context: context, 
             label: 'Simkl PIN / connect',
             onPressed: _busy ? null : _simklConnect),
         if (_skConnected)
@@ -322,9 +324,9 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        gaTextField(controller: _malUser, hint: 'MAL username'),
-        gaTextField(controller: _malClient, hint: 'MAL client id'),
-        gaGreenButton(
+        gaTextField(context: context, controller: _malUser, hint: 'MAL username'),
+        gaTextField(context: context, controller: _malClient, hint: 'MAL client id'),
+        gaGreenButton(context: context, 
             label: 'Save MAL (read-only)',
             onPressed: _busy ? null : _saveMal),
         if (_malConnected)
@@ -349,7 +351,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return GACard(
       padding: EdgeInsets.zero,
       border: selected
-          ? Border.all(color: gaGreen, width: 2)
+          ? Border.all(color: Theme.of(context).colorScheme.primary, width: 2)
           : Border.all(color: gaCardBorder),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
@@ -376,7 +378,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
                 ),
               ),
               if (selected)
-                const Icon(Icons.check, color: gaGreen),
+                Icon(Icons.check, color: Theme.of(context).colorScheme.primary),
             ],
           ),
         ),

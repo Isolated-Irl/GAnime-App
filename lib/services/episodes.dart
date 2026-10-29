@@ -19,13 +19,4 @@ class EpisodesService {
       (i) => EpisodeInfo(number: i + 1, title: 'Episode ${i + 1}'),
     );
   }
-
-  /// Stremio-style ids used by addons: `anilist:<id>:<episode>`.
-  /// Catalogue ids are Kitsu ids, so the AniList id is resolved first;
-  /// throws when the title has no AniList mapping.
-  static Future<String> streamIdFor(Anime a, int episode) async {
-    final al = await Kitsu.resolveAnilistId(a.id);
-    if (al == null) throw Exception('No AniList mapping for this title');
-    return 'anilist:$al:$episode';
-  }
 }

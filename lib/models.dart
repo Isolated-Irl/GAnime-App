@@ -197,12 +197,29 @@ class Profile {
   final String id;
   final String name;
   final int color;
-  const Profile({required this.id, required this.name, this.color = 0xFF22C55E});
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'color': color};
+  // Avatar: built-in catalog name (e.g. 'Bram') or custom URL.
+  // Migration-safe: old profiles default to the catalog's first avatar.
+  final String avatarName;
+  final String avatarUrl;
+  const Profile(
+      {required this.id,
+      required this.name,
+      this.color = 0xFF22C55E,
+      this.avatarName = 'Bram',
+      this.avatarUrl = ''});
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'color': color,
+        'avatarName': avatarName,
+        'avatarUrl': avatarUrl,
+      };
   factory Profile.fromJson(Map<String, dynamic> j) => Profile(
         id: '${j['id']}',
         name: (j['name'] as String?) ?? 'Profile',
         color: (j['color'] as num?)?.toInt() ?? 0xFF22C55E,
+        avatarName: (j['avatarName'] as String?) ?? 'Bram',
+        avatarUrl: (j['avatarUrl'] as String?) ?? '',
       );
 }
 
@@ -481,6 +498,13 @@ class AddonRecord {
   final String description;
   final String logoUrl;
   final List<String> resources; // manifest "resources" (e.g. stream)
+  /// Manifest "types" (e.g. ["movie","series"] or ["anime"]) — decides the
+  /// `/stream/<type>/` path per addon (website parity: general addons want
+  /// "series", anime-only addons want "anime").
+  final List<String> types;
+  /// Per-resource id prefixes (e.g. ["tt"]) — decides which id forms
+  /// (kitsu:/tt:/anilist:/mal:) an addon understands.
+  final List<String> idPrefixes;
   const AddonRecord({
     required this.manifestUrl,
     required this.baseUrl,
@@ -492,11 +516,15 @@ class AddonRecord {
     this.description = '',
     this.logoUrl = '',
     this.resources = const [],
+    this.types = const [],
+    this.idPrefixes = const [],
   });
   AddonRecord copyWith({
     bool? enabled,
     String? description,
     String? logoUrl,
+    List<String>? types,
+    List<String>? idPrefixes,
   }) =>
       AddonRecord(
         manifestUrl: manifestUrl,
@@ -509,6 +537,8 @@ class AddonRecord {
         description: description ?? this.description,
         logoUrl: logoUrl ?? this.logoUrl,
         resources: resources,
+        types: types ?? this.types,
+        idPrefixes: idPrefixes ?? this.idPrefixes,
       );
   Map<String, dynamic> toJson() => {
         'manifestUrl': manifestUrl,
@@ -521,6 +551,8 @@ class AddonRecord {
         'description': description,
         'logoUrl': logoUrl,
         'resources': resources,
+        'types': types,
+        'idPrefixes': idPrefixes,
       };
   factory AddonRecord.fromJson(Map<String, dynamic> j) => AddonRecord(
         manifestUrl: (j['manifestUrl'] as String?) ?? '',
@@ -535,6 +567,11 @@ class AddonRecord {
         description: (j['description'] as String?) ?? '',
         logoUrl: (j['logoUrl'] as String?) ?? '',
         resources: ((j['resources'] as List?) ?? []).map((e) => '$e').toList(),
+        // Migration-safe: records saved before types/idPrefixes existed
+        // get empty lists; the stream flow refetches the manifest then.
+        types: ((j['types'] as List?) ?? []).map((e) => '$e').toList(),
+        idPrefixes:
+            ((j['idPrefixes'] as List?) ?? []).map((e) => '$e').toList(),
       );
 }
 

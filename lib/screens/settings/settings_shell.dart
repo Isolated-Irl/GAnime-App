@@ -3,7 +3,10 @@
 // near-black background, dark #222222 rounded cards, green accent,
 // caps section labels, white primary text, grey secondary text.
 import 'package:flutter/material.dart';
+import '../../theme.dart';
 
+// Dark-mode canonical values (kept as consts for legacy reference).
+// Widgets should prefer GaColors.of(context) so AMOLED true-black applies.
 const gaBg = Color(0xFF0D0D0D);
 const gaCard = Color(0xFF222222);
 const gaCardBorder = Color(0xFF333333);
@@ -40,7 +43,7 @@ class GASubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: gaBg,
+      backgroundColor: GaColors.of(context).surface,
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
@@ -54,7 +57,7 @@ class GASubPage extends StatelessWidget {
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: gaCard,
+                      color: GaColors.of(context).card,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: gaCardBorder),
                     ),
@@ -113,11 +116,64 @@ class GACard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: padding,
       decoration: BoxDecoration(
-        color: gaCard,
+        color: GaColors.of(context).card,
         borderRadius: BorderRadius.circular(16),
         border: border ?? Border.all(color: gaCardBorder),
       ),
       child: child,
+    );
+  }
+}
+
+/// Uniform toggle switch, website-parity: the website's `.switch` is a
+/// fixed 46x26 track with a 20px white knob — identical size in both
+/// states (dark track w/ subtle border when OFF, accent when ON).
+/// A custom widget (not Material Switch) so ON and OFF never differ
+/// in size, everywhere in the app.
+class GASwitch extends StatelessWidget {
+  const GASwitch(
+      {super.key, required this.value, required this.onChanged});
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: 46,
+        height: 26,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(13),
+          color: value ? accent : const Color(0xFF2A2A2A),
+          border: Border.all(
+            color: value
+                ? Colors.transparent
+                : Colors.white.withValues(alpha: 0.25),
+            width: 1,
+          ),
+        ),
+        child: Stack(
+          children: [
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              left: value ? 23 : 3,
+              top: 2,
+              child: Container(
+                width: 20,
+                height: 20,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -151,7 +207,7 @@ Widget gaToggleRow({
             ],
           ),
         ),
-        Switch(value: value, onChanged: onChanged),
+        GASwitch(value: value, onChanged: onChanged),
       ],
     ),
   );
@@ -173,7 +229,7 @@ Widget gaDropdownRow({
         final picked = await showDialog<String>(
           context: context,
           builder: (ctx) => SimpleDialog(
-            backgroundColor: gaCard,
+            backgroundColor: GaColors.of(context).card,
             title: Text(title,
                 style:
                     const TextStyle(color: Colors.white, fontSize: 16)),
@@ -217,7 +273,7 @@ Widget gaDropdownRow({
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: gaFieldFill,
+                color: GaColors.of(context).field,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: gaCardBorder),
               ),
@@ -351,8 +407,10 @@ Widget gaWhiteButton({
   );
 }
 
-/// Full-width green button with white text (website Addons screen).
+/// Full-width accent button with white text (website Addons screen).
+/// Accent follows Settings > Layout > THEME via the ambient ThemeData.
 Widget gaGreenButton({
+  required BuildContext context,
   required String label,
   required VoidCallback? onPressed,
 }) {
@@ -363,7 +421,7 @@ Widget gaGreenButton({
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: gaGreen,
+          backgroundColor: Theme.of(context).colorScheme.primary,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 16),
           shape:
@@ -379,12 +437,14 @@ Widget gaGreenButton({
 
 /// Dark outlined text field (website install/config forms).
 Widget gaTextField({
+  required BuildContext context,
   required TextEditingController controller,
   required String hint,
   bool obscure = false,
   TextInputType keyboardType = TextInputType.text,
   int maxLines = 1,
 }) {
+  final accent = Theme.of(context).colorScheme.primary;
   return Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: TextField(
@@ -397,7 +457,7 @@ Widget gaTextField({
         hintText: hint,
         hintStyle: const TextStyle(color: gaGreyDark),
         filled: true,
-        fillColor: gaFieldFill,
+        fillColor: GaColors.of(context).field,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(
@@ -410,7 +470,7 @@ Widget gaTextField({
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: gaGreen),
+          borderSide: BorderSide(color: accent),
         ),
       ),
     ),

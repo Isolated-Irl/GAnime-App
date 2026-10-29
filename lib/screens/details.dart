@@ -8,11 +8,13 @@
 // If no addon is installed, streams are empty and the player screen
 // explains that — the app never invents a stream source.
 import 'package:flutter/material.dart';
+import '../theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../services/episodes.dart';
 import '../services/kitsu.dart';
 import '../services/addons.dart';
+import '../services/addon_ids.dart';
 import '../services/trackers.dart';
 import '../store.dart';
 import 'player.dart';
@@ -71,8 +73,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
   int? _rangeFrom; // null = All
   bool _filterOpen = false;
   String? _libStatus; // app status code, null = not in library
-
-  static const _card = Color(0xFF222222);
 
   @override
   void initState() {
@@ -255,36 +255,84 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _playEpisode(int ep) async {
-    // Resolve the addon stream id ONCE (Kitsu id -> AniList id). When the
-    // title has no AniList mapping there is nothing to query addons with.
-    final String streamId;
-    try {
-      streamId = await EpisodesService.streamIdFor(widget.anime, ep);
-    } catch (_) {
+    // Addon stream resolution (website parity):
+    // 1) installed + enabled addons only (re-read fresh: a disable/remove
+    //    in Settings > Addons takes effect on the next play);
+    // 2) per-addon /stream/<type>/ path (general addons want "series",
+    //    anime-only ones "anime" — hardcoding "anime" 404s on general
+    //    addons, the reported "no stream addon found" bug);
+    // 3) every id dialect the addon understands (kitsu:/tt:/anilist:/
+    //    mal:), merged and de-duplicated.
+    final addons = (await Store.addons(widget.profileId))
+        .where((a) => a.enabled)
+        .toList();
+    if (addons.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-              'No streams found. Install an addon first (Settings > Addons) — the app ships with none.'),
+              'No stream addon installed or enabled. Add one under Settings > Addons — the app ships with none.'),
         ),
       );
       return;
     }
-    final addons =
-        (await Store.addons(widget.profileId)).where((a) => a.enabled);
+    // Legacy records saved before types/idPrefixes existed: refetch the
+    // manifest once so the per-addon type + id dialect resolve correctly.
+    for (var i = 0; i < addons.length; i++) {
+      final a = addons[i];
+      if (a.types.isEmpty) {
+        try {
+          final fresh = await AddonsService.fetchManifest(a.manifestUrl);
+          final updated = a.copyWith(
+            types: fresh.types,
+            idPrefixes: fresh.idPrefixes,
+          );
+          addons[i] = updated;
+          final all = await Store.addons(widget.profileId);
+          final idx =
+              all.indexWhere((e) => e.manifestUrl == a.manifestUrl);
+          if (idx >= 0) {
+            all[idx] = updated;
+            await Store.saveAddons(widget.profileId, all);
+          }
+        } catch (_) {}
+      }
+    }
+    final isMovie = widget.anime.format.toUpperCase() == 'MOVIE';
+    final ids = await AddonIdResolver.resolve(widget.anime);
     final streams = <StreamSource>[];
+    final seen = <String>{};
+    final noIdNotes = <String>[];
     for (final a in addons) {
-      try {
-        streams.addAll(await AddonsService.streams(a, 'anime', streamId));
-      } catch (_) {}
+      final type = AddonsService.streamTypeFor(a, isMovie);
+      final sids = AddonIdResolver.streamIdsFor(
+        a,
+        ids,
+        title: widget.anime.title,
+        isMovie: isMovie,
+        episode: ep,
+      );
+      if (sids.isEmpty) {
+        noIdNotes.add(
+            '${a.name} understands: ${a.idPrefixes.join(', ')}');
+        continue;
+      }
+      for (final sid in sids) {
+        try {
+          final found = await AddonsService.streams(a, type, sid);
+          for (final s in found) {
+            if (s.url.isNotEmpty && seen.add(s.url)) streams.add(s);
+          }
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     if (streams.isEmpty) {
+      final msg = noIdNotes.length == addons.length
+          ? 'No compatible ID for this title — ${noIdNotes.join('; ')}.'
+          : 'No streams found for episode $ep. The installed addon(s) returned nothing for this title.';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'No streams found. Install an addon first (Settings > Addons) — the app ships with none.'),
-        ),
+        SnackBar(content: Text(msg)),
       );
       return;
     }
@@ -410,7 +458,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     await showModalBottomSheet(
       context: context,
-      backgroundColor: _card,
+      backgroundColor: GaColors.of(context).card,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -513,189 +561,322 @@ class _DetailsScreenState extends State<DetailsScreen> {
         child: Text(g, style: const TextStyle(fontSize: 12)),
       );
 
-  Widget _overlayBtn(
-      {required IconData icon,
-      required bool active,
-      required VoidCallback onTap,
-      required String tooltip}) {
-    final accent = Theme.of(context).colorScheme.primary;
-    return Material(
-      color: Colors.black54,
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
+  // Website `.ep-save` / `.ep-eye`: 28px circles, dark translucent bg,
+  // 1.5px white-35% border; save turns gold, eye turns green when on.
+  Widget _overlayBtn({
+    required IconData icon,
+    required bool active,
+    required Color activeColor,
+    required Color activeBorder,
+    required VoidCallback onTap,
+    required String tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Tooltip(
-            message: tooltip,
-            child: Icon(icon,
-                size: 18, color: active ? accent : Colors.white),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: active
+                ? activeColor
+                : const Color.fromRGBO(16, 18, 24, 0.62),
+            border: Border.all(
+              color: active
+                  ? activeBorder
+                  : Colors.white.withValues(alpha: 0.35),
+              width: 1.5,
+            ),
+          ),
+          child: Icon(icon,
+              size: 15,
+              color: active
+                  ? Colors.white
+                  : Colors.white.withValues(alpha: 0.55)),
+        ),
+      ),
+    );
+  }
+
+  // Website `.ep-big` (Detailed): 84vw card in a horizontal strip, 172px
+  // still, shade gradient, save/eye top corners, body overlaid at the
+  // bottom: S1E chip, title, 2-line synopsis, runtime/date footer.
+  Widget _detailedCard(EpisodeInfo ep, double width) {
+    final watched = _watched.contains(ep.number);
+    final saved = _saved.contains(ep.number);
+    final title =
+        ep.title.isNotEmpty ? ep.title : 'Episode ${ep.number}';
+    // Website falls back to the title's episode duration here; the app
+    // doesn't carry that field, so runtime comes from the episode only.
+    final runtime = ep.runtime != null ? '${ep.runtime}m' : '';
+    return SizedBox(
+      width: width,
+      child: InkWell(
+        onTap: () => _playEpisode(ep.number),
+        borderRadius: BorderRadius.circular(14),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            decoration: BoxDecoration(
+              border:
+                  Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: SizedBox(
+              height: 172,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ep.still.isNotEmpty
+                        ? Image.network(ep.still,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                _stillFallback(height: 172))
+                        : _stillFallback(height: 172),
+                  ),
+                  // Website `.ep-big-shade`: transparent 26% -> black 85%.
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.85),
+                          ],
+                          stops: const [0.26, 0.88],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: _overlayBtn(
+                      icon: saved
+                          ? Icons.bookmark
+                          : Icons.bookmark_border,
+                      active: saved,
+                      activeColor: const Color(0xFFB98A1C),
+                      activeBorder: const Color(0xFFE8B93C),
+                      onTap: () => _toggleSaved(ep.number),
+                      tooltip: saved
+                          ? 'Saved — tap to unsave'
+                          : 'Save this episode',
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: _overlayBtn(
+                      icon: watched
+                          ? Icons.visibility
+                          : Icons.visibility_outlined,
+                      active: watched,
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      activeBorder: Theme.of(context).colorScheme.primary,
+                      onTap: () => _toggleWatched(ep.number),
+                      tooltip: watched
+                          ? 'Watched — tap to unmark'
+                          : 'Mark as watched',
+                    ),
+                  ),
+                  // Website `.ep-big-body`: absolute bottom, 12/14 padding.
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text('S1E${ep.number}',
+                                style: const TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w800)),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.3)),
+                          if (ep.overview.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(ep.overview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12.5,
+                                      height: 1.45,
+                                      color: Color(0xFFD8D8D8))),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(
+                              children: [
+                                if (runtime.isNotEmpty)
+                                  Text(runtime,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFFCFCFCF),
+                                          fontWeight: FontWeight.w600)),
+                                const Spacer(),
+                                if (ep.airdate.isNotEmpty)
+                                  Text(formatEpDate(ep.airdate),
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFFCFCFCF),
+                                          fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _detailedCard(EpisodeInfo ep) {
-    final watched = _watched.contains(ep.number);
-    final saved = _saved.contains(ep.number);
-    final title =
-        ep.title.isNotEmpty ? ep.title : 'Episode ${ep.number}';
-    return Card(
-      color: const Color(0xFF1C1C1C),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      child: InkWell(
-        onTap: () => _playEpisode(ep.number),
-        child: Stack(
-          children: [
-            if (ep.still.isNotEmpty)
-              Image.network(ep.still,
-                  height: 170, width: double.infinity, fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => _stillFallback())
-            else
-              _stillFallback(),
-            // Bottom shade for text legibility.
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: 0.75),
-                    ],
-                    stops: const [0.35, 1.0],
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 8,
-              left: 8,
-              child: _overlayBtn(
-                icon: saved ? Icons.bookmark : Icons.bookmark_border,
-                active: saved,
-                onTap: () => _toggleSaved(ep.number),
-                tooltip:
-                    saved ? 'Saved — tap to unsave' : 'Save this episode',
-              ),
-            ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: _overlayBtn(
-                icon: watched
-                    ? Icons.visibility
-                    : Icons.visibility_outlined,
-                active: watched,
-                onTap: () => _toggleWatched(ep.number),
-                tooltip:
-                    watched ? 'Watched — tap to unmark' : 'Mark as watched',
-              ),
-            ),
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 10,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text('S1E${ep.number}',
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)),
-                  if (ep.overview.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(ep.overview,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey.shade300)),
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Row(
-                      children: [
-                        if (ep.runtime != null)
-                          Text('${ep.runtime}m',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade300,
-                                  fontWeight: FontWeight.w600)),
-                        const Spacer(),
-                        if (ep.airdate.isNotEmpty)
-                          Text(formatEpDate(ep.airdate),
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade300)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _stillFallback() => Container(
-        height: 170,
+  Widget _stillFallback({double height = 170}) => Container(
+        height: height,
         width: double.infinity,
         color: const Color(0xFF2A2A2A),
         child: const Icon(Icons.play_circle_outline,
             size: 48, color: Colors.white54),
       );
 
-  Widget _minimumRow(EpisodeInfo ep) {
+  // Website `.ep-pic` (Minimal): full-width 16:9 picture card, save/eye
+  // top corners, white-bordered "EP n" badge bottom-left, date badge
+  // bottom-right. No title text — picture only + EP/date inside.
+  Widget _minimumCard(EpisodeInfo ep) {
     final watched = _watched.contains(ep.number);
-    final title =
-        ep.title.isNotEmpty ? ep.title : 'Episode ${ep.number}';
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      leading: ep.still.isNotEmpty
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.network(ep.still, width: 72, height: 40,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) =>
-                      const Icon(Icons.play_circle_outline)),
-            )
-          : const Icon(Icons.play_circle_outline),
-      title: Text('EP ${ep.number} · $title'),
-      subtitle: ep.overview.isNotEmpty
-          ? Text(ep.overview,
-              maxLines: 2, overflow: TextOverflow.ellipsis)
-          : null,
-      trailing: IconButton(
-        icon: Icon(
-          watched ? Icons.visibility : Icons.visibility_outlined,
-          color: watched ? Theme.of(context).colorScheme.primary : null,
+    final saved = _saved.contains(ep.number);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _playEpisode(ep.number),
+        borderRadius: BorderRadius.circular(12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: BoxDecoration(
+              border:
+                  Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ep.still.isNotEmpty
+                        ? Image.network(ep.still,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                _stillFallback(height: 120))
+                        : _stillFallback(height: 120),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: _overlayBtn(
+                      icon: saved
+                          ? Icons.bookmark
+                          : Icons.bookmark_border,
+                      active: saved,
+                      activeColor: const Color(0xFFB98A1C),
+                      activeBorder: const Color(0xFFE8B93C),
+                      onTap: () => _toggleSaved(ep.number),
+                      tooltip: saved
+                          ? 'Saved — tap to unsave'
+                          : 'Save this episode',
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: _overlayBtn(
+                      icon: watched
+                          ? Icons.visibility
+                          : Icons.visibility_outlined,
+                      active: watched,
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      activeBorder: Theme.of(context).colorScheme.primary,
+                      onTap: () => _toggleWatched(ep.number),
+                      tooltip: watched
+                          ? 'Watched — tap to unmark'
+                          : 'Mark as watched',
+                    ),
+                  ),
+                  // Website `.ep-badge`: white-bordered EP pill.
+                  Positioned(
+                    left: 10,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color:
+                            const Color.fromRGBO(16, 18, 24, 0.87),
+                        border: Border.all(
+                            color: Colors.white, width: 1.6),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: Text('EP ${ep.number}',
+                          style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.4,
+                              color: Colors.white)),
+                    ),
+                  ),
+                  if (ep.airdate.isNotEmpty)
+                    Positioned(
+                      right: 10,
+                      bottom: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(
+                          color:
+                              const Color.fromRGBO(16, 18, 24, 0.72),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: Text(formatEpDate(ep.airdate),
+                            style: const TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFFE8E8E8))),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ),
-        onPressed: () => _toggleWatched(ep.number),
-        tooltip: 'Mark watched / unwatch',
       ),
-      onTap: () => _playEpisode(ep.number),
     );
   }
 
@@ -711,7 +892,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? accent : _card,
+          color: active ? accent : GaColors.of(context).card,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
@@ -768,9 +949,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       width: double.infinity,
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) =>
-                          Container(height: 120, color: _card))
+                          Container(height: 120, color: GaColors.of(context).card))
                 else
-                  Container(height: 120, color: _card),
+                  Container(height: 120, color: GaColors.of(context).card),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                   child: Column(
@@ -841,8 +1022,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                       !_synopsisExpanded),
                               child: Text(
                                   _synopsisExpanded
-                                      ? 'Minimize'
-                                      : 'Maximize',
+                                      ? 'Show less'
+                                      : 'Show more',
                                   style: TextStyle(
                                       color: accent,
                                       fontWeight: FontWeight.bold)),
@@ -876,9 +1057,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   fontWeight: FontWeight.bold),
                             ),
                             onPressed: () => _playEpisode(nextEp),
-                            child: Text(_isMovie
-                                ? '▶ Play Movie'
-                                : '▶ Play Ep $nextEp'),
+                            // Website: white pill, BLACK play triangle, black
+                            // text. A real icon, never an emoji/text glyph.
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.play_arrow,
+                                    color: Colors.black, size: 22),
+                                const SizedBox(width: 4),
+                                Text(_isMovie
+                                    ? 'Play Movie'
+                                    : 'Play Ep $nextEp'),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -889,7 +1080,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           Expanded(
                             child: _actionPill(
                               child: PopupMenuButton<String>(
-                                color: _card,
+                                color: GaColors.of(context).card,
                                 tooltip: _libStatus == null
                                     ? 'Add to Library'
                                     : _libStatusName(_libStatus!),
@@ -968,7 +1159,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: _card,
+                            color: GaColors.of(context).card,
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Column(
@@ -1040,7 +1231,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 14, vertical: 8),
                                 decoration: BoxDecoration(
-                                  color: _card,
+                                  color: GaColors.of(context).card,
                                   borderRadius:
                                       BorderRadius.circular(20),
                                   border: _filterOpen
@@ -1102,7 +1293,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                 const EdgeInsets.only(top: 8),
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: _card,
+                              color: GaColors.of(context).card,
                               borderRadius:
                                   BorderRadius.circular(14),
                             ),
@@ -1127,26 +1318,35 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         const SizedBox(height: 10),
                       ],
                       if (_loading)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          // Skeleton matches the selected episode layout,
-                          // like the website's transparent episode skeletons.
-                          child: _layout == 'detailed'
-                              ? skeletonEpisodeDetailed(count: 3)
-                              : skeletonEpisodeMinimum(count: 5),
-                        ),
+                        // Skeleton matches the selected episode layout,
+                        // in the same inset context as the real list
+                        // (the parent already pads 16) — no extra padding,
+                        // or the ghost cards size/position would shift.
+                        _layout == 'detailed'
+                            ? skeletonEpisodeDetailed(count: 3)
+                            : skeletonEpisodeMinimum(count: 5),
                       if (_error != null)
                         Text('Episodes could not load: $_error'),
                       if (!_loading && _error == null)
                         if (_layout == 'detailed')
-                          ...numbers.map((n) => Padding(
-                                padding: const EdgeInsets.only(
-                                    bottom: 10),
-                                child: _detailedCard(_epFor(n)),
-                              ))
+                          // Website `.ep-big-strip`: horizontal strip of
+                          // 84vw cards (website mobile: 84vw).
+                          SizedBox(
+                            height: 172,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: numbers.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(width: 14),
+                              itemBuilder: (_, i) => _detailedCard(
+                                  _epFor(numbers[i]),
+                                  MediaQuery.of(context).size.width *
+                                      0.84),
+                            ),
+                          )
                         else
-                          ...numbers.map(
-                              (n) => _minimumRow(_epFor(n))),
+                          ...numbers
+                              .map((n) => _minimumCard(_epFor(n))),
                       if (!_loading &&
                           _error == null &&
                           numbers.isEmpty)
@@ -1189,7 +1389,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Widget _actionPill({required Widget child}) => Container(
         height: 56,
         decoration: BoxDecoration(
-          color: _card,
+          color: GaColors.of(context).card,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Center(child: child),

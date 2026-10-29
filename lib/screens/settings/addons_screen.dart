@@ -3,6 +3,8 @@
 // Never name stream providers/hosts here — the user pastes a Stremio
 // manifest URL they found themselves.
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import '../../theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../store.dart';
 import '../../models.dart';
@@ -22,6 +24,9 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
   final _addonCtrl = TextEditingController();
   String _msg = '';
   bool _busy = false;
+  /// Live reachability per addon (keyed by manifestUrl): checked on load
+  /// and after install/refresh — the real status, not the stored record.
+  final Map<String, ({bool ok, int ms})> _status = {};
 
   @override
   void initState() {
@@ -39,6 +44,62 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
     final list = await Store.addons(widget.profileId);
     if (!mounted) return;
     setState(() => _addons = list);
+    _checkStatus();
+  }
+
+  /// Ping every installed addon's manifest; records reachable + round-trip.
+  Future<void> _checkStatus() async {
+    for (final a in _addons) {
+      final key = a.manifestUrl;
+      try {
+        final sw = Stopwatch()..start();
+        final r = await http
+            .get(Uri.parse(key))
+            .timeout(const Duration(seconds: 8));
+        sw.stop();
+        _status[key] = (ok: r.statusCode == 200, ms: sw.elapsedMilliseconds);
+      } catch (_) {
+        _status[key] = (ok: false, ms: 0);
+      }
+      if (mounted) setState(() {});
+    }
+  }
+
+  Widget _statusTag(AddonRecord a) {
+    final st = _status[a.manifestUrl];
+    final Color dot;
+    final String label;
+    if (st == null) {
+      dot = gaGreyDark;
+      label = 'Checking…';
+    } else if (st.ok) {
+      dot = const Color(0xFF22C55E);
+      label = 'Reachable · ${st.ms}ms';
+    } else {
+      dot = Colors.redAccent;
+      label = 'Unreachable';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: GaColors.of(context).field,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: gaCardBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
+          ),
+          const SizedBox(width: 6),
+          Text(label,
+              style: const TextStyle(color: gaGrey, fontSize: 11)),
+        ],
+      ),
+    );
   }
 
   Future<void> _persist() =>
@@ -61,6 +122,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
         await _persist();
         _addonCtrl.clear();
         _msg = 'Installed: ${rec.name}';
+        _checkStatus();
       }
     } catch (e) {
       _msg = 'Addon install failed: $e';
@@ -85,8 +147,11 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
         description: fresh.description,
         logoUrl: fresh.logoUrl,
         resources: fresh.resources,
+        types: fresh.types,
+        idPrefixes: fresh.idPrefixes,
       );
       await _persist();
+      _checkStatus();
       _msg = 'Refreshed: ${fresh.name}';
     } catch (e) {
       _msg = 'Refresh failed: $e';
@@ -106,7 +171,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: gaCard,
+        backgroundColor: GaColors.of(context).card,
         title: const Text('Remove addon?',
             style: TextStyle(
                 color: Colors.white,
@@ -152,7 +217,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
   Widget _logoFallback() => Container(
         width: 56,
         height: 56,
-        color: gaFieldFill,
+        color: GaColors.of(context).field,
         child: const Icon(Icons.extension, color: gaGrey),
       );
 
@@ -191,7 +256,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
         padding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: gaFieldFill,
+          color: GaColors.of(context).field,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: gaCardBorder),
         ),
@@ -223,7 +288,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: gaFieldFill,
+                          color: GaColors.of(context).field,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: gaCardBorder),
                         ),
@@ -234,7 +299,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
                   ],
                 ),
               ),
-              Switch(
+              GASwitch(
                 value: a.enabled,
                 onChanged: (v) async {
                   _addons[i] = a.copyWith(enabled: v);
@@ -281,6 +346,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
             spacing: 8,
             runSpacing: 8,
             children: [
+              _statusTag(a),
               _tag(a.enabled ? 'Active' : 'Disabled'),
               for (final r in a.resources) _tag(_resLabel(r)),
             ],
@@ -314,7 +380,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: gaTextField(
+              child: gaTextField(context: context, 
                 controller: _addonCtrl,
                 hint: 'https://example.com/manifest.json',
                 keyboardType: TextInputType.url,
@@ -326,7 +392,7 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
               child: ElevatedButton(
                 onPressed: _busy ? null : _install,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: gaGreen,
+                  backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Colors.white,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20),

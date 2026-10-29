@@ -142,7 +142,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
             style: TextStyle(color: gaGrey, fontSize: 13),
           ),
         ),
-        gaGreenButton(
+        gaGreenButton(context: context, 
           label: 'Open Player Test',
           onPressed: () {
             Navigator.of(context).push(

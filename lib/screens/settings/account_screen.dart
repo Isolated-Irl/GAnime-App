@@ -167,7 +167,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                         color: Colors.white, fontSize: 15)),
               ),
               if (p.id == widget.profileId)
-                const Icon(Icons.check, color: gaGreen),
+                Icon(Icons.check, color: Theme.of(context).colorScheme.primary),
             ],
           ),
         ),
@@ -189,12 +189,12 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           await Store.saveProfiles(widget.account, ps);
           if (mounted) setState(() => _profiles = ps);
         },
-        child: const Padding(
+        child: Padding(
           padding: EdgeInsets.all(16),
           child: Center(
             child: Text('Add profile',
                 style: TextStyle(
-                    color: gaGreen,
+                    color: Theme.of(context).colorScheme.primary,
                     fontSize: 15,
                     fontWeight: FontWeight.w600)),
           ),
@@ -266,13 +266,13 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
               style: TextStyle(color: gaGrey, fontSize: 13),
             ),
           ),
-          gaTextField(controller: _fbApiCtrl, hint: 'Firebase apiKey'),
-          gaTextField(controller: _fbProjectCtrl, hint: 'Firebase projectId'),
-          gaTextField(
+          gaTextField(context: context, controller: _fbApiCtrl, hint: 'Firebase apiKey'),
+          gaTextField(context: context, controller: _fbProjectCtrl, hint: 'Firebase projectId'),
+          gaTextField(context: context, 
               controller: _fbEmailCtrl,
               hint: 'Email',
               keyboardType: TextInputType.emailAddress),
-          gaTextField(
+          gaTextField(context: context, 
               controller: _fbPassCtrl, hint: 'Password', obscure: true),
           Row(
             children: [
@@ -280,7 +280,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 child: ElevatedButton(
                   onPressed: _busy ? null : _signIn,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: gaGreen,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Colors.white,
                     padding:
                         const EdgeInsets.symmetric(vertical: 16),
@@ -297,8 +297,8 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 child: OutlinedButton(
                   onPressed: _busy ? null : _signUp,
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: gaGreen),
-                    foregroundColor: gaGreen,
+                    side: BorderSide(color: Theme.of(context).colorScheme.primary),
+                    foregroundColor: Theme.of(context).colorScheme.primary,
                     padding:
                         const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(

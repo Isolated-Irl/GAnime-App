@@ -64,6 +64,19 @@ class Store {
     return p.getString('$_kActiveProfile:$account');
   }
 
+  /// Website parity: the auth gate remembers guest mode (like the web's
+  /// localStorage auth state). Firebase session tokens are never persisted
+  /// — only the guest choice survives a cold start.
+  static Future<bool> isGuest() async {
+    final p = await prefs;
+    return p.getBool('ganime_is_guest') ?? false;
+  }
+
+  static Future<void> setGuest(bool v) async {
+    final p = await prefs;
+    await p.setBool('ganime_is_guest', v);
+  }
+
   static Future<void> setActiveProfile(String account, String id) async {
     final p = await prefs;
     await p.setString('$_kActiveProfile:$account', id);

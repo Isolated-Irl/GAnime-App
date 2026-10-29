@@ -159,7 +159,8 @@ query (\$from: Int, \$to: Int) {
         year: a.year,
         season: a.season,
       );
-    }).toList();
+      // Calendar is a general-audience surface: never show adult titles.
+    }).where((a) => !a.genres.any((g) => g.toLowerCase() == 'hentai')).toList();
   }
 
   static Future<Map<String, dynamic>> viewer(String token) async {

@@ -50,7 +50,9 @@ class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
                   shape: BoxShape.circle,
                   color: t.color,
                   border: Border.all(
-                    color: selected ? gaGreen : gaCardBorder,
+                    color: selected
+                        ? Theme.of(context).colorScheme.primary
+                        : gaCardBorder,
                     width: 2,
                   ),
                 ),
@@ -59,12 +61,15 @@ class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
                 Container(
                   width: 28,
                   height: 28,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: gaGreen,
+                    color: t.color,
                   ),
-                  child: const Icon(Icons.check,
-                      color: Colors.white, size: 18),
+                  child: Icon(Icons.check,
+                      color: t.color.computeLuminance() > 0.5
+                          ? Colors.black
+                          : Colors.white,
+                      size: 18),
                 ),
             ],
           ),
@@ -109,6 +114,7 @@ class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
         gaSectionLabel('Display'),
         gaToggleRow(
           title: 'AMOLED Black',
+          subtitle: 'Pure black backgrounds for OLED screens.',
           value: _s.amoledBlack,
           onChanged: (v) => _save(_s.copyWith(amoledBlack: v)),
         ),
@@ -121,6 +127,7 @@ class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
         ),
         gaToggleRow(
           title: 'Liquid Glass Tab Bar',
+          subtitle: 'Frosted-glass effect on the floating navigation bar.',
           value: _s.liquidGlassTabBar,
           onChanged: (v) => _save(_s.copyWith(liquidGlassTabBar: v)),
         ),

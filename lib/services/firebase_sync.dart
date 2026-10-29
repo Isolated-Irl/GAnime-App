@@ -84,6 +84,22 @@ class FirebaseSync {
     _uid = null;
   }
 
+  /// Sends a Firebase password-reset email (Identity Toolkit
+  /// accounts:sendOobCode). Used by the "Forgot password?" button.
+  Future<void> sendPasswordReset(String email) async {
+    if (!configured) throw Exception('Firebase not configured in Settings.');
+    final r = await http.post(
+      Uri.parse(
+          'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=$_apiKey'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'requestType': 'PASSWORD_RESET', 'email': email}),
+    );
+    final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+    if (r.statusCode != 200) {
+      throw Exception((j['error']?['message'] as String?) ?? 'Reset failed');
+    }
+  }
+
   String get _docUrl =>
       'https://firestore.googleapis.com/v1/projects/$_projectId/databases/(default)/documents/users/$_uid';
 

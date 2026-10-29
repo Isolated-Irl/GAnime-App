@@ -35,10 +35,20 @@ class AddonsService {
         .map((e) => e is Map ? '${e['name'] ?? ''}' : '$e')
         .where((e) => e.isNotEmpty)
         .toList();
-    // Manifest "types" is the fallback when "resources" is absent.
-    if (resources.isEmpty) {
-      resources.addAll(
-          ((j['types'] as List?) ?? []).map((e) => '$e').toList());
+    // Manifest "types" live on their own field (NOT folded into
+    // resources): they decide the /stream/<type>/ path per addon.
+    final types =
+        ((j['types'] as List?) ?? []).map((e) => '$e').toList();
+    // idPrefixes come from the resource entries, e.g. Torrentio's
+    // {"name":"stream","types":["movie","series"],"idPrefixes":["tt"]}.
+    final prefixSet = <String>{};
+    for (final e in resRaw) {
+      if (e is Map) {
+        for (final p in ((e['idPrefixes'] as List?) ?? [])) {
+          final s = '$p';
+          if (s.isNotEmpty) prefixSet.add(s);
+        }
+      }
     }
     return AddonRecord(
       manifestUrl: url,
@@ -51,7 +61,22 @@ class AddonsService {
       description: (j['description'] as String?) ?? '',
       logoUrl: (j['logo'] as String?) ?? '',
       resources: resources,
+      types: types,
+      idPrefixes: prefixSet.toList(),
     );
+  }
+
+  /// Stremio `/stream/<type>/` path for one addon (website parity):
+  /// movies always "movie"; anime-only addons (types has "anime" but not
+  /// "series") want "anime"; every general addon wants "series".
+  /// The app used to hardcode "anime" here, which 404s on general
+  /// addons (they serve movie/series) — the "no streams" bug even with
+  /// the addon installed and enabled.
+  static String streamTypeFor(AddonRecord addon, bool isMovie) {
+    if (isMovie) return 'movie';
+    final t = addon.types.map((e) => e.toLowerCase()).toSet();
+    if (t.contains('anime') && !t.contains('series')) return 'anime';
+    return 'series';
   }
 
   /// Streams for one title from one addon.
