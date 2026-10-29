@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../services/anilist.dart';
+import '../services/kitsu.dart';
 import '../services/trackers.dart';
 import '../services/addons.dart';
 import '../services/firebase_sync.dart';
@@ -70,8 +71,23 @@ class AnimeGrid extends StatelessWidget {
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  final String profileId;
+/// Small dark badge chip used in the hero ("★ 8.4", "TV", ...),
+/// like the web hero's metadata chips.
+Widget _heroBadge(String text) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+    decoration: BoxDecoration(
+      color: Colors.black45,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Colors.white24),
+    ),
+    child: Text(text,
+        style: const TextStyle(
+            fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+  );
+}
+
+class HomeScreen extends StatefulWidget {  final String profileId;
   final AppSettings settings;
   final Future<void> Function(Anime, int)? onMarkWatched;
   const HomeScreen(
@@ -170,12 +186,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return FutureBuilder<List<dynamic>>(
       future: Future.wait([
-        _safe(AniList.trending()),
-        _safe(AniList.popularThisSeason()),
-        _safe(AniList.upcomingNextSeason()),
-        _safe(AniList.popular()),
-        _safe(AniList.topRated()),
-        _safe(AniList.topMovies()),
+        _safe(Kitsu.trending()),
+        _safe(Kitsu.popularThisSeason()),
+        _safe(Kitsu.upcomingNextSeason()),
+        _safe(Kitsu.popular()),
+        _safe(Kitsu.topRated()),
+        _safe(Kitsu.topMovies()),
         Store.localLibrary(widget.profileId),
       ]),
       builder: (context, snap) {
@@ -194,186 +210,269 @@ class _HomeScreenState extends State<HomeScreen> {
         final local = snap.data![6] as List<LibraryEntry>;
         final cw = local.where((e) => e.progress > 0).toList();
         final heroItems = trending.take(4).toList();
+        // Layout settings (Settings > Layout) gate every Home section.
+        final ls = widget.settings;
+        final rails = <Widget>[
+          if (ls.railTrending && trending.isNotEmpty)
+            _rail('Trending Now', trending),
+          if (ls.railPopularSeason && popularThisSeason.isNotEmpty)
+            _rail('Popular This Season', popularThisSeason),
+          if (ls.railUpcoming && upcoming.isNotEmpty)
+            _rail('Upcoming Next Season', upcoming),
+          if (ls.railAllTime && popular.isNotEmpty)
+            _rail('All Time Popular', popular),
+          if (ls.railTop100 && topRated.isNotEmpty)
+            _rail('Top 100 Anime', topRated),
+          if (ls.railTopMovies && topMovies.isNotEmpty)
+            _rail('Top 100 Movies', topMovies),
+        ];
+        final showHero = ls.showHero && heroItems.isNotEmpty;
+        final showCw = ls.showContinueWatching && cw.isNotEmpty;
         return ListView(
           children: [
-            // Hero carousel, like the web home: banner art, shade,
-            // kicker + title + meta + synopsis + View Details + dots.
-            if (heroItems.isNotEmpty)
-              SizedBox(
-                height: 340,
-                child: Stack(
-                  children: [
-                    PageView.builder(
-                      controller: _heroPage,
-                      itemCount: heroItems.length,
-                      onPageChanged: (i) => setState(() => _heroIndex = i),
-                      itemBuilder: (_, i) {
-                        final a = heroItems[i];
-                        final art = a.banner.isNotEmpty ? a.banner : a.cover;
-                        return Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            if (art.isNotEmpty)
-                              Image.network(art,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => Container(
-                                      color: Colors.grey.shade900))
-                            else
-                              Container(color: Colors.grey.shade900),
-                            Container(
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.transparent,
-                                    Color(0xB8000000),
-                                  ],
-                                  stops: [0.45, 1.0],
-                                ),
-                              ),
-                            ),
-                            Positioned(
-                              left: 16,
-                              right: 16,
-                              bottom: 28,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+            // Hero carousel, like the web home: rounded card (margin 14,
+            // radius 20, border #333333), banner art with bottom shade,
+            // title + romaji + genre chips + badge chips + Details/My List
+            // pill buttons + dots. No kicker, no synopsis — web shows none.
+            if (showHero)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                child: SizedBox(
+                  height: 480,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFF333333)),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(19),
+                      child: Stack(
+                        children: [
+                          PageView.builder(
+                            controller: _heroPage,
+                            itemCount: heroItems.length,
+                            onPageChanged: (i) =>
+                                setState(() => _heroIndex = i),
+                            itemBuilder: (_, i) {
+                              final a = heroItems[i];
+                              final art =
+                                  a.banner.isNotEmpty ? a.banner : a.cover;
+                              return Stack(
+                                fit: StackFit.expand,
                                 children: [
-                                  const Text('TRENDING NOW',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 2,
-                                          color: Color(0xFF14B8A6))),
-                                  const SizedBox(height: 8),
-                                  Text(a.title,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 26,
-                                          fontWeight: FontWeight.w800,
-                                          shadows: [
-                                            Shadow(
-                                                blurRadius: 10,
-                                                color: Colors.black54)
-                                          ])),
-                                  const SizedBox(height: 6),
-                                  // Web hero chips: first genres, small
-                                  // dark chips, exactly like the web.
-                                  if (a.genres.isNotEmpty)
-                                    Wrap(
-                                      spacing: 6,
+                                  if (art.isNotEmpty)
+                                    Image.network(art,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) =>
+                                            Container(
+                                                color: Colors.grey.shade900))
+                                  else
+                                    Container(color: Colors.grey.shade900),
+                                  Container(
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [
+                                          Colors.transparent,
+                                          Color(0xB8000000),
+                                        ],
+                                        stops: [0.45, 1.0],
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    left: 16,
+                                    right: 16,
+                                    bottom: 30,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        for (final g in a.genres.take(3))
-                                          Container(
-                                            padding:
-                                                const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: Colors.black45,
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              border: Border.all(
-                                                  color: Colors.white24),
-                                            ),
-                                            child: Text(g,
-                                                style: const TextStyle(
-                                                    fontSize: 11,
-                                                    color: Colors.white)),
+                                        Text(a.title,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontSize: 26,
+                                                fontWeight: FontWeight.w800,
+                                                shadows: [
+                                                  Shadow(
+                                                      blurRadius: 10,
+                                                      color: Colors.black54)
+                                                ])),
+                                        if (a.romaji.isNotEmpty &&
+                                            a.romaji != a.title) ...[
+                                          const SizedBox(height: 4),
+                                          Text(a.romaji,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color:
+                                                      Color(0xFFB3B3B3))),
+                                        ],
+                                        const SizedBox(height: 10),
+                                        // Web hero chips: first 3 genres,
+                                        // translucent white pill chips.
+                                        if (a.genres.isNotEmpty)
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 6,
+                                            children: [
+                                              for (final g
+                                                  in a.genres.take(3))
+                                                Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.white
+                                                        .withValues(alpha: 0.12),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            999),
+                                                    border: Border.all(
+                                                        color:
+                                                            Colors.white24),
+                                                  ),
+                                                  child: Text(g,
+                                                      style: const TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color:
+                                                              Colors.white)),
+                                                ),
+                                            ],
                                           ),
+                                        const SizedBox(height: 10),
+                                        // Badge chips, like the web hero:
+                                        // "★ 8.4 · FORMAT · STATUS · YEAR".
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: [
+                                            if (a.score != null)
+                                              _heroBadge(
+                                                  '★ ${(a.score! / 10).toStringAsFixed(1)}'),
+                                            if (a.format.isNotEmpty)
+                                              _heroBadge(a.format),
+                                            if (a.status.isNotEmpty)
+                                              _heroBadge(a.status),
+                                            if (a.year != null)
+                                              _heroBadge('${a.year}'),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 14),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: ElevatedButton(
+                                                style:
+                                                    ElevatedButton.styleFrom(
+                                                  backgroundColor:
+                                                      Colors.white,
+                                                  foregroundColor:
+                                                      Colors.black,
+                                                  shape:
+                                                      RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            999),
+                                                  ),
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 12),
+                                                ),
+                                                onPressed: () => openDetails(
+                                                    context,
+                                                    anime: a,
+                                                    profileId:
+                                                        widget.profileId,
+                                                    settings:
+                                                        widget.settings,
+                                                    onMarkWatched: widget
+                                                        .onMarkWatched),
+                                                child: const Text('Details',
+                                                    style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w700)),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: OutlinedButton(
+                                                style:
+                                                    OutlinedButton.styleFrom(
+                                                  foregroundColor:
+                                                      Colors.white,
+                                                  side: const BorderSide(
+                                                      color:
+                                                          Colors.white24),
+                                                  shape:
+                                                      RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            999),
+                                                  ),
+                                                  padding: const EdgeInsets
+                                                      .symmetric(vertical: 12),
+                                                ),
+                                                // My List is a post-skeleton
+                                                // feature: labelled
+                                                // placeholder, not a silent
+                                                // no-op.
+                                                onPressed: () =>
+                                                    ScaffoldMessenger.of(
+                                                            context)
+                                                        .showSnackBar(
+                                                  const SnackBar(
+                                                    content: Text(
+                                                        'My List comes after the skeleton phase.'),
+                                                  ),
+                                                ),
+                                                child: const Text('+ My List',
+                                                    style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w700)),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ],
                                     ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    [
-                                      if (a.score != null)
-                                        '★ ${(a.score! / 10).toStringAsFixed(1)}',
-                                      if (a.format.isNotEmpty) a.format,
-                                      if (a.status.isNotEmpty) a.status,
-                                      if (a.year != null) '${a.year}',
-                                    ].join(' · '),
-                                    style: const TextStyle(
-                                        fontSize: 13, color: Color(0xFFECECEC)),
-                                  ),
-                                  if (a.description.isNotEmpty) ...[
-                                    const SizedBox(height: 6),
-                                    Text(a.description,
-                                        maxLines: 3,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            fontSize: 14,
-                                            color: Color(0xFFE8E8E8))),
-                                  ],
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.white,
-                                          foregroundColor: Colors.black,
-                                        ),
-                                        onPressed: () => openDetails(context,
-                                            anime: a,
-                                            profileId: widget.profileId,
-                                            settings: widget.settings,
-                                            onMarkWatched:
-                                                widget.onMarkWatched),
-                                        child: const Text('Details'),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      OutlinedButton(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: Colors.white,
-                                          side: const BorderSide(
-                                              color: Colors.white38),
-                                          backgroundColor:
-                                              const Color(0x24FFFFFF),
-                                        ),
-                                        // My List is a post-skeleton
-                                        // feature: labelled placeholder,
-                                        // not a silent no-op.
-                                        onPressed: () =>
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                                'My List comes after the skeleton phase.'),
-                                          ),
-                                        ),
-                                        child: const Text('+ My List'),
-                                      ),
-                                    ],
                                   ),
                                 ],
-                              ),
+                              );
+                            },
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 10,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                for (int i = 0; i < heroItems.length; i++)
+                                  Container(
+                                    margin: const EdgeInsets.only(right: 7),
+                                    width: i == _heroIndex ? 8 : 6,
+                                    height: i == _heroIndex ? 8 : 6,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: i == _heroIndex
+                                          ? const Color(0xFF14B8A6)
+                                          : Colors.white.withValues(alpha: 0.35),
+                                    ),
+                                  ),
+                              ],
                             ),
-                          ],
-                        );
-                      },
-                    ),
-                    Positioned(
-                      left: 16,
-                      bottom: 8,
-                      child: Row(
-                        children: [
-                          for (int i = 0; i < heroItems.length; i++)
-                            Container(
-                              margin: const EdgeInsets.only(right: 7),
-                              width: i == _heroIndex ? 18 : 7,
-                              height: 7,
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(4),
-                                color: i == _heroIndex
-                                    ? const Color(0xFF14B8A6)
-                                    : Colors.white54,
-                              ),
-                            ),
+                          ),
                         ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             Padding(
@@ -383,7 +482,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   // Continue Watching, only when there is local progress
                   // (web hides the section when empty, same here).
-                  if (cw.isNotEmpty) ...[
+                  if (showCw) ...[
                     const Text('CONTINUE WATCHING',
                         style: TextStyle(
                             fontSize: 13,
@@ -495,18 +594,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                   // Web rail order. A rail that failed to load is
                   // skipped (empty list), never filled with fake data.
-                  if (trending.isNotEmpty)
-                    _rail('Trending Now', trending),
-                  if (popularThisSeason.isNotEmpty)
-                    _rail('Popular This Season', popularThisSeason),
-                  if (upcoming.isNotEmpty)
-                    _rail('Upcoming Next Season', upcoming),
-                  if (popular.isNotEmpty)
-                    _rail('All Time Popular', popular),
-                  if (topRated.isNotEmpty)
-                    _rail('Top 100 Anime', topRated),
-                  if (topMovies.isNotEmpty)
-                    _rail('Top 100 Movies', topMovies),
+                  // Each rail also has a Layout toggle in Settings.
+                  ...rails,
+                  if (!showHero && !showCw && rails.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: Text(
+                          'Everything is hidden — turn sections back on in Settings > Layout.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 16),
                 ],
               ),
@@ -535,22 +635,249 @@ class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
   List<Anime> _results = [];
   bool _loading = false;
+  bool _searched = false;
   String? _error;
+  List<String> _allGenres = [];
+
+  // Filters (null/empty = Any).
+  final Set<String> _genres = {};
+  int? _year;
+  String? _subtype; // TV | movie | OVA | ONA | special
+  String? _status; // current | finished | upcoming
+  String? _sort; // ratingRank | -userCount | -startDate
+
+  @override
+  void initState() {
+    super.initState();
+    Kitsu.genreList().then((g) {
+      if (mounted) setState(() => _allGenres = g);
+    });
+  }
+
+  int get _activeFilterCount =>
+      _genres.length +
+      (_year != null ? 1 : 0) +
+      (_subtype != null ? 1 : 0) +
+      (_status != null ? 1 : 0) +
+      (_sort != null ? 1 : 0);
+
+  bool get _hasFilters => _activeFilterCount > 0;
 
   Future<void> _search() async {
     final q = _ctrl.text.trim();
-    if (q.isEmpty) return;
+    if (q.isEmpty && !_hasFilters) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final r = await AniList.search(q);
-      setState(() => _results = r);
+      final r = await Kitsu.search(
+        q,
+        genres: _genres.isEmpty ? null : _genres.toList(),
+        year: _year,
+        subtype: _subtype,
+        status: _status,
+        sort: _sort,
+      );
+      setState(() {
+        _results = r;
+        _searched = true;
+      });
     } catch (e) {
       setState(() => _error = '$e');
     }
     setState(() => _loading = false);
+  }
+
+  Future<void> _openFilters() async {
+    // Local mutable copies; committed to state only on Apply.
+    final genres = Set<String>.of(_genres);
+    int? year = _year;
+    String? subtype = _subtype;
+    String? status = _status;
+    String? sort = _sort;
+    final years = List.generate(27, (i) => DateTime.now().year - i);
+    const formatLabels = {
+      'TV': 'TV',
+      'movie': 'Movie',
+      'OVA': 'OVA',
+      'ONA': 'ONA',
+      'special': 'Special',
+    };
+    const statusLabels = {
+      'current': 'Airing',
+      'finished': 'Finished',
+      'upcoming': 'Upcoming',
+    };
+    const sortLabels = {
+      'ratingRank': 'Top rated',
+      '-userCount': 'Most popular',
+      '-startDate': 'Newest',
+    };
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A1A1A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade700,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('Filters',
+                    style:
+                        TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 16),
+                const Text('Genres',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                if (_allGenres.isEmpty)
+                  const Text('Loading genres…',
+                      style: TextStyle(color: Colors.grey))
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _allGenres
+                        .map((g) => FilterChip(
+                              label: Text(g),
+                              selected: genres.contains(g),
+                              onSelected: (v) => setSheet(() {
+                                if (v) {
+                                  genres.add(g);
+                                } else {
+                                  genres.remove(g);
+                                }
+                              }),
+                              selectedColor: const Color(0xFF14B8A6),
+                              checkmarkColor: Colors.black,
+                            ))
+                        .toList(),
+                  ),
+                const SizedBox(height: 16),
+                _filterDropdown<int?>(
+                    'Year', year, [null, ...years], (v) => v == null ? 'Any' : '$v',
+                    (v) => setSheet(() => year = v)),
+                _filterDropdown<String?>(
+                    'Format',
+                    subtype,
+                    [null, ...formatLabels.keys],
+                    (v) => v == null ? 'Any' : formatLabels[v]!,
+                    (v) => setSheet(() => subtype = v)),
+                _filterDropdown<String?>(
+                    'Status',
+                    status,
+                    [null, ...statusLabels.keys],
+                    (v) => v == null ? 'Any' : statusLabels[v]!,
+                    (v) => setSheet(() => status = v)),
+                _filterDropdown<String?>(
+                    'Sort by',
+                    sort,
+                    [null, ...sortLabels.keys],
+                    (v) => v == null ? 'Relevance' : sortLabels[v]!,
+                    (v) => setSheet(() => sort = v)),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => setSheet(() {
+                          genres.clear();
+                          year = null;
+                          subtype = null;
+                          status = null;
+                          sort = null;
+                        }),
+                        child: const Text('Clear'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF14B8A6),
+                          foregroundColor: Colors.black,
+                        ),
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          setState(() {
+                            _genres
+                              ..clear()
+                              ..addAll(genres);
+                            _year = year;
+                            _subtype = subtype;
+                            _status = status;
+                            _sort = sort;
+                          });
+                          _search();
+                        },
+                        child: const Text('Apply'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _filterDropdown<T>(
+      String label, T value, List<T> options, String Function(T) labelOf,
+      ValueChanged<T> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(label,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF222222),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<T>(
+                  value: value,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF222222),
+                  items: options
+                      .map((o) => DropdownMenuItem<T>(
+                            value: o,
+                            child: Text(labelOf(o)),
+                          ))
+                      .toList(),
+                  onChanged: (v) => onChanged(v as T),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -558,8 +885,9 @@ class _SearchScreenState extends State<SearchScreen> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // Web search bar: rounded dark field + filter button on the
-        // right. Filter is a skeleton placeholder in this phase.
+        // Web search bar: rounded dark field + filter button on the right.
+        // The filter button opens a real filter sheet (genre/year/format/
+        // status/sort); a badge shows the active filter count.
         Row(
           children: [
             Expanded(
@@ -579,28 +907,54 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: const Color(0xFF222222),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.tune),
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                        'Filter comes after the skeleton phase.'),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF222222),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.tune),
+                    onPressed: _openFilters,
                   ),
                 ),
-              ),
+                if (_activeFilterCount > 0)
+                  Positioned(
+                    right: -4,
+                    top: -4,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF14B8A6),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        '$_activeFilterCount',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ],
         ),
         if (_loading) const Padding(
             padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
         if (_error != null) Text('Search failed: $_error'),
+        if (!_loading && _error == null && _searched && _results.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+                child: Text('No results found. Try different filters.')),
+          ),
         const SizedBox(height: 12),
         AnimeGrid(
             items: _results,
@@ -809,11 +1163,18 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
-                  onTap: () => openDetails(context,
-                      anime: a,
-                      profileId: widget.profileId,
-                      settings: widget.settings,
-                      onMarkWatched: widget.onMarkWatched),
+                  // Calendar entries carry AniList ids; resolve to the Kitsu
+                  // catalogue entry so episodes, stream ids and tracker
+                  // pushes agree. Falls back to the AniList object.
+                  onTap: () async {
+                    final k = await Kitsu.fromAnilist(a.id);
+                    if (!context.mounted) return;
+                    openDetails(context,
+                        anime: k ?? a,
+                        profileId: widget.profileId,
+                        settings: widget.settings,
+                        onMarkWatched: widget.onMarkWatched);
+                  },
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Row(
@@ -945,17 +1306,40 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   Widget build(BuildContext context) {
     const tabNames = ['Local', 'AniList', 'MAL', 'Simkl'];
-    final watching =
-        _entries.where((e) => e.status == 'CURRENT' || e.status == 'REPEATING').length;
-    final completed = _entries.where((e) => e.status == 'COMPLETED').length;
-    final filtered = _statusFilter == 'All'
-        ? _entries
-        : _statusFilter == 'Watching'
-            ? _entries
-                .where((e) =>
-                    e.status == 'CURRENT' || e.status == 'REPEATING')
-                .toList()
-            : _entries.where((e) => e.status == 'COMPLETED').toList();
+    // Status filter mapping: Watching = CURRENT or REPEATING,
+    // Plan to Watch = PLANNING, On Hold = PAUSED, Dropped = DROPPED.
+    bool matches(String filter, String status) {
+      switch (filter) {
+        case 'Watching':
+          return status == 'CURRENT' || status == 'REPEATING';
+        case 'Completed':
+          return status == 'COMPLETED';
+        case 'Plan to Watch':
+          return status == 'PLANNING';
+        case 'On Hold':
+          return status == 'PAUSED';
+        case 'Dropped':
+          return status == 'DROPPED';
+        default:
+          return true;
+      }
+    }
+
+    int count(String filter) => filter == 'All'
+        ? _entries.length
+        : _entries.where((e) => matches(filter, e.status)).length;
+
+    final filtered = _entries
+        .where((e) => matches(_statusFilter, e.status))
+        .toList();
+    const statusFilters = [
+      'All',
+      'Watching',
+      'Completed',
+      'Plan to Watch',
+      'On Hold',
+      'Dropped',
+    ];
     Widget pill(String label, bool selected, VoidCallback onTap) {
       return GestureDetector(
         onTap: onTap,
@@ -1026,14 +1410,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              pill('All · ${_entries.length}', _statusFilter == 'All',
-                  () => setState(() => _statusFilter = 'All')),
-              const SizedBox(width: 8),
-              pill('Watching · $watching', _statusFilter == 'Watching',
-                  () => setState(() => _statusFilter = 'Watching')),
-              const SizedBox(width: 8),
-              pill('Completed · $completed', _statusFilter == 'Completed',
-                  () => setState(() => _statusFilter = 'Completed')),
+              for (int i = 0; i < statusFilters.length; i++) ...[
+                if (i > 0) const SizedBox(width: 8),
+                pill('${statusFilters[i]} · ${count(statusFilters[i])}',
+                    _statusFilter == statusFilters[i],
+                    () => setState(
+                        () => _statusFilter = statusFilters[i])),
+              ],
             ],
           ),
         ),
@@ -1084,7 +1467,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 onTap: e.anilistId == null
                     ? null
                     : () async {
-                        final a = await AniList.details(e.anilistId!);
+                        // Tracker entries carry AniList ids; prefer the Kitsu
+                        // catalogue entry so episodes, stream ids and tracker
+                        // pushes agree, falling back to AniList details.
+                        final a = await Kitsu.fromAnilist(e.anilistId!) ??
+                            await AniList.details(e.anilistId!);
                         if (!context.mounted) return;
                         await openDetails(context,
                             anime: a,
@@ -1100,57 +1487,89 @@ class _LibraryScreenState extends State<LibraryScreen> {
 }
 
 
-Widget _settingGroup({
-  required IconData icon,
-  required String title,
-  required String subtitle,
-  required List<Widget> children,
-}) {
-  return Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    decoration: BoxDecoration(
-      color: const Color(0xFF222222),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    padding: const EdgeInsets.all(16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+// ---------- Settings: top-level menu + sub-screens ----------
+// The top level is ONE container card with 6 tappable rows (like the
+// web Settings). Each row pushes a sub-screen that holds ONLY that
+// group's controls — nothing is expanded inline anymore.
+
+/// One tappable row in the top-level Settings menu card.
+class _SettingsMenuRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  const _SettingsMenuRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
           children: [
             Container(
-              width: 48,
-              height: 48,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
+                color: const Color(0xFF1A1A1A),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: Colors.white),
+              child: Icon(icon, color: Colors.white, size: 22),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title,
                       style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w700)),
+                          fontSize: 15, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
                   Text(subtitle,
-                      style: TextStyle(
-                          fontSize: 13, color: Colors.grey.shade400)),
+                      style:
+                          TextStyle(fontSize: 12, color: Colors.grey.shade500)),
                 ],
               ),
             ),
+            Icon(Icons.chevron_right, color: Colors.grey.shade500, size: 20),
           ],
         ),
-        const SizedBox(height: 12),
-        ...children,
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
-class SettingsScreen extends StatefulWidget {
+/// Scaffold shell for a settings sub-screen (back button + title).
+class _SettingsSubPage extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+  const _SettingsSubPage({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: children,
+      ),
+    );
+  }
+}
+
+Widget _subHead(String t) => Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(t,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+    );
+
+class SettingsScreen extends StatelessWidget {
   final String account;
   final String profileId;
   final AppSettings settings;
@@ -1166,19 +1585,115 @@ class SettingsScreen extends StatefulWidget {
     required this.onProfile,
     required this.firebase,
   });
+
   @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
+  Widget build(BuildContext context) {
+    void open(Widget page) {
+      Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => page));
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('Settings',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 16),
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF222222),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF333333)),
+          ),
+          child: Column(
+            children: [
+              _SettingsMenuRow(
+                icon: Icons.person,
+                title: 'Account',
+                subtitle: 'Profile, sign in, cloud sync',
+                onTap: () => open(AccountSettingsScreen(
+                  account: account,
+                  profileId: profileId,
+                  settings: settings,
+                  onProfile: onProfile,
+                  firebase: firebase,
+                )),
+              ),
+              const Divider(height: 1, color: Color(0xFF333333)),
+              _SettingsMenuRow(
+                icon: Icons.sync,
+                title: 'Tracking',
+                subtitle: 'AniList, MyAnimeList, Simkl',
+                onTap: () => open(const TrackingSettingsScreen()),
+              ),
+              const Divider(height: 1, color: Color(0xFF333333)),
+              _SettingsMenuRow(
+                icon: Icons.grid_view,
+                title: 'Layout',
+                subtitle: 'Theme, hero, rails, detail pages',
+                onTap: () => open(LayoutSettingsScreen(
+                    settings: settings, onSettings: onSettings)),
+              ),
+              const Divider(height: 1, color: Color(0xFF333333)),
+              _SettingsMenuRow(
+                icon: Icons.add,
+                title: 'Addon',
+                subtitle: 'Install and manage addons',
+                onTap: () =>
+                    open(AddonSettingsScreen(profileId: profileId)),
+              ),
+              const Divider(height: 1, color: Color(0xFF333333)),
+              _SettingsMenuRow(
+                icon: Icons.play_circle_outline,
+                title: 'Playback',
+                subtitle: 'Player, subtitles, and auto-play',
+                onTap: () => open(PlaybackSettingsScreen(
+                    settings: settings, onSettings: onSettings)),
+              ),
+              const Divider(height: 1, color: Color(0xFF333333)),
+              _SettingsMenuRow(
+                icon: Icons.info_outline,
+                title: 'About & Credits',
+                subtitle: 'Version, credits, and links',
+                onTap: () => open(const AboutSettingsScreen()),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 30),
+        const Center(
+          child: Text('Made with ♥ by Isolated\nGAnime 0.1.0',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey, fontSize: 12, height: 1.6)),
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+// ---------- Account ----------
+
+class AccountSettingsScreen extends StatefulWidget {
+  final String account;
+  final String profileId;
+  final AppSettings settings;
+  final ValueChanged<String> onProfile;
+  final FirebaseSync firebase;
+  const AccountSettingsScreen({
+    super.key,
+    required this.account,
+    required this.profileId,
+    required this.settings,
+    required this.onProfile,
+    required this.firebase,
+  });
+  @override
+  State<AccountSettingsScreen> createState() => _AccountSettingsScreenState();
+}
+
+class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   List<Profile> _profiles = [];
-  List<AddonRecord> _addons = [];
-  final _addonCtrl = TextEditingController();
-  final _anilistTokenCtrl = TextEditingController();
-  final _simklClientCtrl = TextEditingController();
-  final _simklCodeCtrl = TextEditingController();
-  final _malUserCtrl = TextEditingController();
-  final _malClientCtrl = TextEditingController();
   final _fbApiCtrl = TextEditingController();
   final _fbProjectCtrl = TextEditingController();
   final _fbEmailCtrl = TextEditingController();
@@ -1191,50 +1706,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _reload();
   }
 
+  @override
+  void dispose() {
+    _fbApiCtrl.dispose();
+    _fbProjectCtrl.dispose();
+    _fbEmailCtrl.dispose();
+    _fbPassCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _reload() async {
     final ps = await Store.profiles(widget.account);
-    final ads = await Store.addons(widget.profileId);
-    final t = await Store.tracker();
     final fb = await Store.firebaseConfig();
+    if (!mounted) return;
     setState(() {
       _profiles = ps;
-      _addons = ads;
-      _anilistTokenCtrl.text = (t['anilistToken'] as String?) ?? '';
-      _simklClientCtrl.text = (t['simklClientId'] as String?) ?? '';
-      _malUserCtrl.text = (t['malUsername'] as String?) ?? '';
-      _malClientCtrl.text = (t['malClientId'] as String?) ?? '';
       _fbApiCtrl.text = (fb['apiKey'] as String?) ?? '';
       _fbProjectCtrl.text = (fb['projectId'] as String?) ?? '';
     });
   }
 
-  Future<void> _saveSettings(AppSettings s) async {
-    await Store.saveSettings(s);
-    widget.onSettings(s);
-  }
-
   @override
   Widget build(BuildContext context) {
     final s = widget.settings;
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return _SettingsSubPage(
+      title: 'Account',
       children: [
-        const Text('Settings',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 16),
-        _settingGroup(
-          icon: Icons.person,
-          title: 'Account',
-          subtitle: 'Profile, sign in, cloud sync',
-          children: [
-const Text('Profiles',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        _subHead('Profiles'),
         for (final p in _profiles)
           ListTile(
             title: Text(p.name),
-            trailing: p.id == widget.profileId
-                ? const Icon(Icons.check)
-                : null,
+            trailing:
+                p.id == widget.profileId ? const Icon(Icons.check) : null,
             onTap: () async {
               await Store.setActiveProfile(widget.account, p.id);
               widget.onProfile(p.id);
@@ -1252,40 +1755,46 @@ const Text('Profiles',
           },
           child: const Text('Add profile'),
         ),
-const Text('Firebase sync (optional)',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+        _subHead('Firebase sync (optional)'),
         const Text(
             'Enter YOUR Firebase project config here on-device. It is never '
             'written into the repo. One doc: users/{uid}.'),
+        const SizedBox(height: 8),
         TextField(
           controller: _fbApiCtrl,
           decoration: const InputDecoration(
               labelText: 'Firebase apiKey', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         TextField(
           controller: _fbProjectCtrl,
           decoration: const InputDecoration(
-              labelText: 'Firebase projectId', border: OutlineInputBorder()),
+              labelText: 'Firebase projectId',
+              border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         TextField(
           controller: _fbEmailCtrl,
-          decoration:
-              const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+          decoration: const InputDecoration(
+              labelText: 'Email', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         TextField(
           controller: _fbPassCtrl,
           obscureText: true,
           decoration: const InputDecoration(
               labelText: 'Password', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           children: [
             FilledButton(
               onPressed: () async {
                 try {
-                  await widget.firebase
-                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
+                  await widget.firebase.saveConfig(
+                      _fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
                   await widget.firebase.signIn(
                       _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
                   setState(() => _msg = 'Firebase signed in.');
@@ -1298,11 +1807,12 @@ const Text('Firebase sync (optional)',
             OutlinedButton(
               onPressed: () async {
                 try {
-                  await widget.firebase
-                      .saveConfig(_fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
+                  await widget.firebase.saveConfig(
+                      _fbApiCtrl.text.trim(), _fbProjectCtrl.text.trim());
                   await widget.firebase.signUp(
                       _fbEmailCtrl.text.trim(), _fbPassCtrl.text);
-                  setState(() => _msg = 'Firebase account created + signed in.');
+                  setState(
+                      () => _msg = 'Firebase account created + signed in.');
                 } catch (e) {
                   setState(() => _msg = 'Firebase sign-up failed: $e');
                 }
@@ -1336,15 +1846,62 @@ const Text('Firebase sync (optional)',
           ],
         ),
         const SizedBox(height: 12),
-          ],
-        ),
-        _settingGroup(
-          icon: Icons.sync,
-          title: 'Tracking',
-          subtitle: 'AniList, MyAnimeList, Simkl',
-          children: [
-const Text('Trackers',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(_msg),
+      ],
+    );
+  }
+}
+
+// ---------- Tracking ----------
+
+class TrackingSettingsScreen extends StatefulWidget {
+  const TrackingSettingsScreen({super.key});
+  @override
+  State<TrackingSettingsScreen> createState() =>
+      _TrackingSettingsScreenState();
+}
+
+class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
+  final _anilistTokenCtrl = TextEditingController();
+  final _simklClientCtrl = TextEditingController();
+  final _simklCodeCtrl = TextEditingController();
+  final _malUserCtrl = TextEditingController();
+  final _malClientCtrl = TextEditingController();
+  String _msg = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _anilistTokenCtrl.dispose();
+    _simklClientCtrl.dispose();
+    _simklCodeCtrl.dispose();
+    _malUserCtrl.dispose();
+    _malClientCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final t = await Store.tracker();
+    if (!mounted) return;
+    setState(() {
+      _anilistTokenCtrl.text = (t['anilistToken'] as String?) ?? '';
+      _simklClientCtrl.text = (t['simklClientId'] as String?) ?? '';
+      _malUserCtrl.text = (t['malUsername'] as String?) ?? '';
+      _malClientCtrl.text = (t['malClientId'] as String?) ?? '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsSubPage(
+      title: 'Tracking',
+      children: [
+        _subHead('Trackers'),
         TextField(
           controller: _anilistTokenCtrl,
           decoration: const InputDecoration(
@@ -1372,18 +1929,20 @@ const Text('Trackers',
           },
           child: const Text('Save AniList token'),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         TextField(
           controller: _simklClientCtrl,
           decoration: const InputDecoration(
               labelText: 'Simkl client id', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         TextField(
           controller: _simklCodeCtrl,
           decoration: const InputDecoration(
               labelText: 'Simkl PIN user code (optional)',
               border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         FilledButton(
           onPressed: () async {
             try {
@@ -1408,17 +1967,19 @@ const Text('Trackers',
           },
           child: const Text('Simkl PIN / connect'),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         TextField(
           controller: _malUserCtrl,
           decoration: const InputDecoration(
               labelText: 'MAL username', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         TextField(
           controller: _malClientCtrl,
           decoration: const InputDecoration(
               labelText: 'MAL client id', border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         FilledButton(
           onPressed: () async {
             final t = await Store.tracker();
@@ -1429,36 +1990,142 @@ const Text('Trackers',
           },
           child: const Text('Save MAL (read-only)'),
         ),
-          ],
-        ),
-        _settingGroup(
-          icon: Icons.grid_view,
-          title: 'Layout',
-          subtitle: 'Theme, hero, rails, detail pages',
-          children: const [
-            Text(
-              'Layout options come after the skeleton phase. '
-              'This card is a placeholder, not a setting yet.',
-              style: TextStyle(color: Colors.grey),
-            ),
-          ],
-        ),
-        _settingGroup(
-          icon: Icons.add,
-          title: 'Addon',
-          subtitle: 'Install and manage addons',
-          children: [
-const Text('Addons — user-installed only',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Text(_msg),
+      ],
+    );
+  }
+}
+
+// ---------- Layout (real options) ----------
+
+class LayoutSettingsScreen extends StatefulWidget {
+  final AppSettings settings;
+  final ValueChanged<AppSettings> onSettings;
+  const LayoutSettingsScreen(
+      {super.key, required this.settings, required this.onSettings});
+  @override
+  State<LayoutSettingsScreen> createState() => _LayoutSettingsScreenState();
+}
+
+class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
+  late AppSettings _s;
+
+  @override
+  void initState() {
+    super.initState();
+    _s = widget.settings;
+  }
+
+  Future<void> _save(AppSettings s) async {
+    await Store.saveSettings(s);
+    setState(() => _s = s);
+    widget.onSettings(s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsSubPage(
+      title: 'Layout',
+      children: [
         const Text(
-            'This app ships with NO stream sources and recommends none. '
-            'Paste a Stremio manifest URL you found yourself.'),
+          'Show or hide Home sections. Everything is on by default.',
+          style: TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          title: const Text('Hero carousel'),
+          value: _s.showHero,
+          onChanged: (v) => _save(_s.copyWith(showHero: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Continue Watching rail'),
+          value: _s.showContinueWatching,
+          onChanged: (v) => _save(_s.copyWith(showContinueWatching: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Trending Now rail'),
+          value: _s.railTrending,
+          onChanged: (v) => _save(_s.copyWith(railTrending: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Popular This Season rail'),
+          value: _s.railPopularSeason,
+          onChanged: (v) => _save(_s.copyWith(railPopularSeason: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Upcoming Next Season rail'),
+          value: _s.railUpcoming,
+          onChanged: (v) => _save(_s.copyWith(railUpcoming: v)),
+        ),
+        SwitchListTile(
+          title: const Text('All Time Popular rail'),
+          value: _s.railAllTime,
+          onChanged: (v) => _save(_s.copyWith(railAllTime: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Top 100 Anime rail'),
+          value: _s.railTop100,
+          onChanged: (v) => _save(_s.copyWith(railTop100: v)),
+        ),
+        SwitchListTile(
+          title: const Text('Top 100 Movies rail'),
+          value: _s.railTopMovies,
+          onChanged: (v) => _save(_s.copyWith(railTopMovies: v)),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------- Addon ----------
+
+class AddonSettingsScreen extends StatefulWidget {
+  final String profileId;
+  const AddonSettingsScreen({super.key, required this.profileId});
+  @override
+  State<AddonSettingsScreen> createState() => _AddonSettingsScreenState();
+}
+
+class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
+  List<AddonRecord> _addons = [];
+  final _addonCtrl = TextEditingController();
+  String _msg = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _addonCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final ads = await Store.addons(widget.profileId);
+    if (!mounted) return;
+    setState(() => _addons = ads);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsSubPage(
+      title: 'Addon',
+      children: [
+        _subHead('Addons — user-installed only'),
+        const Text('This app ships with NO stream sources and recommends '
+            'none. Paste a Stremio manifest URL you found yourself.'),
+        const SizedBox(height: 8),
         TextField(
           controller: _addonCtrl,
           decoration: const InputDecoration(
               hintText: 'https://…/manifest.json',
               border: OutlineInputBorder()),
         ),
+        const SizedBox(height: 8),
         FilledButton(
           onPressed: () async {
             try {
@@ -1495,17 +2162,48 @@ const Text('Addons — user-installed only',
               },
             ),
           ),
-          ],
-        ),
-        _settingGroup(
-          icon: Icons.play_circle,
-          title: 'Playback',
-          subtitle: 'Player, subtitles, and auto-play',
-          children: [
-const Text('Playback — audio and subtitle are SEPARATE settings',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Text(_msg),
+      ],
+    );
+  }
+}
+
+// ---------- Playback ----------
+
+class PlaybackSettingsScreen extends StatefulWidget {
+  final AppSettings settings;
+  final ValueChanged<AppSettings> onSettings;
+  const PlaybackSettingsScreen(
+      {super.key, required this.settings, required this.onSettings});
+  @override
+  State<PlaybackSettingsScreen> createState() =>
+      _PlaybackSettingsScreenState();
+}
+
+class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
+  late AppSettings _s;
+
+  @override
+  void initState() {
+    super.initState();
+    _s = widget.settings;
+  }
+
+  Future<void> _save(AppSettings s) async {
+    await Store.saveSettings(s);
+    setState(() => _s = s);
+    widget.onSettings(s);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsSubPage(
+      title: 'Playback',
+      children: [
+        _subHead('Playback — audio and subtitle are SEPARATE settings'),
         DropdownButtonFormField<String>(
-          initialValue: s.audioLanguage,
+          initialValue: _s.audioLanguage,
           decoration: const InputDecoration(labelText: 'Audio language'),
           items: const [
             DropdownMenuItem(value: 'jpn', child: Text('Japanese (jpn)')),
@@ -1513,10 +2211,11 @@ const Text('Playback — audio and subtitle are SEPARATE settings',
             DropdownMenuItem(value: '', child: Text('Auto / device')),
           ],
           onChanged: (v) =>
-              _saveSettings(s.copyWith(audioLanguage: v ?? 'jpn')),
+              _save(_s.copyWith(audioLanguage: v ?? 'jpn')),
         ),
+        const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          initialValue: s.subtitleLanguage,
+          initialValue: _s.subtitleLanguage,
           decoration: const InputDecoration(labelText: 'Subtitle language'),
           items: const [
             DropdownMenuItem(value: 'eng', child: Text('English (eng)')),
@@ -1524,39 +2223,38 @@ const Text('Playback — audio and subtitle are SEPARATE settings',
             DropdownMenuItem(value: '', child: Text('None')),
           ],
           onChanged: (v) =>
-              _saveSettings(s.copyWith(subtitleLanguage: v ?? 'eng')),
+              _save(_s.copyWith(subtitleLanguage: v ?? 'eng')),
         ),
         SwitchListTile(
           title: const Text('AniSkip enabled'),
-          value: s.aniskipEnabled,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipEnabled: v)),
+          value: _s.aniskipEnabled,
+          onChanged: (v) => _save(_s.copyWith(aniskipEnabled: v)),
         ),
         SwitchListTile(
           title: const Text('Auto-skip opening'),
-          value: s.aniskipAutoOp,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoOp: v)),
+          value: _s.aniskipAutoOp,
+          onChanged: (v) => _save(_s.copyWith(aniskipAutoOp: v)),
         ),
         SwitchListTile(
           title: const Text('Auto-skip ending'),
-          value: s.aniskipAutoEd,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipAutoEd: v)),
+          value: _s.aniskipAutoEd,
+          onChanged: (v) => _save(_s.copyWith(aniskipAutoEd: v)),
         ),
         SwitchListTile(
           title: const Text('Show skip buttons'),
-          value: s.aniskipShowButton,
-          onChanged: (v) => _saveSettings(s.copyWith(aniskipShowButton: v)),
+          value: _s.aniskipShowButton,
+          onChanged: (v) => _save(_s.copyWith(aniskipShowButton: v)),
         ),
         SwitchListTile(
           title: const Text('Detect recaps'),
-          value: s.aniskipDetectRecap,
-          onChanged: (v) =>
-              _saveSettings(s.copyWith(aniskipDetectRecap: v)),
+          value: _s.aniskipDetectRecap,
+          onChanged: (v) => _save(_s.copyWith(aniskipDetectRecap: v)),
         ),
         const Divider(),
-        const Text('Player Test',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        _subHead('Player Test'),
         const Text(
             'Opens the media_kit player with a public test video (not a GAnime stream).'),
+        const SizedBox(height: 8),
         FilledButton(
           onPressed: () {
             Navigator.of(context).push(
@@ -1571,36 +2269,38 @@ const Text('Playback — audio and subtitle are SEPARATE settings',
                           'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
                     ),
                   ],
-                  settings: s,
+                  settings: _s,
                 ),
               ),
             );
           },
           child: const Text('Open Player Test'),
         ),
-          ],
+      ],
+    );
+  }
+}
+
+// ---------- About & Credits ----------
+
+class AboutSettingsScreen extends StatelessWidget {
+  const AboutSettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const _SettingsSubPage(
+      title: 'About & Credits',
+      children: [
+        Text(
+          'GAnime Android — test/full port in progress. '
+          'Web app at ganime.pages.dev is untouched by this app.',
+          style: TextStyle(color: Colors.grey),
         ),
-        _settingGroup(
-          icon: Icons.info,
-          title: 'About & Credits',
-          subtitle: 'Version, credits, and links',
-          children: const [
-            Text(
-              'GAnime Android — test/full port in progress. '
-              'Web app at ganime.pages.dev is untouched by this app.',
-              style: TextStyle(color: Colors.grey),
-            ),
-            SizedBox(height: 12),
-            Text('Made with ♥ by Isolated',
-                style: TextStyle(fontSize: 15)),
-            SizedBox(height: 4),
-            Text('GAnime 0.1.0',
-                style: TextStyle(fontSize: 15, color: Colors.grey)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(_msg),
-        const SizedBox(height: 24),
+        SizedBox(height: 12),
+        Text('Made with ♥ by Isolated', style: TextStyle(fontSize: 15)),
+        SizedBox(height: 4),
+        Text('GAnime 0.1.0',
+            style: TextStyle(fontSize: 15, color: Colors.grey)),
       ],
     );
   }

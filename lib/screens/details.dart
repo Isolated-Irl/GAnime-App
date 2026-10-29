@@ -1,11 +1,12 @@
 // Details + Episodes + Continue Watching entry point.
-// Episodes come from ani.zip; watched state is local per profile.
+// Episodes come from Kitsu; watched state is local per profile.
 // Tapping an episode opens the stream picker, then the player.
 // If no addon is installed, streams are empty and the player screen
 // explains that — the app never invents a stream source.
 import 'package:flutter/material.dart';
 import '../models.dart';
 import '../services/episodes.dart';
+import '../services/kitsu.dart';
 import '../services/addons.dart';
 import '../store.dart';
 import 'player.dart';
@@ -42,7 +43,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Future<void> _load() async {
     try {
       final eps = await EpisodesService.forAnime(widget.anime);
-      final w = await Store.watched(widget.profileId, widget.anime.id);
+      var w = await Store.watched(widget.profileId, widget.anime.id);
+      // Best-effort migration: older installs keyed watched state by
+      // AniList id. If the new Kitsu key is empty, copy the old entry
+      // over once (never blocks, never overwrites existing state).
+      if (w.isEmpty) {
+        try {
+          final al = await Kitsu.resolveAnilistId(widget.anime.id);
+          if (al != null && al != widget.anime.id) {
+            final old = await Store.watched(widget.profileId, al);
+            if (old.isNotEmpty) {
+              await Store.setWatched(widget.profileId, widget.anime.id, old);
+              w = old;
+            }
+          }
+        } catch (_) {}
+      }
       if (mounted) {
         setState(() {
           _episodes = eps;
@@ -72,12 +88,26 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _playEpisode(int ep) async {
+    // Resolve the addon stream id ONCE (Kitsu id -> AniList id). When the
+    // title has no AniList mapping there is nothing to query addons with.
+    final String streamId;
+    try {
+      streamId = await EpisodesService.streamIdFor(widget.anime, ep);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'No streams found. Install an addon first (Settings > Addons) — the app ships with none.'),
+        ),
+      );
+      return;
+    }
     final addons = await Store.addons(widget.profileId);
     final streams = <StreamSource>[];
     for (final a in addons) {
       try {
-        streams.addAll(await AddonsService.streams(
-            a, 'anime', EpisodesService.streamIdFor(widget.anime, ep)));
+        streams.addAll(await AddonsService.streams(a, 'anime', streamId));
       } catch (_) {}
     }
     if (!mounted) return;
@@ -146,7 +176,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             fontSize: 20, fontWeight: FontWeight.bold)),
                     Text('${a.format} • ${a.status}'
                         '${a.episodes != null ? ' • ${a.episodes} episodes' : ''}'
-                        '${a.score != null ? ' • ★ ${a.score!.toStringAsFixed(0)}%' : ''}'),
+                        '${a.score != null ? ' • ★ ${(a.score! / 10).toStringAsFixed(1)}' : ''}'),
                     if (a.genres.isNotEmpty)
                       Text(a.genres.join(', '),
                           style: TextStyle(color: Colors.grey.shade400)),

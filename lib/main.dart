@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'models.dart';
 import 'services/firebase_sync.dart';
+import 'services/kitsu.dart';
 import 'services/trackers.dart';
 import 'store.dart';
 import 'screens/app_screens.dart';
@@ -116,11 +117,16 @@ class _GAnimeAppState extends State<GAnimeApp> {
 
   Future<void> _onMarkWatched(Anime anime, int episode) async {
     // Push progress to trackers, best-effort, never blocks the UI.
+    // Catalogue ids are Kitsu ids; the AniList id is resolved first.
+    int? anilistId;
     try {
       final t = await Store.tracker();
       final anilistToken = (t['anilistToken'] as String?) ?? '';
       if (anilistToken.isNotEmpty) {
-        await Trackers.anilistSave(anilistToken, anime.id, episode);
+        anilistId = await Kitsu.resolveAnilistId(anime.id);
+        if (anilistId != null) {
+          await Trackers.anilistSave(anilistToken, anilistId, episode);
+        }
       }
       final simklClient = (t['simklClientId'] as String?) ?? '';
       final simklToken = (t['simklToken'] as String?) ?? '';
@@ -134,6 +140,15 @@ class _GAnimeAppState extends State<GAnimeApp> {
     // Also record in the local library.
     try {
       final lib = await Store.localLibrary(_profileId);
+      var progress = episode;
+      // Drop a stale pre-Kitsu entry for the same title (keyed by the old
+      // AniList id), keeping the higher progress of the two.
+      if (anilistId != null && anilistId != anime.id) {
+        for (final s in lib.where((e) => e.key == 'local_$anilistId')) {
+          if (s.progress > progress) progress = s.progress;
+        }
+        lib.removeWhere((e) => e.key == 'local_$anilistId');
+      }
       final idx = lib.indexWhere((e) => e.anilistId == anime.id);
       final entry = LibraryEntry(
         key: 'local_${anime.id}',
@@ -141,7 +156,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
         title: anime.title,
         cover: anime.cover,
         status: 'CURRENT',
-        progress: episode,
+        progress: progress,
         total: anime.episodes,
         anilistId: anime.id,
       );

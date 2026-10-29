@@ -5,6 +5,7 @@
 class Anime {
   final int id;
   final String title;
+  final String romaji;
   final String cover;
   final String banner;
   final String description;
@@ -22,6 +23,7 @@ class Anime {
   const Anime({
     required this.id,
     required this.title,
+    this.romaji = '',
     this.cover = '',
     this.banner = '',
     this.description = '',
@@ -48,6 +50,7 @@ class Anime {
       title: (t['english'] as String?)?.isNotEmpty == true
           ? t['english'] as String
           : ((t['romaji'] as String?) ?? (t['userPreferred'] as String?) ?? ''),
+      romaji: (t['romaji'] as String?) ?? '',
       cover: (img['large'] as String?) ?? (img['medium'] as String?) ?? '',
       banner: (j['bannerImage'] as String?) ?? '',
       description: clean(j['description'] as String?),
@@ -67,6 +70,7 @@ class Anime {
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
+        'romaji': romaji,
         'cover': cover,
         'banner': banner,
         'description': description,
@@ -85,6 +89,7 @@ class Anime {
   factory Anime.fromStored(Map<String, dynamic> j) => Anime(
         id: (j['id'] as num?)?.toInt() ?? 0,
         title: (j['title'] as String?) ?? '',
+        romaji: (j['romaji'] as String?) ?? '',
         cover: (j['cover'] as String?) ?? '',
         banner: (j['banner'] as String?) ?? '',
         description: (j['description'] as String?) ?? '',
@@ -98,6 +103,43 @@ class Anime {
         malId: (j['malId'] as num?)?.toInt(),
         year: (j['year'] as num?)?.toInt(),
         season: (j['season'] as String?) ?? '',
+      );
+
+  Anime copyWith({
+    int? id,
+    String? title,
+    String? romaji,
+    String? cover,
+    String? banner,
+    String? description,
+    String? format,
+    String? status,
+    int? episodes,
+    int? nextEpisode,
+    int? airingAt,
+    double? score,
+    List<String>? genres,
+    int? malId,
+    int? year,
+    String? season,
+  }) =>
+      Anime(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        romaji: romaji ?? this.romaji,
+        cover: cover ?? this.cover,
+        banner: banner ?? this.banner,
+        description: description ?? this.description,
+        format: format ?? this.format,
+        status: status ?? this.status,
+        episodes: episodes ?? this.episodes,
+        nextEpisode: nextEpisode ?? this.nextEpisode,
+        airingAt: airingAt ?? this.airingAt,
+        score: score ?? this.score,
+        genres: genres ?? this.genres,
+        malId: malId ?? this.malId,
+        year: year ?? this.year,
+        season: season ?? this.season,
       );
 }
 
@@ -161,6 +203,15 @@ class AppSettings {
   final bool aniskipAutoEd;
   final bool aniskipShowButton;
   final bool aniskipDetectRecap;
+  // Layout toggles (Settings > Layout). All default true.
+  final bool showHero;
+  final bool showContinueWatching;
+  final bool railTrending;
+  final bool railPopularSeason;
+  final bool railUpcoming;
+  final bool railAllTime;
+  final bool railTop100;
+  final bool railTopMovies;
   const AppSettings({
     this.audioLanguage = 'jpn',
     this.subtitleLanguage = 'eng',
@@ -169,6 +220,14 @@ class AppSettings {
     this.aniskipAutoEd = false,
     this.aniskipShowButton = true,
     this.aniskipDetectRecap = true,
+    this.showHero = true,
+    this.showContinueWatching = true,
+    this.railTrending = true,
+    this.railPopularSeason = true,
+    this.railUpcoming = true,
+    this.railAllTime = true,
+    this.railTop100 = true,
+    this.railTopMovies = true,
   });
   Map<String, dynamic> toJson() => {
         'audioLanguage': audioLanguage,
@@ -178,6 +237,14 @@ class AppSettings {
         'aniskipAutoEd': aniskipAutoEd,
         'aniskipShowButton': aniskipShowButton,
         'aniskipDetectRecap': aniskipDetectRecap,
+        'showHero': showHero,
+        'showContinueWatching': showContinueWatching,
+        'railTrending': railTrending,
+        'railPopularSeason': railPopularSeason,
+        'railUpcoming': railUpcoming,
+        'railAllTime': railAllTime,
+        'railTop100': railTop100,
+        'railTopMovies': railTopMovies,
       };
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
         audioLanguage: (j['audioLanguage'] as String?) ?? 'jpn',
@@ -187,6 +254,14 @@ class AppSettings {
         aniskipAutoEd: (j['aniskipAutoEd'] as bool?) ?? false,
         aniskipShowButton: (j['aniskipShowButton'] as bool?) ?? true,
         aniskipDetectRecap: (j['aniskipDetectRecap'] as bool?) ?? true,
+        showHero: (j['showHero'] as bool?) ?? true,
+        showContinueWatching: (j['showContinueWatching'] as bool?) ?? true,
+        railTrending: (j['railTrending'] as bool?) ?? true,
+        railPopularSeason: (j['railPopularSeason'] as bool?) ?? true,
+        railUpcoming: (j['railUpcoming'] as bool?) ?? true,
+        railAllTime: (j['railAllTime'] as bool?) ?? true,
+        railTop100: (j['railTop100'] as bool?) ?? true,
+        railTopMovies: (j['railTopMovies'] as bool?) ?? true,
       );
   AppSettings copyWith({
     String? audioLanguage,
@@ -196,6 +271,14 @@ class AppSettings {
     bool? aniskipAutoEd,
     bool? aniskipShowButton,
     bool? aniskipDetectRecap,
+    bool? showHero,
+    bool? showContinueWatching,
+    bool? railTrending,
+    bool? railPopularSeason,
+    bool? railUpcoming,
+    bool? railAllTime,
+    bool? railTop100,
+    bool? railTopMovies,
   }) =>
       AppSettings(
         audioLanguage: audioLanguage ?? this.audioLanguage,
@@ -205,6 +288,15 @@ class AppSettings {
         aniskipAutoEd: aniskipAutoEd ?? this.aniskipAutoEd,
         aniskipShowButton: aniskipShowButton ?? this.aniskipShowButton,
         aniskipDetectRecap: aniskipDetectRecap ?? this.aniskipDetectRecap,
+        showHero: showHero ?? this.showHero,
+        showContinueWatching:
+            showContinueWatching ?? this.showContinueWatching,
+        railTrending: railTrending ?? this.railTrending,
+        railPopularSeason: railPopularSeason ?? this.railPopularSeason,
+        railUpcoming: railUpcoming ?? this.railUpcoming,
+        railAllTime: railAllTime ?? this.railAllTime,
+        railTop100: railTop100 ?? this.railTop100,
+        railTopMovies: railTopMovies ?? this.railTopMovies,
       );
 }
 
