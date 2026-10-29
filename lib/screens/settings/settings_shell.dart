@@ -139,6 +139,10 @@ class GASwitch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
+    // White/light accents need a dark thumb, otherwise the thumb is
+    // invisible on the ON track (white-on-white). Luminance check.
+    final thumbColor =
+        accent.computeLuminance() > 0.5 ? Colors.black : Colors.white;
     return GestureDetector(
       onTap: () => onChanged(!value),
       child: AnimatedContainer(
@@ -165,9 +169,9 @@ class GASwitch extends StatelessWidget {
               child: Container(
                 width: 20,
                 height: 20,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white,
+                  color: thumbColor,
                 ),
               ),
             ),
@@ -241,13 +245,16 @@ Widget gaDropdownRow({
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     for (final e in options.entries)
-                      RadioListTile<String>(
-                        value: e.key,
+                      ListTile(
                         title: Text(e.value,
                             style:
                                 const TextStyle(color: Colors.white)),
-                        activeColor:
-                            Theme.of(ctx).colorScheme.primary,
+                        leading: Radio<String>(
+                          value: e.key,
+                          activeColor:
+                              Theme.of(ctx).colorScheme.primary,
+                        ),
+                        onTap: () => Navigator.of(ctx).pop(e.key),
                       ),
                   ],
                 ),
@@ -414,6 +421,10 @@ Widget gaGreenButton({
   required String label,
   required VoidCallback? onPressed,
 }) {
+  // White/light accents need dark text, otherwise the label is invisible
+  // (white-on-white). Luminance check picks the readable foreground.
+  final bg = Theme.of(context).colorScheme.primary;
+  final fg = bg.computeLuminance() > 0.5 ? Colors.black : Colors.white;
   return Padding(
     padding: const EdgeInsets.only(bottom: 12),
     child: SizedBox(
@@ -421,8 +432,8 @@ Widget gaGreenButton({
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          foregroundColor: Colors.white,
+          backgroundColor: bg,
+          foregroundColor: fg,
           padding: const EdgeInsets.symmetric(vertical: 16),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

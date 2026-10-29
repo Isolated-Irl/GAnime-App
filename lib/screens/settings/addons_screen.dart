@@ -400,7 +400,13 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
                 onPressed: _busy ? null : _install,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
-                  foregroundColor: Colors.white,
+                  // White/light accents need dark text (white-on-white is
+                  // invisible). Luminance check picks the readable foreground.
+                  foregroundColor:
+                      Theme.of(context).colorScheme.primary.computeLuminance() >
+                              0.5
+                          ? Colors.black
+                          : Colors.white,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20),
                   shape: RoundedRectangleBorder(

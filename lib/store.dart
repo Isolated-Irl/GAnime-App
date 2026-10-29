@@ -179,6 +179,24 @@ class Store {
         .toList();
   }
 
+  /// All addons across every profile, de-duplicated by manifest URL.
+  /// Used as a fallback when the current profile has none installed —
+  /// the user expects an installed addon to work everywhere.
+  static Future<List<AddonRecord>> allAddons() async {
+    final m = await _read(_kAddons);
+    final seen = <String>{};
+    final out = <AddonRecord>[];
+    for (final key in m.keys) {
+      final list = (m[key] as List?) ?? [];
+      for (final e in list) {
+        final rec =
+            AddonRecord.fromJson(e as Map<String, dynamic>);
+        if (seen.add(rec.manifestUrl)) out.add(rec);
+      }
+    }
+    return out;
+  }
+
   static Future<void> saveAddons(
       String profileId, List<AddonRecord> addons) async {
     final m = await _read(_kAddons);

@@ -28,6 +28,12 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   final _malUser = TextEditingController();
   final _malClient = TextEditingController();
   String _msg = '';
+  // Website parity (Config.OAUTH): baked-in client IDs for one-tap connect.
+  // Public IDs from the website's public config.js — safe to ship.
+  // Note: _anilistClientId is already defined above (line 33).
+  static const _malClientId = 'f15fbfc461e31b1674c0747f5e680f01';
+  static const _simklClientId =
+      '49dfaf44602c7464026066ff52eb2e4fb797f26a136a2107c250e5d9f73f8a7b';
   String? _open;
   bool _busy = false;
 
@@ -298,6 +304,19 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Website parity (connectSimklOneClick): one tap fills the baked-in
+        // client ID and starts the PIN flow — no manual ID entry.
+        gaGreenButton(
+          context: context,
+          label: 'Connect with Simkl',
+          onPressed: _busy
+              ? null
+              : () {
+                  _skClient.text = _simklClientId;
+                  _simklConnect();
+                },
+        ),
+        const SizedBox(height: 12),
         gaTextField(context: context, controller: _skClient, hint: 'Simkl client id'),
         gaTextField(context: context, 
             controller: _skCode,
@@ -347,6 +366,21 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Website parity (connectMalOneClick): one tap fills the baked-in
+        // client ID — user just enters username and saves.
+        gaGreenButton(
+          context: context,
+          label: 'Connect with MAL',
+          onPressed: _busy
+              ? null
+              : () {
+                  setState(() {
+                    _malClient.text = _malClientId;
+                    _msg = 'Client ID filled — enter your MAL username and tap Save.';
+                  });
+                },
+        ),
+        const SizedBox(height: 12),
         gaTextField(context: context, controller: _malUser, hint: 'MAL username'),
         gaTextField(context: context, controller: _malClient, hint: 'MAL client id'),
         gaGreenButton(context: context, 
