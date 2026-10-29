@@ -11,6 +11,7 @@ id idMal title { romaji english userPreferred }
 coverImage { extraLarge large medium } bannerImage description format status
 episodes season seasonYear averageScore genres
 nextAiringEpisode { episode airingAt }
+studios { edges { isMain node { name } } }
 ''';
 
 class AniList {

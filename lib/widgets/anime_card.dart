@@ -36,39 +36,50 @@ class AnimeCard extends StatelessWidget {
           // source image's natural dimensions or the title length below.
           AspectRatio(
             aspectRatio: kPosterArtRatio,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: anime.cover.isEmpty
-                  ? Container(color: Colors.grey.shade800)
-                  : GaImage(
-                      url: anime.cover,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      errorFallback:
-                          Container(color: Colors.grey.shade800),
-                    ),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border:
+                    Border.all(color: const Color(0xFF333333), width: 1),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: anime.cover.isEmpty
+                    ? Container(color: Colors.grey.shade800)
+                    : GaImage(
+                        url: anime.cover,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        errorFallback:
+                            Container(color: Colors.grey.shade800),
+                      ),
+              ),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 7),
           Text(
             anime.title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
           ),
           if (badge != null)
             Text(badge!,
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+                style: const TextStyle(
+                    fontSize: 11, color: Color(0xFF808080))),
           // Web rail cards show score as ★7.5 · 2026, not 75%.
-          if (anime.score != null || anime.year != null)
+          if (anime.score != null || anime.year != null) ...[
+            const SizedBox(height: 2),
             Text(
               [
                 if (anime.score != null)
                   '★ ${(anime.score! / 10).toStringAsFixed(1)}',
                 if (anime.year != null) '${anime.year}',
               ].join(' · '),
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+              style:
+                  const TextStyle(fontSize: 11, color: Color(0xFF808080)),
             ),
+          ],
         ],
       ),
     );

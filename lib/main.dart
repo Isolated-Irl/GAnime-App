@@ -208,8 +208,8 @@ class _GAnimeAppState extends State<GAnimeApp> {
     // Real theme switch: Dark (#0d0d0d family) vs AMOLED true-black.
     // GaColors carries the per-mode surfaces so scaffolds, cards, sheets,
     // dialogs and inputs all follow the mode — not just the scaffold.
-    // Accent follows Settings > Layout > THEME (default emerald green,
-    // like the website settings screens).
+    // Accent follows Settings > Layout > THEME (default white,
+    // like the website).
     final accent = themeAccent(_settings.theme);
     final ga = GaColors.forMode(amoled: _settings.amoledBlack);
     final base = ThemeData.dark(useMaterial3: true);
@@ -416,10 +416,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(24),
                     color: i == _tab
-                        ? Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.16)
+                        ? const Color(0xFF303030)
                         : Colors.transparent,
                   ),
                   child: Column(

@@ -166,9 +166,87 @@ class Kitsu {
     final j = await _get(path);
     final catNames = _categoryNames(j);
     final data = (j['data'] as List?) ?? [];
-    return data
+    final items = data
         .map((e) => _fromJson(e as Map<String, dynamic>, catNames, gn))
         .toList();
+    cacheTitles(items); // feed the fuzzy title pool (website parity)
+    return items;
+  }
+
+  // ---------- Fuzzy title pool + scoring (website parity) ----------
+  // The website keeps a titleCache of everything it has seen and, when a
+  // search returns < 5 results, runs a "misspelling rescue": retry the API
+  // with the longest query word, then local Levenshtein matching against
+  // the cached titles. Same here, adapted to Kitsu.
+
+  /// Every title Kitsu has returned this session, keyed by id.
+  static final Map<int, Anime> _titleCache = {};
+
+  static void cacheTitles(List<Anime> items) {
+    for (final a in items) {
+      _titleCache[a.id] = a;
+    }
+  }
+
+  static int _lev(String a, String b) {
+    if ((a.length - b.length).abs() > 3) return 99;
+    final row = List<int>.generate(b.length + 1, (i) => i);
+    for (var i = 1; i <= a.length; i++) {
+      var prev = row[0];
+      row[0] = i;
+      for (var j = 1; j <= b.length; j++) {
+        final tmp = row[j];
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+        var best = row[j] + 1;
+        final ins = row[j - 1] + 1;
+        if (ins < best) best = ins;
+        final sub = prev + cost;
+        if (sub < best) best = sub;
+        row[j] = best;
+        prev = tmp;
+      }
+    }
+    return row[b.length];
+  }
+
+  static int _fuzzyScore(String q, String title) {
+    final needle = q.toLowerCase();
+    final hay = title.toLowerCase();
+    if (hay.contains(needle)) return 100;
+    var best = 0;
+    for (final word in hay.split(RegExp(r'[^a-z0-9]+'))) {
+      if (word.isEmpty) continue;
+      if (needle.length >= 3 &&
+          word.startsWith(needle.substring(0, 3)) &&
+          best < 50) {
+        best = 50;
+      }
+      final d = _lev(needle, word);
+      if (d <= 2) {
+        final s = 70 - d * 10;
+        if (s > best) best = s;
+      }
+    }
+    // subsequence check
+    var i = 0;
+    for (var k = 0; k < hay.length && i < needle.length; k++) {
+      if (hay[k] == needle[i]) i++;
+    }
+    if (i == needle.length && best < 40) best = 40;
+    return best;
+  }
+
+  /// Local fuzzy matches for [q], excluding [excludeIds], best first.
+  static List<Anime> fuzzyLocal(String q, Set<int> excludeIds,
+      [int limit = 8]) {
+    final scored = <MapEntry<Anime, int>>[];
+    for (final t in _titleCache.values) {
+      if (excludeIds.contains(t.id)) continue;
+      final s = _fuzzyScore(q, t.title);
+      if (s >= 40) scored.add(MapEntry(t, s));
+    }
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    return scored.take(limit).map((e) => e.key).toList();
   }
 
   /// Trending Now. /trending/anime returns 10 items and ignores `include`,

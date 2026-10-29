@@ -122,25 +122,30 @@ Widget skeletonRail({required String title, int count = 6}) {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            SkeletonBlock(
-                width: title.length * 9.5 + 8, height: 17, radius: 8),
-            const SkeletonBlock(width: 80, height: 40, radius: 20),
-          ],
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              SkeletonBlock(
+                  width: title.length * 9.5 + 8, height: 17, radius: 8),
+              const SkeletonBlock(width: 80, height: 40, radius: 20),
+            ],
+          ),
         ),
+        const SizedBox(height: 10),
         SizedBox(
           height: 120 / kPosterArtRatio + kPosterTextReserve,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             itemCount: count,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (_, _) =>
                 SizedBox(width: 120, child: skeletonPosterCard(width: 120)),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 24),
       ],
     ),
   );
@@ -153,7 +158,7 @@ Widget skeletonRail({required String title, int count = 6}) {
 Widget skeletonHero() {
   return Skeleton(
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: SizedBox(
         height: 480,
         child: Container(

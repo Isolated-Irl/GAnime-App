@@ -20,12 +20,14 @@ class GaColors extends ThemeExtension<GaColors> {
     required this.field,
   });
 
-  /// Dark (#0d0d0d family) vs AMOLED true-black (#000000 everywhere).
+  /// Dark (#0d0d0d family) vs AMOLED true-black.
+  /// Matches the website: body.amoled-black only blacks the page background
+  /// (--bg-amoled: #000000); cards stay #222222 so contrast is preserved.
   factory GaColors.forMode({required bool amoled}) => amoled
       ? const GaColors(
           surface: Colors.black,
-          card: Colors.black,
-          field: Colors.black,
+          card: Color(0xFF222222),
+          field: Color(0xFF1A1A1A),
         )
       : const GaColors(
           surface: Color(0xFF0D0D0D),

@@ -184,28 +184,40 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(title.toUpperCase(),
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2)),
-            TextButton(
-              onPressed: () => _openSeeAll(title, items),
-              child: Text('View All',
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary)),
-            ),
-          ],
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title.toUpperCase(),
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.2,
+                      color: Color(0xFFB3B3B3))),
+              InkWell(
+                onTap: () => _openSeeAll(title, items),
+                borderRadius: BorderRadius.circular(8),
+                child: const Padding(
+                  padding: EdgeInsets.zero,
+                  child: Text('View All',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFB3B3B3))),
+                ),
+              ),
+            ],
+          ),
         ),
+        const SizedBox(height: 10),
         SizedBox(
           // Fixed 2:3 poster art (120 -> 180) + reserved text block, so
           // every poster is identical in size (website parity).
           height: 120 / kPosterArtRatio + kPosterTextReserve,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             itemCount: items.length,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (_, i) => SizedBox(
@@ -221,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 24),
       ],
     );
   }
@@ -300,7 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // pill buttons + dots. No kicker, no synopsis — web shows none.
             if (showHero)
               Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: SizedBox(
                   height: 480,
                   child: Container(
@@ -706,13 +718,24 @@ class SearchScreen extends StatefulWidget {
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
+/// Kitsu sort options for search, shared by the filter sheet and the
+/// results toolbar (website parity: toolbar sort and sheet sort share
+/// state — both read/write _SearchScreenState._sort).
+const _kitsuSortLabels = {
+  'ratingRank': 'Top rated',
+  '-userCount': 'Most popular',
+  '-startDate': 'Newest',
+};
+
 class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
   List<Anime> _results = [];
+  List<Anime> _fuzzy = []; // "CLOSEST MATCHES (FUZZY)" rescue results
   bool _loading = false;
   bool _searched = false;
   String? _error;
   List<String> _allGenres = [];
+  String _view = 'grid'; // 'grid' | 'list' (website's view toggle)
 
   // Filters (null/empty = Any).
   final Set<String> _genres = {};
@@ -746,6 +769,7 @@ class _SearchScreenState extends State<SearchScreen> {
     setState(() {
       _loading = true;
       _error = null;
+      _fuzzy = [];
     });
     try {
       final r = await Kitsu.search(
@@ -757,8 +781,41 @@ class _SearchScreenState extends State<SearchScreen> {
         status: _status,
         sort: _sort,
       );
+      // Misspelling rescue (website parity): when the query is non-empty
+      // and the API returns < 5 results, retry with the longest query
+      // word, then fuzzy-match the session title pool. Best-effort —
+      // never fails the main search.
+      final fuzzy = <Anime>[];
+      if (q.isNotEmpty && r.length < 5) {
+        try {
+          final tokens = q.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList()
+            ..sort((a, b) => b.length.compareTo(a.length));
+          final longest = tokens.isNotEmpty ? tokens.first : '';
+          final sameAsQuery = longest.toLowerCase() == q.toLowerCase();
+          // Kitsu's relevance sort is sort=null (website's SEARCH_MATCH).
+          if (longest.length >= 3 && !(sameAsQuery && _sort == null)) {
+            final retry = await Kitsu.search(
+              longest,
+              genres: _genres.isEmpty ? null : _genres.toList(),
+              year: _year,
+              season: _season,
+              subtype: _subtype,
+              status: _status,
+              sort: null,
+            );
+            final seen = r.map((a) => a.id).toSet();
+            for (final t in retry) {
+              if (seen.add(t.id)) fuzzy.add(t);
+            }
+          }
+          final local = Kitsu.fuzzyLocal(
+              q, r.map((a) => a.id).toSet().union(fuzzy.map((a) => a.id).toSet()));
+          fuzzy.addAll(local);
+        } catch (_) {}
+      }
       setState(() {
         _results = r;
+        _fuzzy = fuzzy;
         _searched = true;
       });
     } catch (e) {
@@ -814,11 +871,7 @@ class _SearchScreenState extends State<SearchScreen> {
       'finished': 'Finished',
       'upcoming': 'Upcoming',
     };
-    const sortLabels = {
-      'ratingRank': 'Top rated',
-      '-userCount': 'Most popular',
-      '-startDate': 'Newest',
-    };
+    const sortLabels = _kitsuSortLabels;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1045,6 +1098,162 @@ class _SearchScreenState extends State<SearchScreen> {
     refresh = null;
   }
 
+  /// Results toolbar (website parity: `.results-toolbar`): "N RESULTS"
+  /// label + sort dropdown + grid/list view toggles. The sort shares
+  /// state with the filter sheet (both read/write _sort, like the
+  /// website's searchState); changing it re-runs the search.
+  Widget _resultsToolbar() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18, bottom: 14),
+      child: Row(
+        children: [
+          Text(
+            '${_results.length} RESULT${_results.length == 1 ? '' : 'S'}',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+              color: Colors.grey,
+            ),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: GaColors.of(context).card,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String?>(
+                value: _sort,
+                dropdownColor: GaColors.of(context).card,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                items: [
+                  const DropdownMenuItem<String?>(
+                      value: null, child: Text('Relevance')),
+                  ..._kitsuSortLabels.entries.map((e) =>
+                      DropdownMenuItem<String?>(
+                          value: e.key, child: Text(e.value))),
+                ],
+                onChanged: (v) {
+                  setState(() => _sort = v);
+                  _search();
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _viewToggle('grid', Icons.grid_view_rounded, 'Grid view'),
+          const SizedBox(width: 8),
+          _viewToggle('list', Icons.view_list_rounded, 'List view'),
+        ],
+      ),
+    );
+  }
+
+  /// Website `.view-toggle`: 38x38, card bg; active = accent bg + black.
+  Widget _viewToggle(String view, IconData icon, String tooltip) {
+    final active = _view == view;
+    final accent = Theme.of(context).colorScheme.primary;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: () => setState(() => _view = view),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: active ? accent : GaColors.of(context).card,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: active ? accent : Colors.white10),
+          ),
+          child: Icon(icon,
+              size: 18, color: active ? Colors.black : Colors.grey),
+        ),
+      ),
+    );
+  }
+
+  /// List-view result row (website parity: `.result-row`): 46x64 thumb,
+  /// title, "★ score · year · format · eps · genres" sub, chevron.
+  Widget _resultRow(Anime a) {
+    final bits = <String>[
+      if (a.score != null) '★ ${(a.score! / 10).toStringAsFixed(1)}',
+      if (a.year != null) '${a.year}',
+      if (a.format.isNotEmpty) a.format,
+      if ((a.episodes ?? 0) > 0) '${a.episodes} eps',
+      if (a.genres.isNotEmpty) a.genres.take(3).join(', '),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: () => openDetails(context,
+            anime: a,
+            profileId: widget.profileId,
+            settings: widget.settings,
+            onMarkWatched: widget.onMarkWatched),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
+          decoration: BoxDecoration(
+            color: GaColors.of(context).card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: a.cover.isNotEmpty
+                    ? Image.network(a.cover,
+                        width: 46,
+                        height: 64,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => _rowThumbFallback(a))
+                    : _rowThumbFallback(a),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(a.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Text(bits.join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Colors.grey.shade400, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.grey),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _rowThumbFallback(Anime a) => Container(
+        width: 46,
+        height: 64,
+        color: const Color(0xFF2A2A2A),
+        alignment: Alignment.center,
+        child: Text(
+          a.title.isNotEmpty ? a.title.characters.first : '?',
+          style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Colors.white70),
+        ),
+      );
+
   Widget _filterDropdown<T>(String label, T value, List<T> options,
       String Function(T) labelOf, ValueChanged<T> onChanged,
       {bool enabled = true}) {
@@ -1162,18 +1371,45 @@ class _SearchScreenState extends State<SearchScreen> {
           // or the ghost cells would be narrower than the real ones.
           skeletonPosterGrid(count: 9),
         if (_error != null) Text('Search failed: $_error'),
-        if (!_loading && _error == null && _searched && _results.isEmpty)
+        if (_searched && !_loading && _error == null) _resultsToolbar(),
+        if (!_loading &&
+            _error == null &&
+            _searched &&
+            _results.isEmpty &&
+            _fuzzy.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
             child: Center(
                 child: Text('No results found. Try different filters.')),
           ),
         const SizedBox(height: 12),
-        AnimeGrid(
-            items: _results,
-            profileId: widget.profileId,
-            settings: widget.settings,
-            onMarkWatched: widget.onMarkWatched),
+        if (_view == 'grid')
+          AnimeGrid(
+              items: _results,
+              profileId: widget.profileId,
+              settings: widget.settings,
+              onMarkWatched: widget.onMarkWatched)
+        else
+          ..._results.map(_resultRow),
+        // Website parity: "CLOSEST MATCHES (FUZZY)" below the results.
+        if (_fuzzy.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          const Text(
+            'CLOSEST MATCHES (FUZZY)',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+              color: Colors.grey,
+            ),
+          ),
+          const SizedBox(height: 8),
+          AnimeGrid(
+              items: _fuzzy,
+              profileId: widget.profileId,
+              settings: widget.settings,
+              onMarkWatched: widget.onMarkWatched),
+        ],
       ],
     );
   }

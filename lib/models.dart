@@ -20,6 +20,7 @@ class Anime {
   final int? malId;
   final int? year;
   final String season;
+  final String studio; // main studio name, '' when unknown
   final String trailerId; // YouTube video id, '' when unknown
 
   const Anime({
@@ -40,6 +41,7 @@ class Anime {
     this.malId,
     this.year,
     this.season = '',
+    this.studio = '',
     this.trailerId = '',
   });
 
@@ -50,6 +52,19 @@ class Anime {
     String clean(String? s) =>
         (s ?? '').replaceAll(RegExp(r'<[^>]*>'), '').trim();
     final tr = j['trailer'] as Map<String, dynamic>?;
+    // Main studio only (website parity: edges.find(isMain) || edges[0]).
+    String studio = '';
+    final edges =
+        (j['studios'] as Map<String, dynamic>?)?['edges'] as List?;
+    final main = edges
+        ?.cast<Map<String, dynamic>?>()
+        .firstWhere(
+          (e) => e?['isMain'] == true,
+          orElse: () =>
+              edges.isNotEmpty ? edges.first as Map<String, dynamic>? : null,
+        );
+    final studioNode = main?['node'] as Map<String, dynamic>?;
+    if (studioNode != null) studio = (studioNode['name'] as String?) ?? '';
     return Anime(
       id: (j['id'] as num?)?.toInt() ?? 0,
       title: (t['english'] as String?)?.isNotEmpty == true
@@ -73,6 +88,7 @@ class Anime {
       malId: (j['idMal'] as num?)?.toInt(),
       year: (j['seasonYear'] as num?)?.toInt(),
       season: (j['season'] as String?) ?? '',
+      studio: studio,
       trailerId: (tr != null && (tr['site'] as String?) == 'youtube')
           ? (tr['id'] as String?) ?? ''
           : '',
@@ -97,6 +113,7 @@ class Anime {
         'malId': malId,
         'year': year,
         'season': season,
+        'studio': studio,
         'trailerId': trailerId,
       };
 
@@ -118,6 +135,7 @@ class Anime {
         malId: (j['malId'] as num?)?.toInt(),
         year: (j['year'] as num?)?.toInt(),
         season: (j['season'] as String?) ?? '',
+        studio: (j['studio'] as String?) ?? '',
         trailerId: (j['trailerId'] as String?) ?? '',
       );
 
@@ -139,6 +157,7 @@ class Anime {
     int? malId,
     int? year,
     String? season,
+    String? studio,
     String? trailerId,
   }) =>
       Anime(
@@ -159,6 +178,7 @@ class Anime {
         malId: malId ?? this.malId,
         year: year ?? this.year,
         season: season ?? this.season,
+        studio: studio ?? this.studio,
         trailerId: trailerId ?? this.trailerId,
       );
 }
@@ -302,7 +322,7 @@ class AppSettings {
     this.subtitleSize = 18,
     this.subtitleBackgroundTint = 0.5,
     this.continueWatchingSource = 'cloud',
-    this.theme = 'emerald',
+    this.theme = 'white',
     this.amoledBlack = false,
     this.navBarPosition = 'bottom',
     this.liquidGlassTabBar = true,
@@ -383,7 +403,7 @@ class AppSettings {
             (j['subtitleBackgroundTint'] as num?)?.toDouble() ?? 0.5,
         continueWatchingSource:
             (j['continueWatchingSource'] as String?) ?? 'cloud',
-        theme: (j['theme'] as String?) ?? 'emerald',
+        theme: (j['theme'] as String?) ?? 'white',
         amoledBlack: (j['amoledBlack'] as bool?) ?? false,
         navBarPosition: (j['navBarPosition'] as String?) ?? 'bottom',
         liquidGlassTabBar: (j['liquidGlassTabBar'] as bool?) ?? true,

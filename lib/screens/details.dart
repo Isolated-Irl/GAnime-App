@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../services/episodes.dart';
 import '../services/kitsu.dart';
+import '../services/anilist.dart';
 import '../services/addons.dart';
 import '../services/addon_ids.dart';
 import '../widgets/ga_image.dart';
@@ -46,6 +47,7 @@ const _libMenu = [
   ('Completed', 'COMPLETED'),
   ('On Hold', 'PAUSED'),
   ('Dropped', 'DROPPED'),
+  ('Rewatching', 'REPEATING'),
 ];
 
 String _libStatusName(String code) {
@@ -74,6 +76,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   int? _rangeFrom; // null = All
   bool _filterOpen = false;
   String? _libStatus; // app status code, null = not in library
+  String _studio = ''; // main studio from AniList, '' = unknown (no chip)
 
   @override
   void initState() {
@@ -116,19 +119,31 @@ class _DetailsScreenState extends State<DetailsScreen> {
     try {
       final eps = await EpisodesService.forAnime(widget.anime);
       var w = await Store.watched(widget.profileId, widget.anime.id);
+      // Resolve the AniList id once: needed for the watched-state
+      // migration below and for the main-studio chip (website parity).
+      int? alId;
+      try {
+        alId = await Kitsu.resolveAnilistId(widget.anime.id);
+      } catch (_) {}
       // Best-effort migration: older installs keyed watched state by
       // AniList id. If the new Kitsu key is empty, copy the old entry
       // over once (never blocks, never overwrites existing state).
-      if (w.isEmpty) {
+      if (w.isEmpty && alId != null && alId != widget.anime.id) {
         try {
-          final al = await Kitsu.resolveAnilistId(widget.anime.id);
-          if (al != null && al != widget.anime.id) {
-            final old = await Store.watched(widget.profileId, al);
-            if (old.isNotEmpty) {
-              await Store.setWatched(widget.profileId, widget.anime.id, old);
-              w = old;
-            }
+          final old = await Store.watched(widget.profileId, alId);
+          if (old.isNotEmpty) {
+            await Store.setWatched(widget.profileId, widget.anime.id, old);
+            w = old;
           }
+        } catch (_) {}
+      }
+      // Main studio chip (website parity: details badge row shows the
+      // main studio, e.g. "Toei Animation"). Best-effort; no chip when
+      // unknown.
+      String studio = '';
+      if (alId != null) {
+        try {
+          studio = (await AniList.details(alId)).studio;
         } catch (_) {}
       }
       final saved = await Store.savedEps(widget.profileId, widget.anime.id);
@@ -148,6 +163,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _watched = w;
           _saved = saved;
           _libStatus = libStatus;
+          _studio = studio;
           _loading = false;
           // Website default: jump to the first range when the list is long.
           if (_rangeFrom == null && _total > 48) _rangeFrom = 1;
@@ -1057,6 +1073,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           if (a.status.isNotEmpty)
                             _chip(a.status.replaceAll('_', ' ')),
                           if (a.year != null) _chip('${a.year}'),
+                          // Main studio, last (website parity: hchip).
+                          if (_studio.isNotEmpty) _chip(_studio),
                         ],
                       ),
                       const SizedBox(height: 10),
@@ -1448,7 +1466,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           _error == null &&
                           numbers.isEmpty)
                         const Text(
-                            'No episode list available for this title yet.'),
+                            'Episode details will appear here once AniList data loads.'),
                     ],
                   ),
                 ),

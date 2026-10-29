@@ -26,12 +26,12 @@ const gaThemes = <({String value, String label, Color color})>[
   (value: 'rose', label: 'Rose', color: Color(0xFFF43F5E)),
 ];
 
-/// Theme name -> accent color. Unknown names fall back to emerald.
+/// Theme name -> accent color. Unknown names fall back to white (website default).
 Color themeAccent(String theme) {
   for (final t in gaThemes) {
     if (t.value == theme) return t.color;
   }
-  return gaGreen;
+  return const Color(0xFFFFFFFF);
 }
 
 /// Scaffold shell for a settings sub-screen: rounded back button + title.
