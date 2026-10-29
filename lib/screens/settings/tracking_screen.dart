@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../store.dart';
 import '../../models.dart';
 import '../../services/trackers.dart';
+import '../../services/oauth.dart';
 import 'settings_shell.dart';
 
 class TrackingSettingsScreen extends StatefulWidget {
@@ -28,12 +29,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   final _malUser = TextEditingController();
   final _malClient = TextEditingController();
   String _msg = '';
-  // Website parity (Config.OAUTH): baked-in client IDs for one-tap connect.
-  // Public IDs from the website's public config.js — safe to ship.
-  // Note: _anilistClientId is already defined above (line 33).
-  static const _malClientId = 'f15fbfc461e31b1674c0747f5e680f01';
-  static const _simklClientId =
-      '49dfaf44602c7464026066ff52eb2e4fb797f26a136a2107c250e5d9f73f8a7b';
+  // Note: Client IDs are in OAuthService (website parity).
   String? _open;
   bool _busy = false;
 
@@ -300,21 +296,193 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     }
   }
 
+  /// Website parity: true OAuth one-tap for Simkl.
+  /// Opens browser to Simkl OAuth, user pastes the code, app exchanges via relay.
+  Future<void> _simklOAuth() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _msg = '';
+    });
+    try {
+      final verifier = OAuthService.generateVerifier();
+      final challenge = OAuthService.s256Challenge(verifier);
+      final state = OAuthService.generateState();
+      final url = OAuthService.simklAuthorizeUrl(challenge, state);
+      
+      // Open browser
+      final uri = Uri.parse(url);
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw Exception('Could not open browser');
+      }
+      
+      // Show dialog for code paste
+      if (!mounted) return;
+      final code = await showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          final ctrl = TextEditingController();
+          return AlertDialog(
+            title: const Text('Paste Simkl Code'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'After approving in the browser, copy the code from the URL (after ?code=) and paste it here.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste code here',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+                child: const Text('Connect'),
+              ),
+            ],
+          );
+        },
+      );
+      
+      if (code == null || code.isEmpty) {
+        setState(() => _msg = 'Cancelled.');
+        return;
+      }
+      
+      // Extract code from URL if user pasted full URL
+      var cleanCode = code;
+      if (code.contains('code=')) {
+        final m = RegExp(r'[?&]code=([^&]+)').firstMatch(code);
+        if (m != null) cleanCode = Uri.decodeComponent(m.group(1)!);
+      }
+      
+      setState(() => _msg = 'Exchanging code...');
+      final data = await OAuthService.exchangeSimkl(cleanCode, verifier);
+      
+      final m = await Store.tracker();
+      m['simklClientId'] = OAuthService.simklClientId;
+      m['simklToken'] = data['access_token'];
+      m['simklRefreshToken'] = data['refresh_token'] ?? '';
+      m['simklExpiresAt'] = data['expires_in'] != null
+          ? DateTime.now().millisecondsSinceEpoch + (data['expires_in'] as int) * 1000
+          : 0;
+      await Store.saveTracker(m);
+      _msg = 'Simkl connected via OAuth.';
+      await _reload();
+      if (mounted) setState(() {});
+    } catch (e) {
+      _msg = 'Simkl OAuth failed: $e';
+      if (mounted) setState(() {});
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Website parity: true OAuth one-tap for MAL.
+  Future<void> _malOAuth() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _msg = '';
+    });
+    try {
+      final verifier = OAuthService.generateVerifier();
+      final state = OAuthService.generateState();
+      final url = OAuthService.malAuthorizeUrl(verifier, state);
+      
+      final uri = Uri.parse(url);
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw Exception('Could not open browser');
+      }
+      
+      if (!mounted) return;
+      final code = await showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          final ctrl = TextEditingController();
+          return AlertDialog(
+            title: const Text('Paste MAL Code'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'After approving in the browser, copy the code from the URL (after ?code=) and paste it here.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  decoration: const InputDecoration(
+                    hintText: 'Paste code here',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+                child: const Text('Connect'),
+              ),
+            ],
+          );
+        },
+      );
+      
+      if (code == null || code.isEmpty) {
+        setState(() => _msg = 'Cancelled.');
+        return;
+      }
+      
+      var cleanCode = code;
+      if (code.contains('code=')) {
+        final m = RegExp(r'[?&]code=([^&]+)').firstMatch(code);
+        if (m != null) cleanCode = Uri.decodeComponent(m.group(1)!);
+      }
+      
+      setState(() => _msg = 'Exchanging code...');
+      final data = await OAuthService.exchangeMal(cleanCode, verifier);
+      
+      final m = await Store.tracker();
+      m['malClientId'] = OAuthService.malClientId;
+      m['malToken'] = data['access_token'];
+      m['malRefreshToken'] = data['refresh_token'] ?? '';
+      await Store.saveTracker(m);
+      _msg = 'MAL connected via OAuth.';
+      await _reload();
+      if (mounted) setState(() {});
+    } catch (e) {
+      _msg = 'MAL OAuth failed: $e';
+      if (mounted) setState(() {});
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Widget _simklForm() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Website parity (connectSimklOneClick): one tap fills the baked-in
-        // client ID and starts the PIN flow — no manual ID entry.
+        // Website parity: true OAuth one-tap (browser login, not PIN).
         gaGreenButton(
           context: context,
           label: 'Connect with Simkl',
-          onPressed: _busy
-              ? null
-              : () {
-                  _skClient.text = _simklClientId;
-                  _simklConnect();
-                },
+          onPressed: _busy ? null : _simklOAuth,
         ),
         const SizedBox(height: 12),
         gaTextField(context: context, controller: _skClient, hint: 'Simkl client id'),
@@ -366,19 +534,11 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Website parity (connectMalOneClick): one tap fills the baked-in
-        // client ID — user just enters username and saves.
+        // Website parity: true OAuth one-tap (browser login).
         gaGreenButton(
           context: context,
           label: 'Connect with MAL',
-          onPressed: _busy
-              ? null
-              : () {
-                  setState(() {
-                    _malClient.text = _malClientId;
-                    _msg = 'Client ID filled — enter your MAL username and tap Save.';
-                  });
-                },
+          onPressed: _busy ? null : _malOAuth,
         ),
         const SizedBox(height: 12),
         gaTextField(context: context, controller: _malUser, hint: 'MAL username'),
