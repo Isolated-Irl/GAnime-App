@@ -24,9 +24,13 @@ class Kitsu {
   static Future<Map<String, dynamic>> _get(String path) async {
     // Website parity (anilist.js _post): retry ONCE on 429 only, honoring
     // Retry-After when present, else ~2s. Never retry 400/401/404.
+    // 15s timeout: Kitsu calls with wrong IDs (e.g. AniList ID passed as
+    // Kitsu ID from calendar) must fail fast, not hang the details page.
     http.Response? r;
     for (var attempt = 0; attempt < 2; attempt++) {
-      r = await http.get(Uri.parse('$_base$path'), headers: _headers);
+      r = await http
+          .get(Uri.parse('$_base$path'), headers: _headers)
+          .timeout(const Duration(seconds: 15));
       if (r.statusCode != 429 || attempt == 1) break;
       final ra = int.tryParse(r.headers['retry-after'] ?? '');
       await Future.delayed(Duration(seconds: ra ?? 2));

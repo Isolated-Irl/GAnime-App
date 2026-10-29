@@ -129,6 +129,82 @@ class _GAnimeAppState extends State<GAnimeApp> {
     }
   }
 
+  /// Website parity (_pullThenRoute, 2026-10-26 fix): pull the cloud doc after
+  /// sign-in (8s timeout) and union remote profiles into the local store
+  /// (local wins on conflict) so routing sees the cloud's profiles. Returns
+  /// true when the pull succeeded — even when the cloud simply has no
+  /// profiles yet.
+  Future<bool> _pullCloudProfiles() async {
+    try {
+      final doc = await _firebase
+          .pullDocumentJson()
+          .timeout(const Duration(seconds: 8));
+      if (doc == null) return false;
+      final remoteProfiles = (doc['profiles'] as List?) ?? [];
+      if (remoteProfiles.isNotEmpty) {
+        final local = await Store.profiles(_account);
+        final byId = <String, Profile>{};
+        for (final p in remoteProfiles) {
+          try {
+            final prof = Profile.fromJson(
+                Map<String, dynamic>.from(p as Map));
+            byId[prof.id] = prof;
+          } catch (_) {}
+        }
+        for (final p in local) {
+          byId[p.id] = p;
+        }
+        await Store.saveProfiles(_account, byId.values.toList());
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Website parity (showCloudRetry, 2026-10-26 fix): when the cloud can't be
+  /// reached and there are no local profiles, offer Retry / Continue on this
+  /// device — never silently push toward creating a duplicate profile.
+  void _showCloudRetry() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Couldn't reach your cloud"),
+        content: const Text(
+          "Your profiles live in the cloud, but the app couldn't reach it "
+          "just now. Check your connection and try again — don't create a "
+          "new profile yet, or you'll end up with a duplicate.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _openAddProfile();
+            },
+            child: const Text('Continue on this device'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              final pulled = await _pullCloudProfiles();
+              await _reloadProfiles();
+              if (!mounted) return;
+              if (_profiles.isNotEmpty) {
+                setState(() => _phase = _BootPhase.picker);
+              } else if (!pulled) {
+                _showCloudRetry();
+              } else {
+                _openAddProfile();
+              }
+            },
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Refresh the profile list from the store (after add/rename/delete).
   Future<void> _reloadProfiles() async {
     final profiles = await Store.profiles(_account);
@@ -170,6 +246,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
         onCreated: () async {
           _navKey.currentState?.pop();
           await _reloadProfiles();
+          // If profiles exist now, go to picker (not back to login gate).
+          if (mounted && _profiles.isNotEmpty) {
+            setState(() => _phase = _BootPhase.picker);
+          }
         },
       ),
     ));
@@ -180,7 +260,9 @@ class _GAnimeAppState extends State<GAnimeApp> {
     if (ctx == null) return;
     showModalBottomSheet(
       context: ctx,
-      backgroundColor: GaColors.of(context).field,
+      // Use ctx (below MaterialApp) not root context — GaColors is
+      // only available inside MaterialApp's theme.
+      backgroundColor: GaColors.of(ctx).field,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (sheetCtx) => _ManageProfilesSheet(
@@ -332,12 +414,19 @@ class _GAnimeAppState extends State<GAnimeApp> {
         home = WelcomeBackScreen(
           firebase: _firebase,
           onSignedIn: () async {
+            // Website parity (_pullThenRoute, 2026-10-26 fix): pull the cloud
+            // doc FIRST so a fresh device doesn't get pushed to create a
+            // brand-new profile when the cloud already has profiles. Never
+            // route straight to create-first on a failed pull.
+            final pulled = await _pullCloudProfiles();
             await _reloadProfiles();
             if (!mounted) return;
-            if (_profiles.isEmpty) {
-              _openAddProfile();
-            } else {
+            if (_profiles.isNotEmpty) {
               setState(() => _phase = _BootPhase.picker);
+            } else if (!pulled) {
+              _showCloudRetry();
+            } else {
+              _openAddProfile();
             }
           },
           onGuest: () => setState(() => _phase = _BootPhase.picker),
@@ -423,6 +512,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
     // Every tab gets the top bar (website parity: the site's home has the
     // header row with the logo + profile avatar above the hero).
     return Scaffold(
+        extendBody: true, // Content scrolls under the frosted nav pill
         // Web top bar on all tabs: logo mark + "nime" left, profile
         // avatar right. Tapping the avatar opens the Who's watching? picker.
         // Liquid Glass (same Settings > Layout toggle as the bottom pill):
