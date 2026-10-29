@@ -1,7 +1,9 @@
-// Firebase via REST — no google-services.json, no config in the repo.
-// The user enters their own Firebase project config (apiKey + projectId)
-// in Settings, stored ONLY on-device. Auth uses Identity Toolkit,
-// Firestore uses the REST API with the user's idToken.
+// Firebase via REST — no google-services.json.
+// Client keys are baked in (lib/firebase_config.dart), mirrored from the
+// public GAnime website config — they are public client keys by design,
+// secured by Firestore rules + API restrictions, not secrecy.
+// Auth uses Identity Toolkit, Firestore uses the REST API with the user's
+// idToken.
 // Document: users/{uid} — same merge rules as the web app:
 //   * profiles + addons: union, local wins on conflict
 //   * settings: newer timestamp wins, per key
@@ -12,6 +14,7 @@
 //     storing manifest URLs, never resolved stream URLs).
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../firebase_config.dart';
 import '../models.dart';
 import '../store.dart';
 
@@ -26,23 +29,16 @@ class FirebaseSync {
   bool get signedIn => _idToken != null && _uid != null;
 
   Future<void> loadConfig() async {
+    // Baked-in public client keys; a stored on-device config overrides
+    // them if one was ever saved (kept for back-compat only — the UI no
+    // longer asks for keys).
     final cfg = await Store.firebaseConfig();
     _apiKey = (cfg['apiKey'] as String?)?.isNotEmpty == true
         ? cfg['apiKey'] as String
-        : null;
+        : kFirebaseApiKey;
     _projectId = (cfg['projectId'] as String?)?.isNotEmpty == true
         ? cfg['projectId'] as String
-        : null;
-  }
-
-  Future<void> saveConfig(String apiKey, String projectId) async {
-    // Merge: never clobber the persisted auth email.
-    final cur = await Store.firebaseConfig();
-    cur['apiKey'] = apiKey;
-    cur['projectId'] = projectId;
-    await Store.saveFirebaseConfig(cur);
-    _apiKey = apiKey;
-    _projectId = projectId;
+        : kFirebaseProjectId;
   }
 
   /// Email used at the last successful auth, persisted on-device only
@@ -59,7 +55,7 @@ class FirebaseSync {
   }
 
   Future<void> _auth(String mode, String email, String password) async {
-    if (!configured) throw Exception('Firebase not configured in Settings.');
+    if (!configured) throw Exception('Firebase unavailable. Try again later.');
     final r = await http.post(
       Uri.parse(
           'https://identitytoolkit.googleapis.com/v1/accounts:$mode?key=$_apiKey'),
@@ -87,7 +83,7 @@ class FirebaseSync {
   /// Sends a Firebase password-reset email (Identity Toolkit
   /// accounts:sendOobCode). Used by the "Forgot password?" button.
   Future<void> sendPasswordReset(String email) async {
-    if (!configured) throw Exception('Firebase not configured in Settings.');
+    if (!configured) throw Exception('Firebase unavailable. Try again later.');
     final r = await http.post(
       Uri.parse(
           'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=$_apiKey'),
@@ -205,7 +201,12 @@ class FirebaseSync {
       body: jsonEncode(body),
     );
     if (r.statusCode != 200) throw Exception('Firestore push failed: ${r.body}');
-    await Store.setLastSync(DateTime.now().toIso8601String());
+    final at = DateTime.now().toIso8601String();
+    await Store.setLastSync(at);
+    // Website parity: Sync.getLast() = {at, status, detail}; the push
+    // merges remote + local before writing, hence 'Merged and synced'.
+    await Store.setSyncRecord(
+        at: at, status: 'synced', detail: 'Merged and synced');
   }
 
   Future<Map<String, dynamic>?> pullRaw() async {

@@ -44,12 +44,30 @@ class _GAnimeAppState extends State<GAnimeApp> {
   final String _account = 'guest';
   String _profileId = 'p1';
   AppSettings _settings = const AppSettings();
+  // Tracks the last applied status-bar visibility so we only hit the
+  // platform channel when the Layout > Hide Status Bar toggle changes.
+  bool _lastHideStatusBar = false;
+
+  /// Applies Settings > Layout > Hide Status Bar: hides the system
+  /// notification (status) bar for a fullscreen look, restores it when off.
+  void _applySystemUI() {
+    if (_settings.hideStatusBar == _lastHideStatusBar) return;
+    _lastHideStatusBar = _settings.hideStatusBar;
+    if (_settings.hideStatusBar) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
   int _tab = 0;
-  // Boot flow: loading -> splash (once, ~1.5s) -> gate (no session) or
+  // Boot flow: loading -> splash (once, ~2.2s) -> gate (no session) or
   // picker (session/guest) -> home. Matches the website's rule: profile
   // picker when a session exists, sign-in page when there is none.
   _BootPhase _phase = _BootPhase.loading;
   List<Profile> _profiles = [];
+  // Website parity: no profiles = straight to Add Profile (create-first).
+  // Distinguishes "still loading" (skeleton) from "loaded, none" (add).
+  bool _profilesLoaded = false;
 
   @override
   void initState() {
@@ -67,11 +85,17 @@ class _GAnimeAppState extends State<GAnimeApp> {
     setState(() {
       _settings = settings;
       _profiles = profiles;
-      _profileId = active ?? profiles.first.id;
+      _profilesLoaded = true;
+      // Validate the saved active id (stale ids must not survive), and
+      // never crash on an empty list — the app no longer seeds a profile.
+      _profileId = (active != null && profiles.any((p) => p.id == active))
+          ? active
+          : (profiles.isNotEmpty ? profiles.first.id : _profileId);
       _phase = _BootPhase.splash;
     });
-    // Branded beat, then route. Plays once per cold start.
-    await Future.delayed(const Duration(milliseconds: 1500));
+    // Branded beat, then route. Plays once per cold start. The splash
+    // animation runs ~1.75s; hold slightly past it so it completes.
+    await Future.delayed(const Duration(milliseconds: 2200));
     if (!mounted) return;
     setState(() {
       _phase = guest ? _BootPhase.picker : _BootPhase.gate;
@@ -85,7 +109,15 @@ class _GAnimeAppState extends State<GAnimeApp> {
     if (!mounted) return;
     setState(() {
       _profiles = profiles;
-      _profileId = active ?? profiles.first.id;
+      _profilesLoaded = true;
+      _profileId = (active != null && profiles.any((p) => p.id == active))
+          ? active
+          : (profiles.isNotEmpty ? profiles.first.id : _profileId);
+      // If the last profile was deleted while in the app, fall back to
+      // the picker (which routes to Add Profile when empty).
+      if (_profiles.isEmpty && _phase == _BootPhase.home) {
+        _phase = _BootPhase.picker;
+      }
     });
   }
 
@@ -205,6 +237,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
 
   @override
   Widget build(BuildContext context) {
+    _applySystemUI();
     // Real theme switch: Dark (#0d0d0d family) vs AMOLED true-black.
     // GaColors carries the per-mode surfaces so scaffolds, cards, sheets,
     // dialogs and inputs all follow the mode — not just the scaffold.
@@ -285,19 +318,30 @@ class _GAnimeAppState extends State<GAnimeApp> {
         break;
       case _BootPhase.picker:
         // Profiles load before the splash, so this is normally instant.
-        // The empty branch shows skeleton circles matching the picker.
-        home = _profiles.isEmpty
-            ? const Scaffold(
-                backgroundColor: Colors.black, body: SkeletonPicker())
-            : ProfilePickerScreen(
-                account: _account,
-                profiles: _profiles,
-                activeId: _profileId,
-                onSelect: _pickProfile,
-                onAddProfile: _openAddProfile,
-                onManage: _openManageProfiles,
-                onBack: _pickerBack,
-              );
+        // Website parity (create-first): no profiles = straight to Add
+        // Profile — the app never auto-creates one. No back button there
+        // (the web hides it too when it's the first profile).
+        if (!_profilesLoaded) {
+          home = const Scaffold(
+              backgroundColor: Colors.black, body: SkeletonPicker());
+        } else if (_profiles.isEmpty) {
+          home = AddProfileScreen(
+            account: _account,
+            isFirst: true,
+            showBack: false,
+            onCreated: () async => _reloadProfiles(),
+          );
+        } else {
+          home = ProfilePickerScreen(
+            account: _account,
+            profiles: _profiles,
+            activeId: _profileId,
+            onSelect: _pickProfile,
+            onAddProfile: _openAddProfile,
+            onManage: _openManageProfiles,
+            onBack: _pickerBack,
+          );
+        }
         break;
       case _BootPhase.home:
         // Builder gives the shell a context BELOW MaterialApp, so
@@ -341,7 +385,12 @@ class _GAnimeAppState extends State<GAnimeApp> {
         settings: _settings,
         firebase: _firebase,
         onSettings: (s) => setState(() => _settings = s),
-        onProfile: (id) => setState(() => _profileId = id),
+        // Website parity: the account tab returns to the auth gate on
+        // Sign Out (signed-in) and on Sign In / Create Account (guest).
+        onBackToGate: () {
+          _navKey.currentState?.popUntil((r) => r.isFirst);
+          setState(() => _phase = _BootPhase.gate);
+        },
       ),
     ];
     // Every tab gets the top bar (website parity: the site's home has the
@@ -349,9 +398,45 @@ class _GAnimeAppState extends State<GAnimeApp> {
     return Scaffold(
         // Web top bar on all tabs: logo mark + "nime" left, profile
         // avatar right. Tapping the avatar opens the Who's watching? picker.
+        // Liquid Glass (same Settings > Layout toggle as the bottom pill):
+        // iOS-style frosted bar — 28px blur, sheen, hairline bottom edge.
         appBar: AppBar(
-                backgroundColor: GaColors.of(context).surface,
+                backgroundColor: _settings.liquidGlassTabBar
+                    ? Colors.transparent
+                    : GaColors.of(context).surface,
                 elevation: 0,
+                flexibleSpace: _settings.liquidGlassTabBar
+                    ? ClipRect(
+                        child: BackdropFilter(
+                          filter:
+                              ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: (_settings.amoledBlack
+                                      ? Colors.black
+                                      : GaColors.of(context).surface)
+                                  .withValues(alpha: 0.55),
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.white
+                                      .withValues(alpha: 0.10),
+                                  Colors.white
+                                      .withValues(alpha: 0.02),
+                                ],
+                              ),
+                              border: Border(
+                                bottom: BorderSide(
+                                    color: Colors.white.withValues(
+                                        alpha: 0.18),
+                                    width: 1),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    : null,
                 titleSpacing: 16,
                 title: const Row(
                   mainAxisSize: MainAxisSize.min,
@@ -384,9 +469,9 @@ class _GAnimeAppState extends State<GAnimeApp> {
         body: screens[_tab],
         // Web bottom nav is a floating pill, not a full-width bar.
         // Liquid Glass Tab Bar (Settings > Layout, default ON like the
-        // website): frosted pill — translucent fill + 14px blur, matching
-        // the site's .floating-pill-nav. OFF = solid pill. Works in both
-        // Dark and AMOLED modes.
+        // website): iOS-style frosted pill — 28px blur, translucent fill,
+        // specular top edge, vertical sheen. OFF = solid pill. Works in
+        // both Dark and AMOLED modes.
         bottomNavigationBar: Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           child: _navPill(context),
@@ -394,8 +479,9 @@ class _GAnimeAppState extends State<GAnimeApp> {
     );
   }
 
-  /// Floating nav pill. Glass variant uses BackdropFilter blur over a
-  /// translucent fill; solid variant is the plain elevated pill.
+  /// Floating nav pill. Glass variant is iOS-style Liquid Glass: 28px
+  /// BackdropFilter blur, translucent fill, specular top edge, sheen
+  /// gradient; solid variant is the plain elevated pill.
   Widget _navPill(BuildContext context) {
     final glass = _settings.liquidGlassTabBar;
     final amoled = _settings.amoledBlack;
@@ -465,16 +551,38 @@ class _GAnimeAppState extends State<GAnimeApp> {
         ],
       ),
     );
+    // iOS-style Liquid Glass: strong blur + translucent fill + specular
+    // top edge (light catching the glass) + vertical sheen gradient.
+    // OFF = solid elevated pill.
     final decoration = BoxDecoration(
-      // Website glass fill: rgba(26,26,26,0.82); solid-off: elevated.
-      // In AMOLED the glass fill is translucent black instead.
       color: glass
           ? (amoled
-              ? Colors.black.withValues(alpha: 0.72)
-              : GaColors.of(context).field.withValues(alpha: 0.82))
+              ? Colors.black.withValues(alpha: 0.55)
+              : GaColors.of(context).field.withValues(alpha: 0.55))
           : (amoled ? Colors.black : const Color(0xFF1E1E1E)),
       borderRadius: BorderRadius.circular(32),
-      border: Border.all(color: Colors.grey.shade800),
+      border: glass
+          ? Border(
+              top: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.28), width: 1),
+              left: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.10), width: 1),
+              right: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.10), width: 1),
+              bottom: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.06), width: 1),
+            )
+          : Border.all(color: Colors.grey.shade800),
+      gradient: glass
+          ? LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.white.withValues(alpha: 0.10),
+                Colors.white.withValues(alpha: 0.02),
+              ],
+            )
+          : null,
       boxShadow: const [
         BoxShadow(color: Colors.black54, blurRadius: 16)
       ],
@@ -484,7 +592,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
         child: pill,
       ),
     );

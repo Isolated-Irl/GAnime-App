@@ -287,6 +287,7 @@ class AppSettings {
   final bool amoledBlack;
   final String navBarPosition; // 'bottom'
   final bool liquidGlassTabBar;
+  final bool hideStatusBar;
   final String heroStyle; // 'full_bleed'
   final bool heroTrailerAutoplay;
   final bool heroTrailerSound;
@@ -326,6 +327,7 @@ class AppSettings {
     this.amoledBlack = false,
     this.navBarPosition = 'bottom',
     this.liquidGlassTabBar = true,
+    this.hideStatusBar = false,
     this.heroStyle = 'full_bleed',
     this.heroTrailerAutoplay = true,
     this.heroTrailerSound = false,
@@ -365,6 +367,7 @@ class AppSettings {
         'amoledBlack': amoledBlack,
         'navBarPosition': navBarPosition,
         'liquidGlassTabBar': liquidGlassTabBar,
+        'hideStatusBar': hideStatusBar,
         'heroStyle': heroStyle,
         'heroTrailerAutoplay': heroTrailerAutoplay,
         'heroTrailerSound': heroTrailerSound,
@@ -407,6 +410,7 @@ class AppSettings {
         amoledBlack: (j['amoledBlack'] as bool?) ?? false,
         navBarPosition: (j['navBarPosition'] as String?) ?? 'bottom',
         liquidGlassTabBar: (j['liquidGlassTabBar'] as bool?) ?? true,
+        hideStatusBar: (j['hideStatusBar'] as bool?) ?? false,
         heroStyle: (j['heroStyle'] as String?) ?? 'full_bleed',
         heroTrailerAutoplay: (j['heroTrailerAutoplay'] as bool?) ?? true,
         heroTrailerSound: (j['heroTrailerSound'] as bool?) ?? false,
@@ -449,6 +453,7 @@ class AppSettings {
     bool? amoledBlack,
     String? navBarPosition,
     bool? liquidGlassTabBar,
+    bool? hideStatusBar,
     String? heroStyle,
     bool? heroTrailerAutoplay,
     bool? heroTrailerSound,
@@ -494,6 +499,7 @@ class AppSettings {
         amoledBlack: amoledBlack ?? this.amoledBlack,
         navBarPosition: navBarPosition ?? this.navBarPosition,
         liquidGlassTabBar: liquidGlassTabBar ?? this.liquidGlassTabBar,
+        hideStatusBar: hideStatusBar ?? this.hideStatusBar,
         heroStyle: heroStyle ?? this.heroStyle,
         heroTrailerAutoplay:
             heroTrailerAutoplay ?? this.heroTrailerAutoplay,

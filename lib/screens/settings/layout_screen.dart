@@ -131,6 +131,12 @@ class _LayoutSettingsScreenState extends State<LayoutSettingsScreen> {
           value: _s.liquidGlassTabBar,
           onChanged: (v) => _save(_s.copyWith(liquidGlassTabBar: v)),
         ),
+        gaToggleRow(
+          title: 'Hide Status Bar',
+          subtitle: 'Hide the system notification bar for a fullscreen look.',
+          value: _s.hideStatusBar,
+          onChanged: (v) => _save(_s.copyWith(hideStatusBar: v)),
+        ),
         gaSectionLabel('Home & Details'),
         gaDropdownRow(
           context: context,

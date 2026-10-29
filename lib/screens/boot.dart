@@ -2,6 +2,8 @@
 // splash -> auth gate (Welcome back) -> profile picker -> add profile.
 // Avatar catalog mirrors the website's Config.AVATAR_CATALOG exactly
 // (same names/emoji/backgrounds) so avatars match across web and app.
+import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../models.dart';
@@ -76,11 +78,92 @@ class ProfileAvatar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Splash: dark gradient + logo, brief branded beat (~1.5s, once per cold
-// start — the parent advances past it on a timer).
+// Splash: the website's full intro animation, ported to Flutter —
+// the mark DRAWS itself while folding -90°→0° (1s, 0.05–1.05s), slides
+// left (0.55s, 0.85–1.4s), and the "nime" letters rise in staggered;
+// an accent glow pulses behind throughout. ~1.75s total, then the boot
+// flow advances past it (main.dart's splash timer).
 // ---------------------------------------------------------------------------
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
+  static const _totalMs = 1750;
+  static const _logoSize = 72.0;
+
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: _totalMs),
+  )..forward();
+  late final AnimationController _glow = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat(reverse: true);
+
+  late final Animation<double> _draw;
+  late final Animation<double> _fold;
+  late final Animation<double> _slide;
+  late final List<Animation<double>> _letters;
+
+  /// Horizontal shift that keeps the logo visually centered while the
+  /// (initially invisible) letters reserve their layout space.
+  double _shift = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // cubic-bezier(0.4, 0, 0.2, 1) == Curves.fastOutSlowIn.
+    const siteCurve = Curves.fastOutSlowIn;
+    _draw = Tween(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+          parent: _c,
+          curve: const Interval(0.03, 0.60, curve: siteCurve)),
+    );
+    _fold = Tween(begin: -math.pi / 2, end: 0.0).animate(
+      CurvedAnimation(
+          parent: _c,
+          curve: const Interval(0.03, 0.60, curve: siteCurve)),
+    );
+    _slide = Tween(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(
+          parent: _c,
+          curve: const Interval(0.486, 0.80, curve: siteCurve)),
+    );
+    // "nime" letters rise staggered: 0.35s each, ~80ms stagger, easeOut.
+    _letters = [
+      for (int i = 0; i < 4; i++)
+        Tween(begin: 0.0, end: 1.0).animate(
+          CurvedAnimation(
+            parent: _c,
+            curve: Interval(
+              (0.80 + i * 0.046).clamp(0.0, 1.0),
+              (0.80 + i * 0.046 + 0.20).clamp(0.0, 1.0),
+              curve: Curves.easeOut,
+            ),
+          ),
+        ),
+    ];
+    // Measure "nime" so the logo starts perfectly centered.
+    final tp = TextPainter(
+      text: const TextSpan(
+          text: 'nime',
+          style: TextStyle(fontSize: 44, fontWeight: FontWeight.w800)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _shift = (tp.width + 8) / 2;
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    _glow.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -93,16 +176,78 @@ class SplashScreen extends StatelessWidget {
             colors: [Color(0xFF1E1E1E), Color(0xFF0A0A0A)],
           ),
         ),
-        child: const SafeArea(
+        child: SafeArea(
           child: Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+            child: Stack(
+              alignment: Alignment.center,
               children: [
-                LogoMark(size: 64),
-                SizedBox(width: 6),
-                Text('nime',
-                    style: TextStyle(
-                        fontSize: 40, fontWeight: FontWeight.w800)),
+                // Pulsing accent glow behind the logo (site's splashGlow).
+                AnimatedBuilder(
+                  animation: _glow,
+                  builder: (_, _) => Opacity(
+                    opacity: 0.65 + 0.35 * _glow.value,
+                    child: ImageFiltered(
+                      imageFilter:
+                          ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                      child: Container(
+                        width: 340,
+                        height: 340,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: RadialGradient(
+                            colors: [
+                              Color(0x4710B981),
+                              Colors.transparent,
+                            ],
+                            stops: [0.0, 0.65],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // Logo lockup: draw + fold, then slide left as the
+                // letters rise in staggered to its right.
+                AnimatedBuilder(
+                  animation: _c,
+                  builder: (_, _) => Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Transform.translate(
+                        offset: Offset(_shift * _slide.value, 0),
+                        child: Transform.rotate(
+                          angle: _fold.value,
+                          alignment: Alignment.center,
+                          child: CustomPaint(
+                            size: const Size(_logoSize, _logoSize),
+                            painter: _SplashLogoPainter(_draw.value),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (int i = 0; i < 4; i++)
+                            Opacity(
+                              opacity: _letters[i].value,
+                              child: Transform.translate(
+                                offset: Offset(
+                                    0, 16 * (1 - _letters[i].value)),
+                                child: Text(
+                                  'nime'[i],
+                                  style: const TextStyle(
+                                      fontSize: 44,
+                                      fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -110,6 +255,61 @@ class SplashScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Draws the GAnime mark progressively (website's splashDraw): the folded-G
+/// path from widgets/logo.dart, revealed 0→100% via PathMetrics, with the
+/// diamond popping in near the end of the draw. Same gradient as the logo.
+class _SplashLogoPainter extends CustomPainter {
+  final double progress;
+  _SplashLogoPainter(this.progress);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 512;
+    final shader = const LinearGradient(
+      begin: Alignment.bottomLeft,
+      end: Alignment.topRight,
+      colors: [
+        Color(0xFF064E3B),
+        Color(0xFF059669),
+        Color(0xFF10B981),
+        Color(0xFFA3E635),
+      ],
+      stops: [0.0, 0.45, 0.75, 1.0],
+    ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 50 * s
+      ..strokeCap = StrokeCap.butt
+      ..strokeJoin = StrokeJoin.miter
+      ..shader = shader;
+    final path = Path()
+      ..moveTo(300 * s, 300 * s)
+      ..lineTo(105 * s, 430 * s)
+      ..lineTo(265 * s, 95 * s)
+      ..lineTo(415 * s, 415 * s);
+    final p = progress.clamp(0.0, 1.0);
+    for (final m in path.computeMetrics()) {
+      final len = m.length * p;
+      if (len > 0.5) canvas.drawPath(m.extractPath(0, len), paint);
+    }
+    // Diamond appears as the draw completes.
+    if (p > 0.72) {
+      final diamond = Path()
+        ..moveTo(448 * s, 398 * s)
+        ..lineTo(465 * s, 415 * s)
+        ..moveTo(448 * s, 432 * s)
+        ..lineTo(431 * s, 415 * s)
+        ..close();
+      canvas.drawPath(
+          diamond, Paint()..style = PaintingStyle.fill..shader = shader);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SplashLogoPainter old) =>
+      old.progress != progress;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,12 +516,6 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
                 widget.onGuest();
               }),
               const SizedBox(height: 16),
-              if (!widget.firebase.configured)
-                const Text(
-                    'Note: Firebase is not configured yet — sign-in needs your project keys in Settings > Account. Guest mode works without it.',
-                    textAlign: TextAlign.center,
-                    style:
-                        TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
             ],
           ),
         ),
@@ -494,9 +688,14 @@ class AddProfileScreen extends StatefulWidget {
       {super.key,
       required this.account,
       required this.isFirst,
+      this.showBack = true,
       required this.onCreated});
   final String account;
   final bool isFirst;
+
+  /// Website parity: the create-first Add Profile (no profiles yet) has
+  /// no back button — the web hides it too in that state.
+  final bool showBack;
   final VoidCallback onCreated;
 
   @override
@@ -572,10 +771,13 @@ class _AddProfileScreenState extends State<AddProfileScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        automaticallyImplyLeading: widget.showBack,
+        leading: widget.showBack
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         title: const Text('Add Profile',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
       ),

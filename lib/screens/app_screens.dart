@@ -270,6 +270,10 @@ class _HomeScreenState extends State<HomeScreen> {
           return ListView(
             children: [
               if (ls.showHero) skeletonHero(),
+              // 16px gap mirrors the real home (the section wrapper's top
+              // padding) — without it the first rail header sits flush
+              // against the hero and looks like it's touching.
+              if (ls.showHero) const SizedBox(height: 16),
               for (final t in railTitles) skeletonRail(title: t),
             ],
           );
@@ -743,6 +747,10 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _subtype; // TV | movie | OVA | ONA | special
   String? _status; // current | finished | upcoming
   String? _sort; // ratingRank | -userCount | -startDate
+  // Which filter-sheet panel is open (website pattern: one panel at a
+  // time, inline below its control — no overlay dropdowns). Null = closed.
+  // 'genres' | 'year' | 'season' | 'format' | 'status' | 'sort'
+  String? _openFilterPanel;
   String? _season; // winter | spring | summer | fall (requires _year)
 
   @override
@@ -832,8 +840,8 @@ class _SearchScreenState extends State<SearchScreen> {
     String? subtype = _subtype;
     String? status = _status;
     String? sort = _sort;
-    // Genres start collapsed (compact); expand to see the full grid.
-    bool genresExpanded = false;
+    // Start with all panels closed.
+    _openFilterPanel = null;
     // Season result counts for the picked year (null = not loaded yet).
     Map<String, int>? seasonCounts;
     // Refresh hook into the sheet's StatefulBuilder; nulled when the
@@ -882,33 +890,57 @@ class _SearchScreenState extends State<SearchScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) {
           refresh = setSheet;
+          // Cap the sheet height so the content can scroll while the
+          // header and the Clear/Apply action bar stay fixed (the
+          // expanded genre grid can be very tall).
+          final maxH = MediaQuery.of(ctx).size.height * 0.92;
           return SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade700,
-                      borderRadius: BorderRadius.circular(2),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxH),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Fixed header: drag handle + title (never scrolls away).
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade700,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text('Filters',
+                            style: TextStyle(
+                                fontSize: 20, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 16),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                const Text('Filters',
-                    style:
-                        TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 16),
+                  // Scrollable content: genres + dropdowns.
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                 // Genres: collapsible (Maximize/Minimize). Collapsed shows
                 // only the selected chips so the section takes little space.
+                // Website pattern: tapping toggles an inline panel; only one
+                // panel open at a time.
                 InkWell(
-                  onTap: () =>
-                      setSheet(() => genresExpanded = !genresExpanded),
+                  onTap: () => setSheet(
+                      () => _openFilterPanel =
+                          _openFilterPanel == 'genres' ? null : 'genres'),
                   borderRadius: BorderRadius.circular(8),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -933,14 +965,14 @@ class _SearchScreenState extends State<SearchScreen> {
                           ),
                         ],
                         const Spacer(),
-                        Text(genresExpanded ? 'Minimize' : 'Maximize',
+                        Text(_openFilterPanel == 'genres' ? 'Minimize' : 'Maximize',
                             style: TextStyle(
                                 color:
                                     Theme.of(context).colorScheme.primary,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13)),
                         Icon(
-                          genresExpanded
+                          _openFilterPanel == 'genres'
                               ? Icons.expand_less
                               : Icons.expand_more,
                           color: Theme.of(context).colorScheme.primary,
@@ -950,62 +982,69 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                if (_allGenres.isEmpty)
-                  const Text('Loading genres…',
-                      style: TextStyle(color: Colors.grey))
-                else if (!genresExpanded)
-                  genres.isEmpty
-                      ? const Text('No genres selected.',
-                          style: TextStyle(
-                              color: Colors.grey, fontSize: 12))
-                      : Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: genres
-                              .map((g) => FilterChip(
-                                    label: Text(g),
-                                    selected: true,
-                                    onSelected: (_) =>
-                                        setSheet(() => genres.remove(g)),
-                                    selectedColor: Theme.of(context)
-                                        .colorScheme
-                                        .primary,
-                                    checkmarkColor: Colors.black,
+                // Genre chips: collapsed shows selected only; expanded shows
+                // the full grid in a capped scrollable panel (website's
+                // .chip-grid pattern: max-height 260px). AnimatedSize keeps
+                // the expand/collapse smooth without layout jumps.
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: ClipRect(
+                    child: _allGenres.isEmpty
+                        ? const Text('Loading genres…',
+                            style: TextStyle(color: Colors.grey))
+                        : _openFilterPanel != 'genres'
+                            ? (genres.isEmpty
+                                ? const Text('No genres selected.',
+                                    style: TextStyle(
+                                        color: Colors.grey, fontSize: 12))
+                                : Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: genres
+                                        .map((g) => _genreChip(g, true,
+                                            (_) => setSheet(
+                                                () => genres.remove(g))))
+                                        .toList(),
                                   ))
-                              .toList(),
-                        )
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _allGenres
-                        .map((g) => FilterChip(
-                              label: Text(g),
-                              selected: genres.contains(g),
-                              onSelected: (v) => setSheet(() {
-                                if (v) {
-                                  genres.add(g);
-                                } else {
-                                  genres.remove(g);
-                                }
-                              }),
-                              selectedColor:
-                                  Theme.of(context).colorScheme.primary,
-                              checkmarkColor: Colors.black,
-                            ))
-                        .toList(),
+                            : ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxHeight: 260),
+                                child: SingleChildScrollView(
+                                  child: Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: _allGenres.map((g) {
+                                      final sel = genres.contains(g);
+                                      return _genreChip(
+                                          g,
+                                          sel,
+                                          (v) => setSheet(() {
+                                                if (v) {
+                                                  genres.add(g);
+                                                } else {
+                                                  genres.remove(g);
+                                                }
+                                              }));
+                                    }).toList(),
+                                  ),
+                                ),
+                              ),
                   ),
+                ),
                 const SizedBox(height: 16),
                 // Season: a proper dropdown box like Year/Format/Status.
                 // Kitsu needs seasonYear + season together, so the box
                 // stays disabled until a year is picked.
                 _filterDropdown<String?>(
+                  'season',
                   'Season',
                   season,
                   const [null, 'winter', 'spring', 'summer', 'fall'],
                   (s) => s == null ? 'Any' : seasonLabel(s),
                   (v) => setSheet(() => season = v),
                   enabled: year != null,
+                  setSheet: setSheet,
                 ),
                 if (year == null)
                   const Padding(
@@ -1015,6 +1054,7 @@ class _SearchScreenState extends State<SearchScreen> {
                             TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
                 _filterDropdown<int?>(
+                    'year',
                     'Year', year, [null, ...years], (v) => v == null ? 'Any' : '$v',
                     (v) => setSheet(() {
                           year = v;
@@ -1025,69 +1065,95 @@ class _SearchScreenState extends State<SearchScreen> {
                           } else {
                             loadSeasonCounts(v);
                           }
-                        })),
+                        }),
+                    setSheet: setSheet),
                 _filterDropdown<String?>(
+                    'format',
                     'Format',
                     subtype,
                     [null, ...formatLabels.keys],
                     (v) => v == null ? 'Any' : formatLabels[v]!,
-                    (v) => setSheet(() => subtype = v)),
+                    (v) => setSheet(() => subtype = v),
+                    setSheet: setSheet),
                 _filterDropdown<String?>(
+                    'status',
                     'Status',
                     status,
                     [null, ...statusLabels.keys],
                     (v) => v == null ? 'Any' : statusLabels[v]!,
-                    (v) => setSheet(() => status = v)),
+                    (v) => setSheet(() => status = v),
+                    setSheet: setSheet),
                 _filterDropdown<String?>(
+                    'sort',
                     'Sort by',
                     sort,
                     [null, ...sortLabels.keys],
                     (v) => v == null ? 'Relevance' : sortLabels[v]!,
-                    (v) => setSheet(() => sort = v)),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => setSheet(() {
-                          genres.clear();
-                          year = null;
-                          season = null;
-                          seasonCounts = null;
-                          subtype = null;
-                          status = null;
-                          sort = null;
-                        }),
-                        child: const Text('Clear'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          foregroundColor: Colors.black,
+                    (v) => setSheet(() => sort = v),
+                    setSheet: setSheet),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+                  // Fixed action bar: Clear / Apply stay visible above the
+                  // system safe area even with panels expanded (the sheet's
+                  // SafeArea keeps this above the nav/gesture bar).
+                  Container(
+                    decoration: BoxDecoration(
+                      color: GaColors.of(context).field,
+                      border: Border(
+                        top: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.08),
                         ),
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          setState(() {
-                            _genres
-                              ..clear()
-                              ..addAll(genres);
-                            _year = year;
-                            _season = season;
-                            _subtype = subtype;
-                            _status = status;
-                            _sort = sort;
-                          });
-                          _search();
-                        },
-                        child: const Text('Apply'),
                       ),
                     ),
-                  ],
-                ),
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => setSheet(() {
+                              genres.clear();
+                              year = null;
+                              season = null;
+                              seasonCounts = null;
+                              subtype = null;
+                              status = null;
+                              sort = null;
+                              _openFilterPanel = null;
+                            }),
+                            child: const Text('Clear'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.primary,
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              setState(() {
+                                _genres
+                                  ..clear()
+                                  ..addAll(genres);
+                                _year = year;
+                                _season = season;
+                                _subtype = subtype;
+                                _status = status;
+                                _sort = sort;
+                              });
+                              _search();
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1254,47 +1320,193 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
       );
 
-  Widget _filterDropdown<T>(String label, T value, List<T> options,
-      String Function(T) labelOf, ValueChanged<T> onChanged,
-      {bool enabled = true}) {
+  /// Genre chip with the website's .fchip styling: consistent pill shape,
+  /// padding, and borders; selected = accent bg + on-accent text
+  /// (luminance-aware so it stays readable on the White accent).
+  Widget _genreChip(
+      String label, bool selected, ValueChanged<bool> onSelected) {
+    final accent = Theme.of(context).colorScheme.primary;
+    final onAccent =
+        accent.computeLuminance() > 0.5 ? Colors.black : Colors.white;
+    return FilterChip(
+      label: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+          color: selected ? onAccent : Colors.grey.shade300,
+        ),
+      ),
+      selected: selected,
+      onSelected: onSelected,
+      backgroundColor: GaColors.of(context).card,
+      selectedColor: accent,
+      checkmarkColor: onAccent,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: selected ? accent : Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    );
+  }
+
+  /// Filter control with an inline expanding option panel — the website's
+  /// .fctrl + .fpanel pattern. The website replaced overlay dropdowns with
+  /// inline panels (a day of web-fix work) because overlay menus detach
+  /// and misposition inside scrollable sheets. Only one panel is open at
+  /// a time (openPanel state); the option list is capped at 280px and
+  /// scrolls (website's .fopt-list).
+  Widget _filterDropdown<T>(
+    String panelKey,
+    String label,
+    T value,
+    List<T> options,
+    String Function(T) labelOf,
+    ValueChanged<T> onChanged, {
+    bool enabled = true,
+    required void Function(void Function()) setSheet,
+  }) {
+    final accent = Theme.of(context).colorScheme.primary;
+    final open = _openFilterPanel == panelKey;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 90,
-            child: Text(label,
-                style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: enabled ? Colors.white : Colors.grey)),
-          ),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: GaColors.of(context).card,
-                borderRadius: BorderRadius.circular(12),
+          Row(
+            children: [
+              SizedBox(
+                width: 90,
+                child: Text(label,
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: enabled ? Colors.white : Colors.grey)),
               ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<T>(
-                  value: value,
-                  isExpanded: true,
-                  dropdownColor: GaColors.of(context).card,
-                  style: TextStyle(
-                      color: enabled ? Colors.white : Colors.grey,
-                      fontSize: 16),
-                  items: options
-                      .map((o) => DropdownMenuItem<T>(
-                            value: o,
-                            child: Text(labelOf(o)),
-                          ))
-                      .toList(),
-                  onChanged:
-                      enabled ? (v) => onChanged(v as T) : null,
+              Expanded(
+                child: Opacity(
+                  opacity: enabled ? 1.0 : 0.5,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: enabled
+                        ? () => setSheet(
+                            () => _openFilterPanel = open ? null : panelKey)
+                        : null,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: GaColors.of(context).card,
+                        borderRadius: BorderRadius.circular(12),
+                        // Website's .fctrl-btn.open: accent border when open.
+                        border: Border.all(
+                          color: open
+                              ? accent
+                              : Colors.white.withValues(alpha: 0.08),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              labelOf(value),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: enabled ? Colors.white : Colors.grey,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            open
+                                ? Icons.arrow_drop_up
+                                : Icons.arrow_drop_down,
+                            color:
+                                enabled ? Colors.white70 : Colors.grey,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // Inline option panel (website's .fpanel).
+          if (open && enabled)
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeInOut,
+              child: ClipRect(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 8),
+                  decoration: BoxDecoration(
+                    color: GaColors.of(context).card,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 280),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      itemCount: options.length,
+                      itemBuilder: (c, i) {
+                        final o = options[i];
+                        final sel = o == value;
+                        return Padding(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 6),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () {
+                              setSheet(() => _openFilterPanel = null);
+                              onChanged(o);
+                            },
+                            child: Container(
+                              constraints:
+                                  const BoxConstraints(minHeight: 48),
+                              alignment: Alignment.centerLeft,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12),
+                              decoration: BoxDecoration(
+                                // Website's .fopt.on: accent text + focus bg.
+                                color: sel
+                                    ? accent.withValues(alpha: 0.12)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      labelOf(o),
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: sel
+                                            ? accent
+                                            : Colors.grey.shade300,
+                                      ),
+                                    ),
+                                  ),
+                                  if (sel)
+                                    Icon(Icons.check,
+                                        size: 18, color: accent),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -1521,11 +1733,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
     _selectedDay ??= days.contains(todayDate) ? todayDate : monday;
     final selected = _selectedDay!;
     final weekEnd = monday.add(const Duration(days: 6));
-    // Website parity: only the current week gets the suffix, and the label
-    // never wraps (single line, 15px like the site's .cal2-range).
-    final weekLabel =
-        '${_monthName(monday.month)} ${monday.day} – ${_monthName(weekEnd.month)} ${weekEnd.day}, ${weekEnd.year}'
-        '${_weekOffset == 0 ? ' · This week' : ''}';
+    // Date range alone on line 1; the "· This week" suffix (week 0 only)
+    // goes on a smaller muted second line so it can never slide under
+    // the › arrow (user report: suffix was clipped/hidden).
+    final weekRange =
+        '${_monthName(monday.month)} ${monday.day} – ${_monthName(weekEnd.month)} ${weekEnd.day}, ${weekEnd.year}';
     // Header, week arrows and the day strip always stay visible. Loading
     // and errors are scoped to the episode list area below; tapping a day
     // pill only filters the already-cached week data, never refetches.
@@ -1569,16 +1781,29 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ),
                 Expanded(
-                  // Website parity (.cal2-range): single line, 15px/800; never wraps.
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(weekLabel,
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                        softWrap: false,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w800)),
+                  // Two-line label: date range on line 1 (never wraps),
+                  // "· This week" on a smaller muted line 2 (week 0 only).
+                  // The ‹ › arrows stay vertically centered against it.
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(weekRange,
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w800)),
+                      ),
+                      if (_weekOffset == 0)
+                        const Text('· This week',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey)),
+                    ],
                   ),
                 ),
                 Container(
@@ -2169,15 +2394,18 @@ class SettingsScreen extends StatelessWidget {
   final String profileId;
   final AppSettings settings;
   final ValueChanged<AppSettings> onSettings;
-  final ValueChanged<String> onProfile;
   final FirebaseSync firebase;
+
+  /// Website parity: the account tab returns to the auth gate on
+  /// Sign Out (signed-in) and on Sign In / Create Account (guest).
+  final VoidCallback onBackToGate;
   const SettingsScreen({
     super.key,
     required this.account,
     required this.profileId,
     required this.settings,
     required this.onSettings,
-    required this.onProfile,
+    required this.onBackToGate,
     required this.firebase,
   });
 
@@ -2211,7 +2439,7 @@ class SettingsScreen extends StatelessWidget {
                   account: account,
                   profileId: profileId,
                   settings: settings,
-                  onProfile: onProfile,
+                  onBackToGate: onBackToGate,
                   firebase: firebase,
                 )),
               ),

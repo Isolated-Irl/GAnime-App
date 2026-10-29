@@ -40,14 +40,12 @@ class Store {
     await p.setString(key, jsonEncode(v));
   }
 
+  /// Website parity: the web never auto-creates a profile — a fresh guest
+  /// with no profiles goes straight to Add Profile (create-first). So an
+  /// empty store returns [], and callers route to AddProfileScreen.
   static Future<List<Profile>> profiles(String account) async {
     final all = await _read(_kProfiles);
     final list = (all[account] as List?) ?? [];
-    if (list.isEmpty) {
-      final seed = [const Profile(id: 'p1', name: 'Profile 1')];
-      await saveProfiles(account, seed);
-      return seed;
-    }
     return list
         .map((e) => Profile.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -214,5 +212,52 @@ class Store {
   static Future<void> setLastSync(String v) async {
     final p = await prefs;
     await p.setString(_kLastSync, v);
+  }
+
+  /// Website parity: the web's Sync.getLast() is {at, status, detail}
+  /// (e.g. {at: iso, status: 'synced', detail: 'Merged and synced'}).
+  /// The Account screen's Cloud Sync card renders this record.
+  static const _kLastSyncRecord = 'ganime_last_sync_record';
+
+  static Future<Map<String, dynamic>?> syncRecord() async {
+    final p = await prefs;
+    final raw = p.getString(_kLastSyncRecord);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        if (m['at'] != null) return m;
+      } catch (_) {}
+    }
+    // Back-compat: older builds stored only the ISO time.
+    final iso = p.getString(_kLastSync);
+    if (iso != null && iso.isNotEmpty) {
+      return {'at': iso, 'status': 'synced'};
+    }
+    return null;
+  }
+
+  static Future<void> setSyncRecord({
+    required String at,
+    required String status,
+    String? detail,
+  }) async {
+    final p = await prefs;
+    await p.setString(
+      _kLastSyncRecord,
+      jsonEncode({
+        'at': at,
+        'status': status,
+        if (detail != null && detail.isNotEmpty) 'detail': detail,
+      }),
+    );
+  }
+
+  /// Website parity: wipeDeviceData() — delete every local key
+  /// (profiles, settings, addons, watched, library, tracking, caches,
+  /// auth, firebase config) and let the caller route to a clean gate.
+  /// Sign Out deliberately does NOT do this.
+  static Future<void> wipeAll() async {
+    final p = await prefs;
+    await p.clear();
   }
 }
