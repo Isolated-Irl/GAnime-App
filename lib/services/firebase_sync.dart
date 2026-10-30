@@ -257,7 +257,6 @@ class FirebaseSync {
     final profiles = await Store.profiles(account);
     final activeId = await Store.activeProfile(account);
     final settings = await Store.settings();
-    final tracker = await Store.tracker();
     final tombstones = await Store.tombstones();
 
     final byProfile = <String, dynamic>{};
@@ -291,14 +290,14 @@ class FirebaseSync {
             },
         },
         'mylist': <dynamic>[],
-        'tracking': _trackerToNative(tracker, now),
+        // Tracker logins are PER-DEVICE (2026-10-30): never collected
+        // into the cloud doc. Tokens live only in this device's Store.
         '_ts': {
           'settings': now,
           'addons': now,
           'watched': now,
           'locallib': now,
           'mylist': now,
-          'tracking': now,
         },
       };
     }
@@ -316,54 +315,9 @@ class FirebaseSync {
     };
   }
 
-  /// Convert the app's flat global tracker map to the website's
-  /// per-profile `{anilist, simkl, mal}` conn shape.
-  Map<String, dynamic> _trackerToNative(
-      Map<String, dynamic> t, int now) {
-    final out = <String, dynamic>{};
-    // Disconnect tombstones: if the user disconnected, emit a tombstone
-    // entry so the merge knows it's deliberate (not just missing data).
-    // The tombstone beats any cloud conn saved at or before it.
-    final anilistDisc = (t['anilistDisconnectedAt'] as num?)?.toInt() ?? 0;
-    final simklDisc = (t['simklDisconnectedAt'] as num?)?.toInt() ?? 0;
-    final malDisc = (t['malDisconnectedAt'] as num?)?.toInt() ?? 0;
-    if ('${t['anilistToken'] ?? ''}'.isNotEmpty) {
-      out['anilist'] = {
-        'accessToken': '${t['anilistToken']}',
-        'user': {
-          'id': '${t['anilistUserId'] ?? ''}',
-          'name': '${t['anilistUsername'] ?? ''}',
-        },
-        'savedAt': now,
-      };
-    } else if (anilistDisc > 0) {
-      out['anilist'] = {'disconnectedAt': anilistDisc, 'savedAt': anilistDisc};
-    }
-    if ('${t['simklToken'] ?? ''}'.isNotEmpty) {
-      out['simkl'] = {
-        'clientId': '${t['simklClientId'] ?? ''}',
-        'accessToken': '${t['simklToken']}',
-        'refreshToken': '${t['simklRefreshToken'] ?? ''}',
-        'expiresAt': (t['simklExpiresAt'] as num?)?.toInt() ?? 0,
-        'user': {'name': '${t['simklUsername'] ?? ''}'},
-        'savedAt': now,
-      };
-    } else if (simklDisc > 0) {
-      out['simkl'] = {'disconnectedAt': simklDisc, 'savedAt': simklDisc};
-    }
-    if ('${t['malToken'] ?? ''}'.isNotEmpty) {
-      out['mal'] = {
-        'clientId': '${t['malClientId'] ?? ''}',
-        'accessToken': '${t['malToken']}',
-        'refreshToken': '${t['malRefreshToken'] ?? ''}',
-        'user': {'name': '${t['malUsername'] ?? ''}'},
-        'savedAt': now,
-      };
-    } else if (malDisc > 0) {
-      out['mal'] = {'disconnectedAt': malDisc, 'savedAt': malDisc};
-    }
-    return out;
-  }
+  // REMOVED 2026-10-30: _trackerToNative deleted — tracker logins
+  // are per-device now, never converted for cloud sync.
+
 
   /// Decode the cloud's native top-level fields (website's _decodeDoc
   /// restricted to the fields the app understands).
@@ -525,38 +479,15 @@ class FirebaseSync {
     }.toList();
     out['mylist'] = mylist;
 
-    // Tracking: per provider, NEWEST conn wins (savedAt). Website rule.
-    // Disconnect tombstone: a disconnectedAt newer than (or equal to) the
-    // other side's savedAt means a deliberate disconnect — drop the provider
-    // entirely instead of resurrecting it.
-    final lt = Map<String, dynamic>.from((ls['tracking'] as Map?) ?? {});
-    final ct = Map<String, dynamic>.from((cs['tracking'] as Map?) ?? {});
-    final mergedTracking = <String, dynamic>{};
-    for (final prov in ['anilist', 'simkl', 'mal']) {
-      final l = lt[prov] as Map?;
-      final c = ct[prov] as Map?;
-      if (l == null && c == null) continue;
-      final lDisc = (l?['disconnectedAt'] as num?)?.toInt() ?? 0;
-      final cDisc = (c?['disconnectedAt'] as num?)?.toInt() ?? 0;
-      final lAt = (l?['savedAt'] as num?)?.toInt() ?? 0;
-      final cAt = (c?['savedAt'] as num?)?.toInt() ?? 0;
-      if (lDisc > 0 && lDisc >= cAt) continue; // local disconnect wins
-      if (cDisc > 0 && cDisc >= lAt) continue; // cloud disconnect wins
-      if (l == null) {
-        mergedTracking[prov] = c;
-        continue;
-      }
-      if (c == null) {
-        mergedTracking[prov] = l;
-        continue;
-      }
-      mergedTracking[prov] = cAt >= lAt ? c : l;
-    }
-    out['tracking'] = mergedTracking;
+    // Tracking is PER-DEVICE (2026-10-30): never merged, never read
+    // from the cloud. Each device keeps its own tracker logins.
+    // Strip any tracking field so stale cloud tokens never ride
+    // in the merged doc.
+    out.remove('tracking');
 
     out['_ts'] = {
       for (final k in ['settings', 'addons', 'watched', 'locallib',
-          'mylist', 'tracking'])
+          'mylist'])
         k: [
           (lTs[k] as num?)?.toInt() ?? 0,
           (cTs[k] as num?)?.toInt() ?? 0,
@@ -650,14 +581,9 @@ class FirebaseSync {
       }
       if (lib.isNotEmpty) await Store.saveLocalLibrary(pid, lib);
     }
-    // Tracker: adopt the active profile's tracking into the global map
-    // (website parity: mergeDocs picked newest per provider already).
-    final pid = activeId ?? (profiles.isNotEmpty ? profiles.first.id : '');
-    final pdata = byProfile[pid] as Map?;
-    if (pdata != null) {
-      await FirebaseSync.pullProfileExtras(
-          {'byProfile': byProfile}, pid);
-    }
+    // Tracker logins are PER-DEVICE (2026-10-30): never adopted from
+    // the cloud. Each device keeps its own tracker connections in
+    // its local Store.
   }
 
   /// Stable JSON for change comparison.
