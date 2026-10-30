@@ -122,8 +122,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
     try {
       // Catalogue is AniList-based: _anime.id IS the AniList id.
       // If an entry arrived with a differing anilistId (legacy state),
+      // OR with missing banner/description (stripped calendar/MAL entry),
       // refresh from AniList so posters/banner and local state agree.
-      if (_anime.anilistId != null && _anime.anilistId != _anime.id) {
+      if ((_anime.anilistId != null && _anime.anilistId != _anime.id) ||
+          _anime.banner.isEmpty ||
+          _anime.description.isEmpty) {
         try {
           final fresh = await AniList.details(_anime.anilistId!);
           // Keep the airing info the calendar already knew.
@@ -598,9 +601,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
               child: Stack(
                 children: [
                   Positioned.fill(
-                    child: ep.still.isNotEmpty
+                    child: _epThumb(ep).isNotEmpty
                         ? GaImage(
-                            url: ep.still,
+                            url: _epThumb(ep),
                             fit: BoxFit.cover,
                             errorFallback: _stillFallback(height: 200),
                           )
@@ -729,6 +732,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
+  /// Episode thumbnail with fallback chain: still -> banner -> cover -> ''.
+  String _epThumb(EpisodeInfo ep) {
+    if (ep.still.isNotEmpty) return ep.still;
+    if (_anime.banner.isNotEmpty) return _anime.banner;
+    return _anime.cover;
+  }
+
   Widget _stillFallback({double height = 170}) => Container(
         height: height,
         width: double.infinity,
@@ -761,9 +771,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
               child: Stack(
                 children: [
                   Positioned.fill(
-                    child: ep.still.isNotEmpty
+                    child: _epThumb(ep).isNotEmpty
                         ? GaImage(
-                            url: ep.still,
+                            url: _epThumb(ep),
                             fit: BoxFit.cover,
                             errorFallback: _stillFallback(height: 120),
                           )
@@ -1000,8 +1010,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 // coverImages range from square-ish to cinemascope, and a
                 // fixed-height BoxFit.cover hero cropped heads off or
                 // letterboxed black depending on the title.
+                // Banner fallback: never render the black header — fall back
+                // to the cover image when no banner exists.
                 if (a.banner.isNotEmpty)
                   _AspectHero(url: a.banner)
+                else if (a.cover.isNotEmpty)
+                  _AspectHero(url: a.cover)
                 else
                   Container(height: 120, color: GaColors.of(context).card),
                 Padding(

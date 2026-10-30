@@ -862,7 +862,7 @@ class _SearchScreenState extends State<SearchScreen> {
   bool _searched = false;
   String? _error;
   List<String> _allGenres = [];
-  String _view = 'grid'; // 'grid' | 'list' (website's view toggle)
+  String _view = 'grid'; // 'grid' | 'list' — persisted to settings.gridView
 
   // Filters (null/empty = Any).
   final Set<String> _genres = {};
@@ -881,6 +881,10 @@ class _SearchScreenState extends State<SearchScreen> {
     super.initState();
     AniList.genreList().then((g) {
       if (mounted) setState(() => _allGenres = g);
+    });
+    // Restore persisted grid/list view choice.
+    Store.settings().then((st) {
+      if (mounted) setState(() => _view = st.gridView ? 'grid' : 'list');
     });
   }
 
@@ -1347,7 +1351,11 @@ class _SearchScreenState extends State<SearchScreen> {
     return Tooltip(
       message: tooltip,
       child: InkWell(
-        onTap: () => setState(() => _view = view),
+        onTap: () async {
+          setState(() => _view = view);
+          final st = await Store.settings();
+          await Store.saveSettings(st.copyWith(gridView: view == 'grid'));
+        },
         borderRadius: BorderRadius.circular(10),
         child: Container(
           width: 38,
@@ -1656,6 +1664,21 @@ class _SearchScreenState extends State<SearchScreen> {
                 decoration: InputDecoration(
                   hintText: 'Search anime...',
                   prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _ctrl.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            _ctrl.clear();
+                            FocusScope.of(context).unfocus();
+                            setState(() {
+                              _results = [];
+                              _fuzzy = [];
+                              _searched = false;
+                              _error = null;
+                            });
+                          },
+                        )
+                      : null,
                   filled: true,
                   fillColor: GaColors.of(context).card,
                   border: OutlineInputBorder(
@@ -1663,6 +1686,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     borderSide: BorderSide.none,
                   ),
                 ),
+                onChanged: (_) => setState(() {}),
                 onSubmitted: (_) => _search(),
               ),
             ),
@@ -2385,10 +2409,31 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// carry AniList ids; the catalogue is AniList-based so details
   /// load straight from AniList. Entries without an id can't open.
   Future<void> _openLibraryEntry(LibraryEntry e) async {
-    if (e.anilistId == null) return;
+    var alId = e.anilistId;
+    if (alId == null || alId <= 0) {
+      // MAL entries have no AniList ID: title-search fallback.
+      try {
+        final res = await AniList.search(e.title);
+        if (!mounted) return;
+        final q = e.title.toLowerCase();
+        Anime? best;
+        for (final a in res) {
+          final t = a.title.toLowerCase();
+          if (t == q) {
+            best = a;
+            break;
+          }
+          if (best == null && t.contains(q)) best = a;
+        }
+        best ??= res.isNotEmpty ? res.first : null;
+        if (best == null) return;
+        alId = best.id;
+      } catch (_) {
+        return;
+      }
+    }
     // Catalogue is AniList-based: go straight to AniList details.
-    // (The old Kitsu-first lookup added 3 roundtrips before this.)
-    final a = await AniList.details(e.anilistId!);
+    final a = await AniList.details(alId);
     if (!mounted) return;
     await openDetails(context,
         anime: a,

@@ -14,9 +14,15 @@ class EpisodesService {
       total = a.nextEpisode!;
     }
     if (total <= 0) return [];
+    // Episode thumbnails from AniList streamingEpisodes (may be sparse —
+    // fall back to '' and let the UI use banner/cover).
     return List.generate(
       total,
-      (i) => EpisodeInfo(number: i + 1, title: 'Episode ${i + 1}'),
+      (i) => EpisodeInfo(
+        number: i + 1,
+        title: 'Episode ${i + 1}',
+        still: i < a.episodeThumbs.length ? a.episodeThumbs[i] : '',
+      ),
     );
   }
 }

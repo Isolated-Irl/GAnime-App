@@ -60,6 +60,19 @@ class Trackers {
     return 'https://simkl.in/posters/${bare.length >= 2 ? bare.substring(0, 2) : bare}/${bare}_m.webp';
   }
 
+  /// Safe number parsing: APIs sometimes return numbers as strings.
+  /// Never crashes on String-vs-num mismatches.
+  static int _n(dynamic v) =>
+      v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
+  static int? _optInt(dynamic v) {
+    if (v == null) return null;
+    final x = v is num ? v.toInt() : int.tryParse(v.toString());
+    return (x == null || x <= 0) ? null : x;
+  }
+  static double? _optDouble(dynamic v) => v == null
+      ? null
+      : (v is num ? v.toDouble() : double.tryParse(v.toString()));
+
   /// Timestamp normalizer: Simkl returns ISO strings, AniList returns epoch numbers.
   static int _ts(dynamic v) {
     if (v is num) return v.toInt();
@@ -88,8 +101,8 @@ class Trackers {
       final cover = _simklPosterUrl((show['poster'] as String?) ?? '');
       // AniList ID: check both show.ids and item-level ids (Simkl varies).
       final showIds = show['ids'] as Map<String, dynamic>?;
-      final anilistId = (showIds?['anilist'] as num?)?.toInt() ??
-          (ids['anilist'] as num?)?.toInt();
+      final anilistId =
+          _optInt(showIds?['anilist']) ?? _optInt(ids['anilist']);
       out.add(LibraryEntry(
         key: 'simkl_${ids['simkl'] ?? ids['simkl_id'] ?? ''}',
         source: 'simkl',
@@ -103,9 +116,9 @@ class Trackers {
                 : status == 'plantowatch'
                     ? 'PLANNING'
                     : 'CURRENT',
-        progress: (m['watched_episodes'] as num?)?.toInt() ?? 0,
-        total: (show['total_episodes'] as num?)?.toInt(),
-        score: (m['rating'] as num?)?.toDouble(),
+        progress: _n(m['watched_episodes']),
+        total: _optInt(show['total_episodes']),
+        score: _optDouble(m['rating']),
         updatedAt: _ts(m['last_watched_at']) ~/ 1000,
       ));
     }
@@ -164,9 +177,9 @@ class Trackers {
                 : status == 'plan_to_watch'
                     ? 'PLANNING'
                     : 'CURRENT',
-        progress: (ls['num_watched_episodes'] as num?)?.toInt() ?? 0,
-        total: (anime['num_episodes'] as num?)?.toInt(),
-        score: (ls['score'] as num?)?.toDouble(),
+        progress: _n(ls['num_watched_episodes']),
+        total: _optInt(anime['num_episodes']),
+        score: _optDouble(ls['score']),
         updatedAt: _ts(ls['updated_at']) ~/ 1000,
       ));
     }

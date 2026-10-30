@@ -12,6 +12,7 @@ coverImage { extraLarge large medium } bannerImage description format status
 episodes season seasonYear averageScore genres
 nextAiringEpisode { episode airingAt }
 studios { edges { isMain node { name } } }
+streamingEpisodes { title thumbnail }
 ''';
 
 class AniList {
@@ -355,6 +356,9 @@ query (\$page: Int, \$perPage: Int, \$from: Int, \$to: Int) {
 
   /// AniList score can come back as num or String depending on the
   /// user's score format — parse defensively.
+  static int _safeInt(dynamic v) =>
+      v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
+
   static double? _parseScore(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
@@ -387,11 +391,11 @@ query (\$userId: Int) {
           title: m.title,
           cover: m.cover,
           status: (j['status'] as String?) ?? 'CURRENT',
-          progress: (j['progress'] as num?)?.toInt() ?? 0,
+          progress: _safeInt(j['progress']),
           total: m.episodes,
           score: _parseScore(j['score']),
           anilistId: m.id,
-          updatedAt: (j['updatedAt'] as num?)?.toInt() ?? 0,
+          updatedAt: _safeInt(j['updatedAt']),
         ));
       }
     }

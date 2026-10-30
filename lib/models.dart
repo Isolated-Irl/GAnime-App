@@ -25,6 +25,7 @@ class Anime {
   final String season;
   final String studio; // main studio name, '' when unknown
   final String trailerId; // YouTube video id, '' when unknown
+  final List<String> episodeThumbs; // streamingEpisodes thumbnails, '' when none
 
   const Anime({
     required this.id,
@@ -47,6 +48,7 @@ class Anime {
     this.season = '',
     this.studio = '',
     this.trailerId = '',
+    this.episodeThumbs = const [],
   });
 
   factory Anime.fromJson(Map<String, dynamic> j) {
@@ -94,6 +96,9 @@ class Anime {
       year: (j['seasonYear'] as num?)?.toInt(),
       season: (j['season'] as String?) ?? '',
       studio: studio,
+      episodeThumbs: ((j['streamingEpisodes'] as List?) ?? [])
+          .map((e) => (e as Map?)?['thumbnail'] as String? ?? '')
+          .toList(),
       trailerId: (tr != null && (tr['site'] as String?) == 'youtube')
           ? (tr['id'] as String?) ?? ''
           : '',
@@ -282,6 +287,7 @@ class AppSettings {
   final bool railAllTime;
   final bool railTop100;
   final bool railTopMovies;
+  final bool gridView; // Search/Filter results view: true = grid, false = list
   // --- Playback (Settings > Playback) ---
   final bool autoFullscreenOnPlay;
   final bool swipeToSeek;
@@ -326,6 +332,7 @@ class AppSettings {
     this.railAllTime = true,
     this.railTop100 = true,
     this.railTopMovies = true,
+    this.gridView = true,
     this.autoFullscreenOnPlay = true,
     this.swipeToSeek = true,
     this.privateViewing = false,
@@ -367,6 +374,7 @@ class AppSettings {
         'railAllTime': railAllTime,
         'railTop100': railTop100,
         'railTopMovies': railTopMovies,
+        'gridView': gridView,
         'autoFullscreenOnPlay': autoFullscreenOnPlay,
         'swipeToSeek': swipeToSeek,
         'privateViewing': privateViewing,
@@ -408,6 +416,7 @@ class AppSettings {
         railAllTime: (j['railAllTime'] as bool?) ?? true,
         railTop100: (j['railTop100'] as bool?) ?? true,
         railTopMovies: (j['railTopMovies'] as bool?) ?? true,
+        gridView: (j['gridView'] as bool?) ?? true,
         autoFullscreenOnPlay: (j['autoFullscreenOnPlay'] as bool?) ?? true,
         swipeToSeek: (j['swipeToSeek'] as bool?) ?? true,
         privateViewing: (j['privateViewing'] as bool?) ?? false,
@@ -455,6 +464,7 @@ class AppSettings {
     bool? railAllTime,
     bool? railTop100,
     bool? railTopMovies,
+    bool? gridView,
     bool? autoFullscreenOnPlay,
     bool? swipeToSeek,
     bool? privateViewing,
@@ -497,6 +507,7 @@ class AppSettings {
         railAllTime: railAllTime ?? this.railAllTime,
         railTop100: railTop100 ?? this.railTop100,
         railTopMovies: railTopMovies ?? this.railTopMovies,
+        gridView: gridView ?? this.gridView,
         autoFullscreenOnPlay:
             autoFullscreenOnPlay ?? this.autoFullscreenOnPlay,
         swipeToSeek: swipeToSeek ?? this.swipeToSeek,
