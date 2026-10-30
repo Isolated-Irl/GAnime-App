@@ -18,6 +18,10 @@ class Anime {
   final double? score;
   final List<String> genres;
   final int? malId;
+  // Set by AniList sources (calendar/tracker). Details normalizes
+  // those entries to the Kitsu object for the same show via this id,
+  // so local state (watched/saved/library) keys off ONE identity.
+  final int? anilistId;
   final int? year;
   final String season;
   final String studio; // main studio name, '' when unknown
@@ -39,6 +43,7 @@ class Anime {
     this.score,
     this.genres = const [],
     this.malId,
+    this.anilistId,
     this.year,
     this.season = '',
     this.studio = '',
@@ -86,6 +91,7 @@ class Anime {
       score: (j['averageScore'] as num?)?.toDouble(),
       genres: ((j['genres'] as List?) ?? []).map((e) => '$e').toList(),
       malId: (j['idMal'] as num?)?.toInt(),
+      anilistId: (j['id'] as num?)?.toInt(),
       year: (j['seasonYear'] as num?)?.toInt(),
       season: (j['season'] as String?) ?? '',
       studio: studio,
@@ -155,6 +161,7 @@ class Anime {
     double? score,
     List<String>? genres,
     int? malId,
+    int? anilistId,
     int? year,
     String? season,
     String? studio,
@@ -176,6 +183,7 @@ class Anime {
         score: score ?? this.score,
         genres: genres ?? this.genres,
         malId: malId ?? this.malId,
+        anilistId: anilistId ?? this.anilistId,
         year: year ?? this.year,
         season: season ?? this.season,
         studio: studio ?? this.studio,

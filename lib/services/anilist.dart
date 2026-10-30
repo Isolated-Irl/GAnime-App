@@ -176,6 +176,7 @@ query (\$from: Int, \$to: Int) {
         malId: a.malId,
         year: a.year,
         season: a.season,
+        anilistId: a.anilistId,
       );
       // Calendar is a general-audience surface: never show adult titles.
     }).whereType<Anime>().where((a) => !a.genres.any((g) => g.toLowerCase() == 'hentai')).toList();
