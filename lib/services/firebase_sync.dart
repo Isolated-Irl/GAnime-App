@@ -471,6 +471,12 @@ class FirebaseSync {
     }.toList();
     out['mylist'] = mylist;
 
+    // Tracking is PER-DEVICE (2026-10-30): never merged, never read
+    // from the cloud. Each device keeps its own tracker logins.
+    // Strip any tracking field so stale cloud tokens never ride
+    // in the merged doc.
+    out.remove('tracking');
+
     out['_ts'] = {
       for (final k in ['settings', 'addons', 'watched', 'locallib',
           'mylist'])
