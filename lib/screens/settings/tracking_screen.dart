@@ -112,6 +112,10 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
         return false;
       }
       if (u.queryParameters['provider'] != provider) return false;
+      if (state.isEmpty) {
+        // Implicit flow: no state to verify, just need the token in fragment.
+        return fragment ? _frag(u)['access_token']?.isNotEmpty == true : true;
+      }
       return fragment
           ? _frag(u)['state'] == state
           : u.queryParameters['state'] == state;
@@ -135,25 +139,24 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       _msg = 'Waiting for AniList…';
     });
     try {
-      final state = OAuthService.generateState();
+      // Implicit flow (website parity): token comes directly in the URL
+      // fragment — no relay, no client secret needed.
       final redirect =
           Uri.encodeComponent('$_appOAuthRedirect?provider=anilist');
       final ok = await launchUrl(
         Uri.parse('https://anilist.co/api/v2/oauth/authorize'
             '?client_id=$_anilistAppClientId&redirect_uri=$redirect'
-            '&response_type=code&state=$state'),
+            '&response_type=token'),
         mode: LaunchMode.inAppBrowserView,
       );
       if (!ok) throw Exception('Could not open browser');
-      // Code flow: AniList redirects with ?code=...&state=... (query, not fragment).
-      final cb = await _waitLink('anilist', state);
-      final code = cb?.queryParameters['code'];
-      if (code == null) {
+      // Implicit flow: AniList redirects with #access_token=... in fragment.
+      final cb = await _waitLink('anilist', '', fragment: true);
+      final tok = cb != null ? _frag(cb)['access_token'] : null;
+      if (tok == null || tok.isEmpty) {
         setState(() => _msg = 'AniList login cancelled or timed out.');
         return;
       }
-      final data = await OAuthService.exchangeAnilist(code);
-      final tok = data['access_token'] as String;
       final v = await Trackers.anilistViewer(tok);
       final m = await Store.tracker();
       m['anilistToken'] = tok;
