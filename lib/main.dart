@@ -38,10 +38,10 @@ enum _BootPhase { loading, splash, gate, picker, home }
 
 class _GAnimeAppState extends State<GAnimeApp> {
   final FirebaseSync _firebase = FirebaseSync();
-  // NOTE: account namespace stays 'guest' in this build. Firebase sign-in
-  // does not yet switch the profile namespace to uid:<uid> — see README
-  // "Known gaps". That is why this field is final for now.
-  final String _account = 'guest';
+  // Account namespace: 'guest' for guest sessions, 'uid:<uid>' once signed
+  // in. Switched BEFORE any profile store access so profiles, watched,
+  // library and sync always run under the right owner.
+  String _account = 'guest';
   String _profileId = 'p1';
   AppSettings _settings = const AppSettings();
   // Tracks the last applied status-bar visibility so we only hit the
@@ -77,6 +77,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
 
   Future<void> _init() async {
     await _firebase.loadConfig();
+    // Restored session: own the uid namespace from the first store read.
+    if (_firebase.signedIn && _firebase.uid != null) {
+      _account = 'uid:${_firebase.uid}';
+    }
     final settings = await Store.settings();
     final profiles = await Store.profiles(_account);
     final active = await Store.activeProfile(_account);
@@ -414,6 +418,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
         home = WelcomeBackScreen(
           firebase: _firebase,
           onSignedIn: () async {
+            setState(() => _account = 'uid:${_firebase.uid}');
             // Website parity (_pullThenRoute, 2026-10-26 fix): pull the cloud
             // doc FIRST so a fresh device doesn't get pushed to create a
             // brand-new profile when the cloud already has profiles. Never
@@ -429,7 +434,11 @@ class _GAnimeAppState extends State<GAnimeApp> {
               _openAddProfile();
             }
           },
-          onGuest: () => setState(() => _phase = _BootPhase.picker),
+          onGuest: () async {
+            setState(() => _account = 'guest');
+            await _reloadProfiles();
+            if (mounted) setState(() => _phase = _BootPhase.picker);
+          },
         );
         break;
       case _BootPhase.picker:
