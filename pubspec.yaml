@@ -17,6 +17,7 @@ dependencies:
   media_kit_libs_video: ^1.0.7
   cached_network_image: ^4.0.5
   crypto: ^3.0.0
+  app_links: ^6.0.0
 
 dev_dependencies:
   flutter_test:

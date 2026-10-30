@@ -115,6 +115,21 @@ class Kitsu {
     return _cleanGenres(names, genreNames);
   }
 
+  /// First non-empty image URL among Kitsu's size variants. [keys] is
+  /// priority order — large first for posters (cache-friendly), original
+  /// available as rescue when a derivative is missing.
+  static String? _firstImg(Map? m,
+      [List<String> keys = const [
+        'large', 'original', 'medium', 'small', 'tiny'
+      ]]) {
+    if (m == null) return null;
+    for (final k in keys) {
+      final v = m[k] as String?;
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return null;
+  }
+
   static Anime _fromJson(Map<String, dynamic> j,
       Map<String, String> catNames, Set<String> genreNames) {
     final a = (j['attributes'] as Map?) ?? {};
@@ -152,15 +167,16 @@ class Kitsu {
       id: int.tryParse('${j['id']}') ?? 0,
       title: title,
       romaji: (titles['en_jp'] as String?) ?? '',
-      cover:
-          (poster['large'] as String?) ?? (poster['medium'] as String?) ?? '',
-      banner: (cover['large'] as String?) ?? '',
+      // Widened fallback: Kitsu generates large/medium/small/tiny as
+      // derivatives of original, and for a handful of titles (very new or
+      // re-imported entries) some derivatives are missing while original
+      // exists — the website renders those fine because it reads
+      // original. large stays first everywhere to preserve cache
+      // behavior; original only rescues the gaps.
+      cover: _firstImg(poster) ?? '',
+      banner: _firstImg(cover) ?? '',
       // Full-res hero source: Kitsu coverImage.original, else the large URL.
-      bannerXL: ((cover['original'] as String?)?.isNotEmpty == true
-              ? cover['original'] as String?
-              : null) ??
-          (cover['large'] as String?) ??
-          '',
+      bannerXL: _firstImg(cover, const ['original', 'large', 'small', 'tiny']) ?? '',
       description: (a['synopsis'] as String?) ?? '',
       format: ((a['subtype'] as String?) ?? '').toUpperCase(),
       status: status,
@@ -437,6 +453,21 @@ class Kitsu {
     } catch (_) {}
     _anilistCache[kitsuId] = al;
     return al;
+  }
+
+  /// In-memory cache for fromAnilist: opening the same calendar/tracker
+  /// title twice in a session must not repeat the mapping + details
+  /// round trips.
+  static final Map<int, Anime?> _fromAnilistCache = {};
+
+  /// Cached variant of fromAnilist (same contract, memoized).
+  static Future<Anime?> fromAnilistCached(int anilistId) async {
+    if (_fromAnilistCache.containsKey(anilistId)) {
+      return _fromAnilistCache[anilistId];
+    }
+    final r = await fromAnilist(anilistId);
+    _fromAnilistCache[anilistId] = r;
+    return r;
   }
 
   /// AniList id -> Kitsu anime id, via the mappings table. Null when the

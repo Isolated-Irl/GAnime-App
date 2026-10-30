@@ -105,8 +105,16 @@ class AddonsService {
   /// itself decides what it can resolve.
   static Future<List<StreamSource>> streams(
       AddonRecord addon, String type, String streamId) async {
-    final url = '${addon.baseUrl}/stream/$type/$streamId.json';
-    final r = await http.get(Uri.parse(url), headers: _headers);
+    // 25s timeout (addons cold-start in 15-30s) + http->https upgrade,
+    // except local dev addons.
+    var url = addon.baseUrl;
+    if (url.startsWith('http://') &&
+        !url.contains('localhost') && !url.contains('127.0.0.1')) {
+      url = 'https://${url.substring(7)}';
+    }
+    final r = await http
+        .get(Uri.parse('$url/stream/$type/$streamId.json'), headers: _headers)
+        .timeout(const Duration(seconds: 25));
     if (r.statusCode != 200) return [];
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <StreamSource>[];
