@@ -5,6 +5,7 @@
 // Phase 3: Library (Local/AniList/Simkl/MAL), profiles, separate audio/subtitle settings.
 // Phase 4: Firebase Auth + Firestore sync (one doc users/{uid}).
 // Phase 5: Addons manager, Stremio user-installed addons only.
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -72,6 +73,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
   @override
   void initState() {
     super.initState();
+    Store.onDirty = () => _schedulePush();
     _init();
   }
 
@@ -102,32 +104,38 @@ class _GAnimeAppState extends State<GAnimeApp> {
     await Future.delayed(const Duration(milliseconds: 2200));
     if (!mounted) return;
     setState(() {
-      _phase = guest ? _BootPhase.picker : _BootPhase.gate;
+      // Website rule: profile picker when a session exists (signed in OR
+      // guest); the sign-in gate only when there is no session at all.
+      // (2026-10-30 fix: this was `guest ? picker : gate`, which sent
+      // every signed-in cold start back to the sign-in page.)
+      _phase = (_firebase.signedIn || guest) ? _BootPhase.picker : _BootPhase.gate;
     });
     // Website parity (Sync.bootSync): when signed in, do a best-effort
     // background pull/merge/push so the cloud copy is fresh. Never blocks
     // boot and never surfaces errors — Sync Now remains the explicit path.
     if (_firebase.signedIn && !guest) {
-      _bootSync(_profileId, settings);
+      _bootSync();
     }
   }
 
-  Future<void> _bootSync(String profileId, AppSettings settings) async {
+  Timer? _pushTimer;
+
+  /// Website parity (Sync.markDirty -> 3s debounce -> pushOnly): a burst of
+  /// local writes batches into ONE push, 3s after the last write.
+  void _schedulePush() {
+    if (!_firebase.signedIn) return;
+    _pushTimer?.cancel();
+    _pushTimer = Timer(const Duration(seconds: 3), () {
+      _pushTimer = null;
+      _firebase.push(account: _account).catchError((_) {});
+    });
+  }
+
+  Future<void> _bootSync() async {
     try {
-      final profiles = await Store.profiles(_account);
-      final watched = await Store.allWatched(profileId);
-      final lib = await Store.localLibrary(profileId);
-      final ads = await Store.addons(profileId);
-      final tombs = await Store.tombstones();
-      await _firebase.push(
-        account: _account,
-        settings: settings,
-        profiles: profiles,
-        watched: watched,
-        localLibrary: lib,
-        addons: ads,
-        tombstones: tombs,
-      );
+      // Website parity (Sync.bootSync): merge-first native-format push.
+      // Best-effort only — never blocks boot, never surfaces errors.
+      await _firebase.push(account: _account);
     } catch (_) {
       // Best-effort only.
     }
@@ -167,15 +175,17 @@ class _GAnimeAppState extends State<GAnimeApp> {
             pid = remote.first.id;
           }
           if (pid != null) {
-            await _pullProfileExtras(doc, pid);
+            await FirebaseSync.pullProfileExtras(doc, pid);
           }
         } else {
-          // Both sides have data: merge, remote wins on same-id conflict.
+          // Both sides have data: merge, LOCAL wins on same-id conflict
+          // (website mergeDocs rule — the device's own profiles are never
+          // overwritten by the cloud's copy of the same id).
           final byId = <String, Profile>{};
-          for (final p in local) {
+          for (final p in remote) {
             byId[p.id] = p;
           }
-          for (final p in remote) {
+          for (final p in local) {
             byId[p.id] = p;
           }
           await Store.saveProfiles(_account, byId.values.toList());
@@ -194,70 +204,6 @@ class _GAnimeAppState extends State<GAnimeApp> {
     }
   }
 
-  /// Fresh-login extras (website parity): pull the active profile's addons
-  /// and tracker logins from the cloud's `byProfile` data. Website stores
-  /// per-profile data there; the app applies it on fresh login so a new
-  /// device gets everything, not just the profile list.
-  Future<void> _pullProfileExtras(
-      Map<String, dynamic> doc, String pid) async {
-    final byProfile = doc['byProfile'] as Map<String, dynamic>?;
-    final pdata = byProfile?[pid] as Map<String, dynamic>?;
-    if (pdata == null) return;
-    // Addons (website shape -> AddonRecord; `logo` -> `logoUrl`,
-    // numeric `addedAt` -> ISO string).
-    final rawAddons = pdata['addons'] as List?;
-    if (rawAddons != null && rawAddons.isNotEmpty) {
-      final addons = <AddonRecord>[];
-      for (final a in rawAddons) {
-        try {
-          final jm = Map<String, dynamic>.from(a as Map);
-          jm['logoUrl'] = jm['logoUrl'] ?? jm['logo'];
-          if (jm['addedAt'] is num) {
-            jm['addedAt'] = DateTime.fromMillisecondsSinceEpoch(
-                    (jm['addedAt'] as num).toInt())
-                .toIso8601String();
-          }
-          final rec = AddonRecord.fromJson(jm);
-          if (rec.manifestUrl.isNotEmpty) addons.add(rec);
-        } catch (_) {}
-      }
-      if (addons.isNotEmpty) {
-        await Store.saveAddons(pid, addons);
-      }
-    }
-    // Tracker logins (website `{anilist,simkl,mal}` conns -> app's
-    // flat tracker map).
-    final wt = pdata['tracking'] as Map<String, dynamic>?;
-    if (wt != null && wt.isNotEmpty) {
-      final m = <String, dynamic>{};
-      final al = wt['anilist'] as Map?;
-      if (al != null) {
-        final user = al['user'] as Map?;
-        m['anilistToken'] = '${al['accessToken'] ?? ''}';
-        m['anilistUserId'] = '${user?['id'] ?? ''}';
-        m['anilistUsername'] = '${user?['name'] ?? ''}';
-      }
-      final sk = wt['simkl'] as Map?;
-      if (sk != null) {
-        final user = sk['user'] as Map?;
-        m['simklClientId'] = '${sk['clientId'] ?? ''}';
-        m['simklToken'] = '${sk['accessToken'] ?? ''}';
-        m['simklRefreshToken'] = '${sk['refreshToken'] ?? ''}';
-        m['simklExpiresAt'] = (sk['expiresAt'] as num?)?.toInt() ?? 0;
-        m['simklUsername'] =
-            '${user?['name'] ?? user?['username'] ?? ''}';
-      }
-      final mal = wt['mal'] as Map?;
-      if (mal != null) {
-        final user = mal['user'] as Map?;
-        m['malClientId'] = '${mal['clientId'] ?? ''}';
-        m['malToken'] = '${mal['accessToken'] ?? ''}';
-        m['malRefreshToken'] = '${mal['refreshToken'] ?? ''}';
-        m['malUsername'] = '${user?['name'] ?? ''}';
-      }
-      if (m.isNotEmpty) await Store.saveTracker(m);
-    }
-  }
 
   /// Website parity (showCloudRetry, 2026-10-26 fix): when the cloud can't be
   /// reached and there are no local profiles, offer Retry / Continue on this
@@ -596,6 +542,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
       LibraryScreen(
           profileId: _profileId,
           settings: _settings,
+          signedIn: _firebase.signedIn,
           onMarkWatched: _onMarkWatched),
       SettingsScreen(
         account: _account,

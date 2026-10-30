@@ -2118,11 +2118,14 @@ class LibraryScreen extends StatefulWidget {
   final String profileId;
   final AppSettings settings;
   final Future<void> Function(Anime, int)? onMarkWatched;
+  // Website parity: tab 0 is "Cloud" when signed in, "Local" for guests.
+  final bool signedIn;
   const LibraryScreen(
       {super.key,
       required this.profileId,
       required this.settings,
-      this.onMarkWatched});
+      this.onMarkWatched,
+      this.signedIn = false});
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
@@ -2137,6 +2140,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   // Website parity: 8-option library sort (LIBRARY_SORTS), default
   // UPDATED_DESC, persisted per device.
   String _sort = 'UPDATED_DESC';
+  // Website parity: the sort button opens a custom dropdown menu (not a
+  // native popup) with the active option checkmarked.
+  bool _sortMenuOpen = false;
+  // Provider username for the "AniList · @user" sub-header (website parity).
+  String _providerUser = '';
 
   static const _sortLabels = {
     'UPDATED_DESC': 'Last Updated',
@@ -2226,9 +2234,30 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  /// Website parity: the library sub-header shows "Provider · @username"
+  /// (e.g. "AniList · @IsolatedIrl"). Reads the stored tracker usernames.
+  Future<void> _refreshProviderUser(int tab) async {
+    String user = '';
+    if (tab > 0) {
+      final t = await Store.tracker();
+      if (tab == 1) {
+        user = (t['anilistUsername'] as String?) ?? '';
+      } else if (tab == 2) {
+        user = (t['malUsername'] as String?) ?? '';
+      } else if (tab == 3) {
+        user = (t['simklUsername'] as String?) ?? '';
+      }
+    }
+    if (!mounted) return;
+    setState(() => _providerUser = user);
+  }
+
   Future<void> _loadTab({bool force = false}) async {
     final tab = _tab;
     final profile = widget.profileId;
+    // Website parity: the sub-header shows "Provider · @username".
+    // Refresh it whenever the tab loads.
+    _refreshProviderUser(tab);
     // Serve from the per-tab cache: tab switches are instant, no network.
     if (!force &&
         _cacheProfile == widget.profileId &&
@@ -2297,7 +2326,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const tabNames = ['Local', 'AniList', 'MAL', 'Simkl'];
+    // Website parity: tab 0 is "Cloud" when signed in, "Local" for guests.
+    final tabNames = [
+      widget.signedIn ? 'Cloud' : 'Local',
+      'AniList',
+      'MAL',
+      'Simkl'
+    ];
     // Status filter mapping: Watching = CURRENT or REPEATING,
     // Plan to Watch = PLANNING, On Hold = PAUSED, Dropped = DROPPED.
     bool matches(String filter, String status) {
@@ -2312,6 +2347,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
           return status == 'PAUSED';
         case 'Dropped':
           return status == 'DROPPED';
+        case 'Rewatching':
+          return status == 'REPEATING';
         default:
           return true;
       }
@@ -2331,20 +2368,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
       'Plan to Watch',
       'On Hold',
       'Dropped',
+      'Rewatching',
     ];
+    // Website parity: the active tab/filter chip is GREEN, not white.
     Widget pill(String label, bool selected, VoidCallback onTap) {
+      final green = Theme.of(context).colorScheme.primary;
       return GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: selected ? Colors.white : GaColors.of(context).card,
+            color: selected ? green : GaColors.of(context).card,
             borderRadius: BorderRadius.circular(24),
           ),
           child: Text(label,
               style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: selected ? Colors.black : Colors.white)),
+                  color: selected ? Colors.white : Colors.white)),
         ),
       );
     }
@@ -2375,41 +2415,65 @@ class _LibraryScreenState extends State<LibraryScreen> {
             Container(
               decoration: BoxDecoration(
                   color: GaColors.of(context).card, shape: BoxShape.circle),
-              child: PopupMenuButton<String>(
+              child: IconButton(
                 padding: EdgeInsets.zero,
                 constraints:
                     const BoxConstraints.tightFor(width: 40, height: 40),
                 icon: const Icon(Icons.sort),
                 tooltip: 'Sort library',
-                color: GaColors.of(context).card,
-                onSelected: (v) async {
-                  await Store.setLibrarySort(v);
-                  if (!mounted) return;
-                  setState(() => _sort = v);
-                },
-                itemBuilder: (ctx) => [
-                  for (final e in _sortLabels.entries)
-                    PopupMenuItem<String>(
-                      value: e.key,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(e.value,
-                                style: const TextStyle(color: Colors.white)),
-                          ),
-                          if (e.key == _sort)
-                            Icon(Icons.check,
-                                size: 18,
-                                color:
-                                    Theme.of(context).colorScheme.primary),
-                        ],
-                      ),
-                    ),
-                ],
+                onPressed: () =>
+                    setState(() => _sortMenuOpen = !_sortMenuOpen),
               ),
             ),
           ],
         ),
+        // Website parity: custom sort dropdown menu (not a native popup),
+        // with the active option checkmarked. Toggles with the sort button.
+        if (_sortMenuOpen)
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            decoration: BoxDecoration(
+              color: GaColors.of(context).card,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF333333)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final e in _sortLabels.entries)
+                  InkWell(
+                    onTap: () async {
+                      await Store.setLibrarySort(e.key);
+                      if (!mounted) return;
+                      setState(() {
+                        _sort = e.key;
+                        _sortMenuOpen = false;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(14),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(e.value,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 14)),
+                          ),
+                          if (e.key == _sort)
+                            Icon(Icons.check,
+                                size: 18,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         const SizedBox(height: 16),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -2429,10 +2493,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        // Skeleton label from the web UI. This is not a live check
-        // of Firebase sync state; real sync status comes later.
+        // Website parity: "✓ Synced" plus "Provider · @username".
         const Text('✓ Synced',
             style: TextStyle(fontSize: 14, color: Colors.grey)),
+        if (_tab > 0 && _providerUser.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+                '${tabNames[_tab]} · @$_providerUser',
+                style:
+                    const TextStyle(fontSize: 14, color: Colors.grey)),
+          ),
         const SizedBox(height: 12),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -2464,7 +2535,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Text(
               _tab == 0
-                  ? 'Nothing in your Local library yet — Add to Library on any title puts it here.'
+                  ? 'Nothing in your ${widget.signedIn ? 'Cloud' : 'Local'} library yet — Add to Library on any title puts it here.'
                   : 'Nothing here yet.',
               style: const TextStyle(fontSize: 15, color: Colors.grey),
             ),

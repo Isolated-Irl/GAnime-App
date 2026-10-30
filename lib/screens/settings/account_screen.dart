@@ -85,20 +85,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       _msg = '';
     });
     try {
-      final profiles = await Store.profiles(widget.account);
-      final watched = await Store.allWatched(widget.profileId);
-      final lib = await Store.localLibrary(widget.profileId);
-      final ads = await Store.addons(widget.profileId);
-      final tombs = await Store.tombstones();
-      await widget.firebase.push(
-        account: widget.account,
-        settings: widget.settings,
-        profiles: profiles,
-        watched: watched,
-        localLibrary: lib,
-        addons: ads,
-        tombstones: tombs,
-      );
+      await widget.firebase.push(account: widget.account);
       _syncRecord = await Store.syncRecord();
       _msg = 'Sync Now pushed to users/{uid}.';
       // Pull the merged result back — the cloud now has the union of
@@ -113,6 +100,10 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           if (profiles.isNotEmpty) {
             await Store.saveProfiles(widget.account, profiles);
           }
+          // Website parity (2026-10-30): also pull per-profile extras
+          // (addons + tracker logins) so a website-side tracker connect
+          // reaches an already-signed-in app without a sign-out/in cycle.
+          await FirebaseSync.pullProfileExtras(remote, widget.profileId);
         }
       } catch (_) {
         // Pull failed — push already succeeded, profiles will merge on next sync.

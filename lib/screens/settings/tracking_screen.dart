@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import '../../store.dart';
 import '../../models.dart';
+import '../../theme.dart';
 import '../../services/trackers.dart';
 import '../../services/oauth.dart';
 import 'settings_shell.dart';
@@ -27,7 +28,6 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   late AppSettings _s;
   Map<String, dynamic> _t = {};
   String _msg = '';
-  String? _open;
   bool _busy = false;
 
   static const _appOAuthRedirect = 'https://ganime.pages.dev/app-oauth';
@@ -136,7 +136,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       final ok = await launchUrl(
         Uri.parse('https://anilist.co/api/v2/oauth/authorize'
             '?client_id=$_anilistAppClientId&redirect_uri=$redirect'
-            '&state=$state&token'),
+            '&response_type=token&state=$state'),
         mode: LaunchMode.externalApplication,
       );
       if (!ok) throw Exception('Could not open browser');
@@ -277,15 +277,120 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
         ),
       );
 
+  /// Website parity (openTrackerManage): a connected tracker opens a modal
+  /// with "Connected as @user — sync is live." and Reconnect / Disconnect /
+  /// Close buttons (MAL also gets Sync / Update). Replaces the old inline
+  /// expand which only offered Disconnect.
+  Future<void> _openManage({
+    required String provider,
+    required String name,
+    required String username,
+    required VoidCallback onReconnect,
+    required VoidCallback onDisconnect,
+    VoidCallback? onSyncUpdate,
+  }) async {
+    final who = username.isNotEmpty ? username : 'Connected';
+    await showDialog<void>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        backgroundColor: GaColors.of(dCtx).card,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20)),
+        title: Text(name,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w800)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text.rich(
+              TextSpan(
+                style:
+                    const TextStyle(color: gaGrey, fontSize: 14),
+                children: [
+                  const TextSpan(text: 'Connected as '),
+                  TextSpan(
+                      text: who,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700)),
+                  const TextSpan(text: ' — sync is live.'),
+                ],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            if (onSyncUpdate != null) ...[
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.of(dCtx).pop();
+                  onSyncUpdate();
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: gaCardBorder),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                ),
+                child: const Text('Sync / Update'),
+              ),
+              const SizedBox(height: 10),
+            ],
+            OutlinedButton(
+              onPressed: () {
+                Navigator.of(dCtx).pop();
+                onReconnect();
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: gaCardBorder),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
+              child: const Text('Reconnect'),
+            ),
+            const SizedBox(height: 10),
+            gaGreenButton(
+              context: dCtx,
+              label: 'Disconnect',
+              onPressed: () {
+                Navigator.of(dCtx).pop();
+                onDisconnect();
+              },
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton(
+              onPressed: () => Navigator.of(dCtx).pop(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: gaCardBorder),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+              ),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _card({
     required String name,
     required String username,
     required bool connected,
     required String key,
     required VoidCallback onConnect,
+    required VoidCallback onReconnect,
     required VoidCallback onDisconnect,
+    VoidCallback? onSyncUpdate,
   }) {
-    final open = _open == key;
     return GACard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -318,7 +423,16 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
             )
           else
             OutlinedButton(
-              onPressed: () => setState(() => _open = open ? null : key),
+              onPressed: _busy
+                  ? null
+                  : () => _openManage(
+                        provider: key,
+                        name: name,
+                        username: username,
+                        onReconnect: onReconnect,
+                        onDisconnect: onDisconnect,
+                        onSyncUpdate: onSyncUpdate,
+                      ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
                 side: const BorderSide(color: gaCardBorder),
@@ -328,18 +442,8 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 textStyle: const TextStyle(fontSize: 13),
               ),
-              child: Text(open ? 'Hide' : 'Manage'),
+              child: const Text('Manage'),
             ),
-          if (open && connected) ...[
-            const SizedBox(height: 10),
-            Center(
-              child: TextButton(
-                onPressed: _busy ? null : onDisconnect,
-                child: Text('Disconnect $name',
-                    style: const TextStyle(color: Colors.redAccent)),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -418,6 +522,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           connected: _alConnected,
           key: 'anilist',
           onConnect: _connectAnilist,
+          onReconnect: _connectAnilist,
           onDisconnect: () => _disconnect('AniList', const [
             'anilistToken',
             'anilistUserId',
@@ -431,6 +536,8 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           connected: _malConnected,
           key: 'mal',
           onConnect: _connectMal,
+          onReconnect: _connectMal,
+          onSyncUpdate: _connectMal,
           onDisconnect: () => _disconnect('MyAnimeList', const [
             'malClientId',
             'malToken',
@@ -445,6 +552,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           connected: _skConnected,
           key: 'simkl',
           onConnect: _connectSimkl,
+          onReconnect: _connectSimkl,
           onDisconnect: () => _disconnect('Simkl', const [
             'simklClientId',
             'simklToken',

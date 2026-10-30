@@ -7,6 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 
 class Store {
+  /// Website parity (Sync.markDirty): called after every local data write
+  /// so the app can debounce-push to the cloud. Set by main.dart.
+  /// The [applying] guard prevents a cloud-apply from re-triggering a push
+  /// (website's `if (this._applying) return` in markDirty).
+  static void Function()? onDirty;
+  static bool applying = false;
+
   static const _kProfiles = 'ganime_profiles';
   static const _kActiveProfile = 'ganime_active_profile';
   static const _kSettings = 'ganime_settings';
@@ -38,6 +45,7 @@ class Store {
   static Future<void> _write(String key, Map<String, dynamic> v) async {
     final p = await prefs;
     await p.setString(key, jsonEncode(v));
+    if (!applying) onDirty?.call();
   }
 
   /// Website parity: the web never auto-creates a profile — a fresh guest
@@ -78,6 +86,7 @@ class Store {
   static Future<void> setActiveProfile(String account, String id) async {
     final p = await prefs;
     await p.setString('$_kActiveProfile:$account', id);
+    if (!applying) onDirty?.call();
   }
 
   static Future<AppSettings> settings() async {
