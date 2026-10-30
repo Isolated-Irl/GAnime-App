@@ -5,6 +5,7 @@
 // double-tap sides seek ±10s (with flash), auto-hides after 4s while
 // playing. Lock mode shows only the unlock button and disables gestures.
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import '../models.dart';
@@ -23,8 +24,11 @@ class GlassPlayerControls extends StatefulWidget {
   final List<SkipInterval> skips;
   final bool showSkipButtons;
   final VoidCallback onBack;
-  final VoidCallback onTracks;
+  final VoidCallback onAudio;
+  final VoidCallback onSubs;
   final VoidCallback? onSources;
+  final VoidCallback? onCycleSpeed;
+  final VoidCallback? onCycleFit;
   final VoidCallback? onEpisodes;      // episode list panel
   final VoidCallback? onExternal;      // open in external player
   final VoidCallback? onNextEpisode;   // jump to next episode
@@ -37,8 +41,11 @@ class GlassPlayerControls extends StatefulWidget {
     required this.skips,
     required this.showSkipButtons,
     required this.onBack,
-    required this.onTracks,
+    required this.onAudio,
+    required this.onSubs,
     this.onSources,
+    this.onCycleSpeed,
+    this.onCycleFit,
     this.onEpisodes,
     this.onExternal,
     this.onNextEpisode,
@@ -193,23 +200,24 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
             ),
           ),
         ),
-        // Double-tap seek feedback.
-        if (_flash != null)
-          IgnorePointer(
-            child: Center(
-              child: AnimatedOpacity(
-                opacity: _flash == null ? 0 : 1,
-                duration: const Duration(milliseconds: 120),
-                child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: const BoxDecoration(
-                    color: Color(0x59000000), shape: BoxShape.circle,
-                  ),
-                  child: Icon(_flash, color: Colors.white, size: 40),
+        // Double-tap seek feedback — always in the tree so the fade-out
+        // actually animates (removing the subtree kills the animation).
+        IgnorePointer(
+          child: Center(
+            child: AnimatedOpacity(
+              opacity: _flash == null ? 0 : 1,
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: const BoxDecoration(
+                  color: Color(0x59000000), shape: BoxShape.circle,
                 ),
+                child: Icon(_flash ?? Icons.replay_10,
+                    color: Colors.white, size: 40),
               ),
             ),
           ),
+        ),
       ],
     );
   }
@@ -224,7 +232,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
               onTap: widget.onEpisodes!),
         ],
         const SizedBox(width: 10),
-        Flexible(
+        Expanded(
           child: GlassSurface(
             radius: 14,
             child: Padding(
@@ -252,12 +260,18 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
           ),
         ),
         const SizedBox(width: 10),
+        GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSubs),
+        const SizedBox(width: 8),
+        GlassButton(icon: Icons.music_note, size: 40, iconSize: 20, circle: true, onTap: widget.onAudio),
+        if (widget.onSources != null) ...[
+          const SizedBox(width: 8),
+          GlassButton(icon: Icons.dns_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSources!),
+        ],
         if (widget.onExternal != null) ...[
+          const SizedBox(width: 8),
           GlassButton(icon: Icons.open_in_new, size: 40, iconSize: 20, circle: true,
               onTap: widget.onExternal!),
-          const SizedBox(width: 8),
         ],
-        GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onTracks),
         if (widget.onSources != null) ...[
           const SizedBox(width: 8),
           GlassButton(icon: Icons.dns_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSources!),
@@ -333,6 +347,15 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                 _hideTimer?.cancel();
               },
             ),
+            if (widget.onCycleFit != null) ...[
+              const SizedBox(width: 8),
+              GlassButton(icon: Icons.aspect_ratio, size: 36, iconSize: 18,
+                  circle: true, onTap: widget.onCycleFit!),
+            ],
+            if (widget.onCycleSpeed != null) ...[
+              const SizedBox(width: 8),
+              _RatePill(player: _p, onTap: widget.onCycleSpeed!),
+            ],
             const SizedBox(width: 8),
             StreamBuilder<Duration>(
               stream: _p.stream.position,
@@ -463,11 +486,48 @@ class _SeekPainter extends CustomPainter {
       ..close();
     canvas.drawPath(d, Paint()..color = passed ? Colors.greenAccent : Colors.white70);
     // Thumb.
-    canvas.drawCircle(Offset(x, y), 7,
-        Paint()..color = Colors.black26..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
+    canvas.drawCircle(
+        Offset(x, y),
+        7,
+        Paint()
+          ..color = Colors.black26
+          ..imageFilter = ImageFilter.blur(sigmaX: 3, sigmaY: 3));
     canvas.drawCircle(Offset(x, y), 7, Paint()..color = Colors.white);
   }
 
   @override
   bool shouldRepaint(_SeekPainter o) => o.ratio != ratio || o.passed != passed;
+}
+
+/// Glass pill that shows the current playback rate (mpvKt style 1.00x).
+class _RatePill extends StatelessWidget {
+  final Player player;
+  final VoidCallback onTap;
+  const _RatePill({required this.player, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<double>(
+      stream: player.stream.rate,
+      initialData: player.state.rate,
+      builder: (_, snap) {
+        final r = snap.data ?? 1.0;
+        return GlassSurface(
+          radius: 12,
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                child: Text('${r.toStringAsFixed(2)}x',
+                    style: const TextStyle(color: Colors.white, fontSize: 12)),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

@@ -292,6 +292,7 @@ class AppSettings {
   final bool showOnlyPreferredLanguages;
   final double subtitleSize; // sp
   final double subtitleBackgroundTint; // 0..1
+  final bool hardwareDecoding;
   // --- Tracking: continue-watching data source ('cloud' | 'tracked') ---
   final String continueWatchingSource;
   // --- Layout (Settings > Layout), website parity ---
@@ -334,6 +335,7 @@ class AppSettings {
     this.showOnlyPreferredLanguages = false,
     this.subtitleSize = 18,
     this.subtitleBackgroundTint = 0.5,
+    this.hardwareDecoding = true,
     this.continueWatchingSource = 'cloud',
     this.theme = 'white',
     this.amoledBlack = false,
@@ -374,6 +376,7 @@ class AppSettings {
         'showOnlyPreferredLanguages': showOnlyPreferredLanguages,
         'subtitleSize': subtitleSize,
         'subtitleBackgroundTint': subtitleBackgroundTint,
+        'hardwareDecoding': hardwareDecoding,
         'continueWatchingSource': continueWatchingSource,
         'theme': theme,
         'amoledBlack': amoledBlack,
@@ -416,6 +419,7 @@ class AppSettings {
         subtitleSize: (j['subtitleSize'] as num?)?.toDouble() ?? 18,
         subtitleBackgroundTint:
             (j['subtitleBackgroundTint'] as num?)?.toDouble() ?? 0.5,
+        hardwareDecoding: (j['hardwareDecoding'] as bool?) ?? true,
         continueWatchingSource:
             (j['continueWatchingSource'] as String?) ?? 'cloud',
         theme: (j['theme'] as String?) ?? 'white',
@@ -460,6 +464,7 @@ class AppSettings {
     bool? showOnlyPreferredLanguages,
     double? subtitleSize,
     double? subtitleBackgroundTint,
+    bool? hardwareDecoding,
     String? continueWatchingSource,
     String? theme,
     bool? amoledBlack,
@@ -505,6 +510,7 @@ class AppSettings {
         subtitleSize: subtitleSize ?? this.subtitleSize,
         subtitleBackgroundTint:
             subtitleBackgroundTint ?? this.subtitleBackgroundTint,
+        hardwareDecoding: hardwareDecoding ?? this.hardwareDecoding,
         continueWatchingSource:
             continueWatchingSource ?? this.continueWatchingSource,
         theme: theme ?? this.theme,

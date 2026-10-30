@@ -1,7 +1,10 @@
-// Settings > Tracking sub-screen (website parity).
-// Tracker connection cards (AniList / MAL / Simkl) with manage forms,
-// plus the Continue Watching data source selector.
+// Settings > Tracking — ONE-TAP OAuth only (App Links auto-return).
+// The browser now hands back to the app automatically via the verified
+// /app-oauth link, so the old manual paste/PIN flow is gone.
+import 'dart:convert';
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import '../../store.dart';
 import '../../models.dart';
@@ -23,31 +26,24 @@ class TrackingSettingsScreen extends StatefulWidget {
 class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   late AppSettings _s;
   Map<String, dynamic> _t = {};
-  final _alToken = TextEditingController();
-  final _skClient = TextEditingController();
-  final _skCode = TextEditingController();
-  final _malUser = TextEditingController();
-  final _malClient = TextEditingController();
   String _msg = '';
-  // Note: Client IDs are in OAuthService (website parity).
   String? _open;
   bool _busy = false;
+
+  static const _appOAuthRedirect = 'https://ganime.pages.dev/app-oauth';
+  static const _relayUrl = 'https://ganime-relay.gp237372.workers.dev';
+
+  /// AniList client for the APP. If you get "redirect_uri mismatch", create
+  /// a second client at anilist.co/settings/developer with redirect
+  /// https://ganime.pages.dev/app-oauth?provider=anilist and paste its id
+  /// here (the website's client keeps its own redirect, website stays fine).
+  static const _anilistAppClientId = '54686';
 
   @override
   void initState() {
     super.initState();
     _s = widget.settings;
     _reload();
-  }
-
-  @override
-  void dispose() {
-    _alToken.dispose();
-    _skClient.dispose();
-    _skCode.dispose();
-    _malUser.dispose();
-    _malClient.dispose();
-    super.dispose();
   }
 
   Future<void> _save(AppSettings s) async {
@@ -59,10 +55,6 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
 
   Future<void> _reload() async {
     _t = await Store.tracker();
-    _alToken.text = (_t['anilistToken'] as String?) ?? '';
-    _skClient.text = (_t['simklClientId'] as String?) ?? '';
-    _malUser.text = (_t['malUsername'] as String?) ?? '';
-    _malClient.text = (_t['malClientId'] as String?) ?? '';
     if (mounted) setState(() {});
   }
 
@@ -71,16 +63,201 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
   bool get _skConnected =>
       (_t['simklToken'] as String?)?.isNotEmpty == true;
   bool get _malConnected =>
-      (_t['malUsername'] as String?)?.isNotEmpty == true;
+      (_t['malToken'] as String?)?.isNotEmpty == true;
 
   String get _alName => (_t['anilistUsername'] as String?) ??
       (_alConnected ? 'Connected' : 'Not connected');
   String get _skName => (_t['simklUsername'] as String?) ??
       (_skConnected ? 'Connected' : 'Not connected');
-  String get _malName =>
-      _malConnected ? "@${_t['malUsername']}" : 'Not connected';
+  String get _malName => (_t['malUsername'] as String?)?.isNotEmpty == true
+      ? "@${_t['malUsername']}"
+      : (_malConnected ? 'Connected' : 'Not connected');
 
-  // Website `.tsc-dot`: 9px, top-right of the name row, green glow when on.
+  Future<void> _disconnect(String title, List<String> keys) async {
+    final m = await Store.tracker();
+    for (final k in keys) {
+      m.remove(k);
+    }
+    await Store.saveTracker(m);
+    _msg = '$title disconnected.';
+    await _reload();
+  }
+
+  // ---- OAuth link helpers ----
+
+  Map<String, String> _frag(Uri u) {
+    final m = <String, String>{};
+    if (u.fragment.isEmpty) return m;
+    for (final kv in u.fragment.split('&')) {
+      final i = kv.indexOf('=');
+      if (i > 0) m[kv.substring(0, i)] = Uri.decodeComponent(kv.substring(i + 1));
+    }
+    return m;
+  }
+
+  /// Waits for the browser to hand back to the app via /app-oauth.
+  /// Handles cold start (app killed while the browser held the flow).
+  Future<Uri?> _waitLink(String provider, String state,
+      {bool fragment = false}) async {
+    final links = AppLinks();
+    bool matches(Uri? u) {
+      if (u == null ||
+          u.host != 'ganime.pages.dev' ||
+          !u.path.startsWith('/app-oauth')) {
+        return false;
+      }
+      if (u.queryParameters['provider'] != provider) return false;
+      return fragment
+          ? _frag(u)['state'] == state
+          : u.queryParameters['state'] == state;
+    }
+
+    final initial = await links.getInitialLink();
+    if (matches(initial)) return initial;
+    try {
+      return await links.uriLinkStream.firstWhere(matches);
+    } on StateError {
+      return null;
+    }
+  }
+
+  // ---- One-tap connect handlers ----
+
+  Future<void> _connectAnilist() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _msg = 'Waiting for AniList…';
+    });
+    try {
+      final state = OAuthService.generateState();
+      final redirect =
+          Uri.encodeComponent('$_appOAuthRedirect?provider=anilist');
+      final ok = await launchUrl(
+        Uri.parse('https://anilist.co/api/v2/oauth/authorize'
+            '?client_id=$_anilistAppClientId&redirect_uri=$redirect'
+            '&state=$state&token'),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!ok) throw Exception('Could not open browser');
+      final cb = await _waitLink('anilist', state, fragment: true);
+      final tok = cb == null ? null : _frag(cb)['access_token'];
+      if (tok == null) {
+        setState(() => _msg = 'AniList login cancelled or timed out.');
+        return;
+      }
+      final v = await Trackers.anilistViewer(tok);
+      final m = await Store.tracker();
+      m['anilistToken'] = tok;
+      m['anilistUserId'] = (v['id'] ?? '').toString();
+      m['anilistUsername'] = (v['name'] ?? '').toString();
+      await Store.saveTracker(m);
+      _msg = 'AniList connected.';
+      await _reload();
+    } catch (e) {
+      _msg = 'AniList connect failed: $e';
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _connectSimkl() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _msg = 'Waiting for Simkl…';
+    });
+    try {
+      final verifier = OAuthService.generateVerifier();
+      final challenge = OAuthService.s256Challenge(verifier);
+      final state = OAuthService.generateState();
+      final ok = await launchUrl(
+          Uri.parse(OAuthService.simklAuthorizeUrl(challenge, state)),
+          mode: LaunchMode.externalApplication);
+      if (!ok) throw Exception('Could not open browser');
+      final cb = await _waitLink('simkl', state);
+      final code = cb?.queryParameters['code'];
+      if (code == null) {
+        setState(() => _msg = 'Simkl login cancelled or timed out.');
+        return;
+      }
+      final data = await OAuthService.exchangeSimkl(code, verifier);
+      final m = await Store.tracker();
+      m['simklClientId'] = OAuthService.simklClientId;
+      m['simklToken'] = data['access_token'];
+      m['simklRefreshToken'] = data['refresh_token'] ?? '';
+      m['simklExpiresAt'] = data['expires_in'] != null
+          ? DateTime.now().millisecondsSinceEpoch +
+              (data['expires_in'] as int) * 1000
+          : 0;
+      try {
+        final r = await http.get(
+            Uri.parse('https://api.simkl.com/users/settings'),
+            headers: {
+              'simkl-api-key': OAuthService.simklClientId,
+              'Authorization': 'Bearer ${data['access_token']}',
+            });
+        final j = jsonDecode(utf8.decode(r.bodyBytes));
+        final user = (j is Map) ? j['user'] : null;
+        if (user is Map) {
+          m['simklUsername'] = (user['name'] ?? user['username'] ?? '').toString();
+        }
+      } catch (_) {}
+      await Store.saveTracker(m);
+      _msg = 'Simkl connected.';
+      await _reload();
+    } catch (e) {
+      _msg = 'Simkl connect failed: $e';
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _connectMal() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _msg = 'Waiting for MAL…';
+    });
+    try {
+      final verifier = OAuthService.generateVerifier();
+      final state = OAuthService.generateState();
+      final ok = await launchUrl(
+          Uri.parse(OAuthService.malAuthorizeUrl(verifier, state)),
+          mode: LaunchMode.externalApplication);
+      if (!ok) throw Exception('Could not open browser');
+      final cb = await _waitLink('mal', state);
+      final code = cb?.queryParameters['code'];
+      if (code == null) {
+        setState(() => _msg = 'MAL login cancelled or timed out.');
+        return;
+      }
+      final data = await OAuthService.exchangeMal(code, verifier);
+      var username = '';
+      try {
+        final r = await http.get(
+            Uri.parse('$_relayUrl/mal/me'),
+            headers: {'Authorization': 'Bearer ${data['access_token']}'});
+        final j = jsonDecode(utf8.decode(r.bodyBytes));
+        username = (j['name'] ?? '').toString();
+      } catch (_) {}
+      final m = await Store.tracker();
+      m['malClientId'] = OAuthService.malClientId;
+      m['malToken'] = data['access_token'];
+      m['malRefreshToken'] = data['refresh_token'] ?? '';
+      m['malUsername'] = username;
+      await Store.saveTracker(m);
+      _msg = 'MAL connected.';
+      await _reload();
+    } catch (e) {
+      _msg = 'MAL connect failed: $e';
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ---- UI ----
+
   Widget _dot(bool c) => Container(
         width: 9,
         height: 9,
@@ -90,7 +267,9 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           boxShadow: c
               ? [
                   BoxShadow(
-                      color: Theme.of(context).colorScheme.primary
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
                           .withValues(alpha: 0.8),
                       blurRadius: 8)
                 ]
@@ -103,14 +282,14 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     required String username,
     required bool connected,
     required String key,
+    required VoidCallback onConnect,
+    required VoidCallback onDisconnect,
   }) {
     final open = _open == key;
     return GACard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Website `.tsc-top`: name left, dot top-right (space-between,
-          // top-aligned), state text below.
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -130,452 +309,78 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           const SizedBox(height: 7),
           Text(username,
               style: const TextStyle(color: gaGrey, fontSize: 12.5)),
-          const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton(
-              onPressed: () =>
-                  setState(() => _open = open ? null : key),
+          const SizedBox(height: 12),
+          if (!connected)
+            gaGreenButton(
+              context: context,
+              label: 'Connect with $name',
+              onPressed: _busy ? null : onConnect,
+            )
+          else
+            OutlinedButton(
+              onPressed: () => setState(() => _open = open ? null : key),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
                 side: const BorderSide(color: gaCardBorder),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 textStyle: const TextStyle(fontSize: 13),
               ),
-              child: const Text('Manage'),
+              child: Text(open ? 'Hide' : 'Manage'),
             ),
-          ),
-          if (open) ...[
-            const SizedBox(height: 12),
-            if (key == 'anilist')
-              _anilistForm()
-            else if (key == 'simkl')
-              _simklForm()
-            else
-              _malForm(),
+          if (open && connected) ...[
+            const SizedBox(height: 10),
+            Center(
+              child: TextButton(
+                onPressed: _busy ? null : onDisconnect,
+                child: Text('Disconnect $name',
+                    style: const TextStyle(color: Colors.redAccent)),
+              ),
+            ),
           ],
         ],
       ),
     );
   }
 
-  // ---- AniList manage form ----
-  // Website parity: the client ID is baked into the public website
-  // config (Config.OAUTH.ANILIST_CLIENT_ID), so one-click connect works
-  // with no form. Same here — implicit grant, response_type=token shows
-  // the token on AniList's PIN page for pasting.
-  static const _anilistClientId = '54686';
-
-  Future<void> _saveAnilist() async {
-    var tok = _alToken.text.trim();
-    if (tok.isEmpty) {
-      setState(() => _msg = 'Paste your AniList token first.');
-      return;
-    }
-    // Website parity (anilist.js verifyToken): accept a bare JWT or a
-    // pasted URL whose fragment carries it; reject authorization codes
-    // with a helpful explanation.
-    final frag = RegExp(r'access_token=([^&\s]+)').firstMatch(tok);
-    if (frag != null) tok = Uri.decodeComponent(frag.group(1)!);
-    if (RegExp(r'^[0-9a-f]{32,}$', caseSensitive: false).hasMatch(tok) ||
-        !tok.contains('.')) {
-      setState(() => _msg =
-          'That looks like an authorization code, not a token. Tap "Connect with AniList" and approve again — the page shows the long token (starts with eyJ).');
-      return;
-    }
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _msg = '';
-    });
-    try {
-      final v = await Trackers.anilistViewer(tok);
-      final m = await Store.tracker();
-      m['anilistToken'] = tok;
-      m['anilistUserId'] = v['id'];
-      m['anilistUsername'] = v['name'];
-      await Store.saveTracker(m);
-      _msg = "AniList connected: ${v['name']}";
-      await _reload();
-    } catch (e) {
-      _msg = 'AniList connect failed: $e';
-      if (mounted) setState(() {});
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _disconnect(String label, List<String> keys) async {
-    final m = await Store.tracker();
-    for (final k in keys) {
-      m.remove(k);
-    }
-    await Store.saveTracker(m);
-    _msg = '$label disconnected.';
-    await _reload();
-  }
-
-  Widget _anilistForm() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Website parity (connectAnilistOneClick): one tap opens AniList's
-        // approval page with our client ID; the PIN page shows the token
-        // to paste below. No client-ID form needed.
-        gaGreenButton(
-          context: context,
-          label: 'Connect with AniList',
-          onPressed: _busy
-              ? null
-              : () => launchUrl(
-                    Uri.parse(
-                        'https://anilist.co/api/v2/oauth/authorize?client_id=$_anilistClientId&response_type=token'),
-                    mode: LaunchMode.externalApplication,
-                  ),
-        ),
-        const SizedBox(height: 12),
-        gaTextField(context: context,
-            controller: _alToken,
-            hint: 'Paste the token from AniList'),
-        const SizedBox(height: 12),
-        gaGreenButton(context: context, 
-            label: 'Save AniList token',
-            onPressed: _busy ? null : _saveAnilist),
-        if (_alConnected)
-          Center(
-            child: TextButton(
-              onPressed: () => _disconnect('AniList', const [
-                'anilistToken',
-                'anilistUserId',
-                'anilistUsername'
-              ]),
-              child: const Text('Disconnect AniList',
-                  style: TextStyle(color: Colors.redAccent)),
-            ),
-          ),
-      ],
-    );
-  }
-
-  // ---- Simkl manage form ----
-  Future<void> _simklConnect() async {
-    if (_busy) return;
-    final clientId = _skClient.text.trim();
-    if (clientId.isEmpty) {
-      setState(() => _msg = 'Enter your Simkl client id first.');
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _msg = '';
-    });
-    try {
-      final code = _skCode.text.trim();
-      if (code.isEmpty) {
-        final pin = await Trackers.simklStartPin(clientId);
-        _msg =
-            "Simkl PIN: user code ${pin['user_code']}. Enter it on the Simkl site, then paste the code above and tap again.";
-      } else {
-        final res = await Trackers.simklCheckPin(clientId, code);
-        final m = await Store.tracker();
-        m['simklClientId'] = clientId;
-        m['simklToken'] = res['access_token'];
-        await Store.saveTracker(m);
-        _msg = 'Simkl connected.';
-        await _reload();
-      }
-      if (mounted) setState(() {});
-    } catch (e) {
-      _msg = 'Simkl failed: $e';
-      if (mounted) setState(() {});
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// Website parity: true OAuth one-tap for Simkl.
-  /// Opens browser to Simkl OAuth, user pastes the code, app exchanges via relay.
-  Future<void> _simklOAuth() async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _msg = '';
-    });
-    try {
-      final verifier = OAuthService.generateVerifier();
-      final challenge = OAuthService.s256Challenge(verifier);
-      final state = OAuthService.generateState();
-      final url = OAuthService.simklAuthorizeUrl(challenge, state);
-      
-      // Open browser
-      final uri = Uri.parse(url);
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        throw Exception('Could not open browser');
-      }
-      
-      // Show dialog for code paste
-      if (!mounted) return;
-      final code = await showDialog<String>(
-        context: context,
-        builder: (ctx) {
-          final ctrl = TextEditingController();
-          return AlertDialog(
-            title: const Text('Paste Simkl Code'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'After approving in the browser, copy the code from the URL (after ?code=) and paste it here.',
-                  style: TextStyle(fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: ctrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Paste code here',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-                child: const Text('Connect'),
-              ),
-            ],
-          );
-        },
-      );
-      
-      if (code == null || code.isEmpty) {
-        setState(() => _msg = 'Cancelled.');
-        return;
-      }
-      
-      // Extract code from URL if user pasted full URL
-      var cleanCode = code;
-      if (code.contains('code=')) {
-        final m = RegExp(r'[?&]code=([^&]+)').firstMatch(code);
-        if (m != null) cleanCode = Uri.decodeComponent(m.group(1)!);
-      }
-      
-      setState(() => _msg = 'Exchanging code...');
-      final data = await OAuthService.exchangeSimkl(cleanCode, verifier);
-      
-      final m = await Store.tracker();
-      m['simklClientId'] = OAuthService.simklClientId;
-      m['simklToken'] = data['access_token'];
-      m['simklRefreshToken'] = data['refresh_token'] ?? '';
-      m['simklExpiresAt'] = data['expires_in'] != null
-          ? DateTime.now().millisecondsSinceEpoch + (data['expires_in'] as int) * 1000
-          : 0;
-      await Store.saveTracker(m);
-      _msg = 'Simkl connected via OAuth.';
-      await _reload();
-      if (mounted) setState(() {});
-    } catch (e) {
-      _msg = 'Simkl OAuth failed: $e';
-      if (mounted) setState(() {});
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// Website parity: true OAuth one-tap for MAL.
-  Future<void> _malOAuth() async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _msg = '';
-    });
-    try {
-      final verifier = OAuthService.generateVerifier();
-      final state = OAuthService.generateState();
-      final url = OAuthService.malAuthorizeUrl(verifier, state);
-      
-      final uri = Uri.parse(url);
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        throw Exception('Could not open browser');
-      }
-      
-      if (!mounted) return;
-      final code = await showDialog<String>(
-        context: context,
-        builder: (ctx) {
-          final ctrl = TextEditingController();
-          return AlertDialog(
-            title: const Text('Paste MAL Code'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'After approving in the browser, copy the code from the URL (after ?code=) and paste it here.',
-                  style: TextStyle(fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: ctrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Paste code here',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-                child: const Text('Connect'),
-              ),
-            ],
-          );
-        },
-      );
-      
-      if (code == null || code.isEmpty) {
-        setState(() => _msg = 'Cancelled.');
-        return;
-      }
-      
-      var cleanCode = code;
-      if (code.contains('code=')) {
-        final m = RegExp(r'[?&]code=([^&]+)').firstMatch(code);
-        if (m != null) cleanCode = Uri.decodeComponent(m.group(1)!);
-      }
-      
-      setState(() => _msg = 'Exchanging code...');
-      final data = await OAuthService.exchangeMal(cleanCode, verifier);
-      
-      final m = await Store.tracker();
-      m['malClientId'] = OAuthService.malClientId;
-      m['malToken'] = data['access_token'];
-      m['malRefreshToken'] = data['refresh_token'] ?? '';
-      await Store.saveTracker(m);
-      _msg = 'MAL connected via OAuth.';
-      await _reload();
-      if (mounted) setState(() {});
-    } catch (e) {
-      _msg = 'MAL OAuth failed: $e';
-      if (mounted) setState(() {});
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Widget _simklForm() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Website parity: true OAuth one-tap (browser login, not PIN).
-        gaGreenButton(
-          context: context,
-          label: 'Connect with Simkl',
-          onPressed: _busy ? null : _simklOAuth,
-        ),
-        const SizedBox(height: 12),
-        gaTextField(context: context, controller: _skClient, hint: 'Simkl client id'),
-        gaTextField(context: context, 
-            controller: _skCode,
-            hint: 'Simkl PIN user code (optional)'),
-        gaGreenButton(context: context, 
-            label: 'Simkl PIN / connect',
-            onPressed: _busy ? null : _simklConnect),
-        if (_skConnected)
-          Center(
-            child: TextButton(
-              onPressed: () => _disconnect('Simkl', const [
-                'simklClientId',
-                'simklToken',
-                'simklUsername'
-              ]),
-              child: const Text('Disconnect Simkl',
-                  style: TextStyle(color: Colors.redAccent)),
-            ),
-          ),
-      ],
-    );
-  }
-
-  // ---- MAL manage form ----
-  Future<void> _saveMal() async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _msg = '';
-    });
-    try {
-      final m = await Store.tracker();
-      m['malUsername'] = _malUser.text.trim();
-      m['malClientId'] = _malClient.text.trim();
-      await Store.saveTracker(m);
-      _msg = 'MAL saved (read-only list).';
-      await _reload();
-    } catch (e) {
-      _msg = 'MAL save failed: $e';
-      if (mounted) setState(() {});
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Widget _malForm() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Website parity: true OAuth one-tap (browser login).
-        gaGreenButton(
-          context: context,
-          label: 'Connect with MAL',
-          onPressed: _busy ? null : _malOAuth,
-        ),
-        const SizedBox(height: 12),
-        gaTextField(context: context, controller: _malUser, hint: 'MAL username'),
-        gaTextField(context: context, controller: _malClient, hint: 'MAL client id'),
-        gaGreenButton(context: context, 
-            label: 'Save MAL (read-only)',
-            onPressed: _busy ? null : _saveMal),
-        if (_malConnected)
-          Center(
-            child: TextButton(
-              onPressed: () =>
-                  _disconnect('MAL', const ['malUsername', 'malClientId']),
-              child: const Text('Disconnect MAL',
-                  style: TextStyle(color: Colors.redAccent)),
-            ),
-          ),
-      ],
-    );
-  }
-
-  // ---- Continue Watching data source ----
-  Widget _sourceCard(
-      {required String value,
-      required String title,
-      required String subtitle}) {
-    final selected = _s.continueWatchingSource == value;
+  Widget _sourceCard() {
     return GACard(
-      padding: EdgeInsets.zero,
-      border: selected
-          ? Border.all(color: Theme.of(context).colorScheme.primary, width: 2)
-          : Border.all(color: gaCardBorder),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('CONTINUE WATCHING DATA SOURCE',
+              style: TextStyle(
+                  color: gaGrey,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1)),
+          const SizedBox(height: 12),
+          _srcTile('GANime Cloud', 'Cross-device sync store', 'cloud'),
+          const SizedBox(height: 8),
+          _srcTile('Tracked Sync', 'AniList / MAL / Simkl', 'tracked'),
+        ],
+      ),
+    );
+  }
+
+  Widget _srcTile(String title, String sub, String value) {
+    final sel = _s.continueWatchingSource == value;
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () =>
-            _save(_s.copyWith(continueWatchingSource: value)),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
+        onTap: () => _save(_s.copyWith(continueWatchingSource: value)),
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: sel ? const Color(0xFF26262B) : const Color(0xFF1B1B1F),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: sel ? Colors.white : gaCardBorder,
+                width: sel ? 1.4 : 1),
+          ),
           child: Row(
             children: [
               Expanded(
@@ -585,17 +390,16 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
                     Text(title,
                         style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 4),
-                    Text(subtitle,
-                        style: const TextStyle(
-                            color: gaGrey, fontSize: 13)),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 3),
+                    Text(sub,
+                        style: const TextStyle(color: gaGrey, fontSize: 12.5)),
                   ],
                 ),
               ),
-              if (selected)
-                Icon(Icons.check, color: Theme.of(context).colorScheme.primary),
+              if (sel)
+                const Icon(Icons.check, color: Colors.white, size: 20),
             ],
           ),
         ),
@@ -609,30 +413,56 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       title: 'Tracking',
       children: [
         _card(
-            name: 'AniList',
-            username: _alName,
-            connected: _alConnected,
-            key: 'anilist'),
+          name: 'AniList',
+          username: _alName,
+          connected: _alConnected,
+          key: 'anilist',
+          onConnect: _connectAnilist,
+          onDisconnect: () => _disconnect('AniList', const [
+            'anilistToken',
+            'anilistUserId',
+            'anilistUsername',
+          ]),
+        ),
+        const SizedBox(height: 10),
         _card(
-            name: 'MyAnimeList',
-            username: _malName,
-            connected: _malConnected,
-            key: 'mal'),
+          name: 'MyAnimeList',
+          username: _malName,
+          connected: _malConnected,
+          key: 'mal',
+          onConnect: _connectMal,
+          onDisconnect: () => _disconnect('MyAnimeList', const [
+            'malClientId',
+            'malToken',
+            'malRefreshToken',
+            'malUsername',
+          ]),
+        ),
+        const SizedBox(height: 10),
         _card(
-            name: 'Simkl',
-            username: _skName,
-            connected: _skConnected,
-            key: 'simkl'),
-        gaSectionLabel('Continue watching data source'),
-        _sourceCard(
-            value: 'cloud',
-            title: 'GAnime Cloud',
-            subtitle: 'Cross-device sync store'),
-        _sourceCard(
-            value: 'tracked',
-            title: 'Tracked Sync',
-            subtitle: 'AniList / MAL / Simkl'),
-        gaMsg(_msg),
+          name: 'Simkl',
+          username: _skName,
+          connected: _skConnected,
+          key: 'simkl',
+          onConnect: _connectSimkl,
+          onDisconnect: () => _disconnect('Simkl', const [
+            'simklClientId',
+            'simklToken',
+            'simklRefreshToken',
+            'simklExpiresAt',
+            'simklUsername',
+          ]),
+        ),
+        const SizedBox(height: 18),
+        if (_msg.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(_msg,
+                style: const TextStyle(color: gaGrey, fontSize: 12.5)),
+          ),
+        gaSectionLabel('Continue Watching Data Source'),
+        const SizedBox(height: 10),
+        _sourceCard(),
       ],
     );
   }

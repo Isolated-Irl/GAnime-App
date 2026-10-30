@@ -306,6 +306,7 @@ Widget gaDropdownRow({
 /// Website-style row: label left, slider middle, value text right.
 Widget gaSliderRow({
   required String title,
+  String? subtitle,
   required double value,
   required double min,
   required double max,
@@ -315,31 +316,42 @@ Widget gaSliderRow({
 }) {
   return GACard(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-    child: Row(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 120,
-          child: Text(title,
-              style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white)),
+        Row(
+          children: [
+            SizedBox(
+              width: 120,
+              child: Text(title,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white)),
+            ),
+            Expanded(
+              child: Slider(
+                value: value.clamp(min, max),
+                min: min,
+                max: max,
+                divisions: divisions,
+                onChanged: onChanged,
+              ),
+            ),
+            SizedBox(
+              width: 52,
+              child: Text(label(value),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 13, color: gaGrey)),
+            ),
+          ],
         ),
-        Expanded(
-          child: Slider(
-            value: value.clamp(min, max),
-            min: min,
-            max: max,
-            divisions: divisions,
-            onChanged: onChanged,
+        if (subtitle != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(subtitle,
+                style: const TextStyle(fontSize: 12, color: gaGrey)),
           ),
-        ),
-        SizedBox(
-          width: 52,
-          child: Text(label(value),
-              textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 13, color: gaGrey)),
-        ),
       ],
     ),
   );

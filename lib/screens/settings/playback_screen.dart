@@ -1,10 +1,13 @@
-// Playback settings sub-screen (Settings > Playback) — website parity.
-// Audio and subtitle languages are SEPARATE settings, never merged.
+// Playback settings sub-screen (Settings > Playback) - website parity.
+// Every option on this page is wired into the player (see player.dart):
+//   seek interval, swipe-to-seek, private viewing, secondary audio,
+//   preferred-language filtering, subtitle size + background tint,
+//   HW/SW decoder toggle, AniSkip. The old "Player Test" and the obsolete
+//   "Auto Fullscreen" option were removed.
 import 'package:flutter/material.dart';
 
 import '../../models.dart';
 import '../../store.dart';
-import '../player.dart';
 import 'settings_shell.dart';
 
 class PlaybackSettingsScreen extends StatefulWidget {
@@ -41,9 +44,10 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
       children: [
         gaSectionLabel('Player'),
         gaToggleRow(
-          title: 'Auto Fullscreen on Play',
-          value: _s.autoFullscreenOnPlay,
-          onChanged: (v) => _save(_s.copyWith(autoFullscreenOnPlay: v)),
+          title: 'Hardware Decoding (HW+)',
+          subtitle: 'Falls back to software if the device struggles',
+          value: _s.hardwareDecoding,
+          onChanged: (v) => _save(_s.copyWith(hardwareDecoding: v)),
         ),
         gaToggleRow(
           title: 'Swipe to Seek',
@@ -52,6 +56,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
         ),
         gaToggleRow(
           title: 'Private Viewing',
+          subtitle: 'Do not mark episodes as watched',
           value: _s.privateViewing,
           onChanged: (v) => _save(_s.copyWith(privateViewing: v)),
         ),
@@ -75,8 +80,6 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
             ),
           ),
         ),
-        // Subtitle & audio rendered ONCE (the website screenshot duplicates
-        // this block; do not copy that mistake).
         gaSectionLabel('Subtitle and Audio'),
         gaDropdownRow(
           context: context,
@@ -119,6 +122,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
         gaSectionLabel('Subtitle Rendering'),
         gaSliderRow(
           title: 'Subtitle Size',
+          subtitle: 'Adjustable live inside the player (CC - style)',
           value: _s.subtitleSize,
           min: 10,
           max: 30,
@@ -128,6 +132,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
         ),
         gaSliderRow(
           title: 'Subtitle Background Tint',
+          subtitle: 'Adjustable live inside the player (CC - style)',
           value: _s.subtitleBackgroundTint,
           min: 0,
           max: 1,
@@ -135,40 +140,11 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
           label: (v) => '${(v * 100).round()}%',
           onChanged: (v) => _save(_s.copyWith(subtitleBackgroundTint: v)),
         ),
-        gaSectionLabel('Player Test'),
-        const GACard(
-          child: Text(
-            'Opens the media_kit player with a public test video (not a GAnime stream).',
-            style: TextStyle(color: gaGrey, fontSize: 13),
-          ),
-        ),
-        gaGreenButton(context: context, 
-          label: 'Open Player Test',
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => PlayerScreen(
-                  anime: const Anime(id: 0, title: 'Player Test'),
-                  episode: 1,
-                  streams: const [
-                    StreamSource(
-                      name: 'Big Buck Bunny (test MP4)',
-                      url:
-                          'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-                    ),
-                  ],
-                  settings: _s,
-                ),
-              ),
-            );
-          },
-        ),
       ],
     );
   }
 }
 
-/// AniSkip Service sub-page: all five AniSkip toggles.
 class _AniskipPage extends StatefulWidget {
   final AppSettings settings;
   final ValueChanged<AppSettings> onSettings;

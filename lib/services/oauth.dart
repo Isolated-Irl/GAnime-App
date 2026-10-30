@@ -18,7 +18,7 @@ class OAuthService {
   static const relayUrl = 'https://ganime-relay.gp237372.workers.dev';
 
   static String _oauthRedirect(String provider) =>
-      'https://ganime.pages.dev/?provider=$provider';
+      'https://ganime.pages.dev/app-oauth?provider=$provider';
 
   /// Generate a random PKCE verifier (128 chars, URL-safe).
   static String generateVerifier() {
@@ -60,7 +60,7 @@ class OAuthService {
     final redirect = _oauthRedirect('simkl');
     // Simkl requires scope for write access (Phase 1: without scope,
     // token is read-only).
-    const scope = 'public';
+    const scope = 'media:read media:write';
     return 'https://simkl.com/oauth/authorize'
         '?response_type=code'
         '&client_id=${Uri.encodeComponent(simklClientId)}'

@@ -1,6 +1,7 @@
 // Glass surface ported from REX-Player's Modifier.glassSurface (Compose).
 // No backdrop blur: a near-transparent fill + inner highlight (top-left)
 // + inner shadow (bottom-right) + hairline border.
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 class GlassSurface extends StatelessWidget {
@@ -74,7 +75,14 @@ class GlassButton extends StatelessWidget {
           child: SizedBox(
             width: size,
             height: size,
-            child: Icon(icon, color: Colors.white, size: iconSize),
+            child: Icon(
+              icon,
+              color: Colors.white,
+              size: iconSize,
+              shadows: const [
+                Shadow(color: Color(0x66000000), blurRadius: 4),
+              ],
+            ),
           ),
         ),
       ),
@@ -104,17 +112,19 @@ class _GlassPainter extends CustomPainter {
       Path()..addRRect(rrect),
     );
     final sigma = blur / 2;
+    // Impeller note: MaskFilter.blur renders dirty on Impeller; Paint
+    // .imageFilter is the supported blur path (soft, correct on all GPUs).
     canvas.drawPath(
       inverted.shift(off),
       Paint()
         ..color = hi
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma),
+        ..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
     );
     canvas.drawPath(
       inverted.shift(-off),
       Paint()
         ..color = sh
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma),
+        ..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
     );
     canvas.restore();
   }

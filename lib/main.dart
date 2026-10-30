@@ -148,15 +148,15 @@ class _GAnimeAppState extends State<GAnimeApp> {
       if (remoteProfiles.isNotEmpty) {
         final local = await Store.profiles(_account);
         final byId = <String, Profile>{};
+        for (final p in local) {
+          byId[p.id] = p; // local first...
+        }
         for (final p in remoteProfiles) {
           try {
             final prof = Profile.fromJson(
                 Map<String, dynamic>.from(p as Map));
-            byId[prof.id] = prof;
+            byId[prof.id] = prof; // ...remote OVERWRITES on same id
           } catch (_) {}
-        }
-        for (final p in local) {
-          byId[p.id] = p;
         }
         await Store.saveProfiles(_account, byId.values.toList());
       }

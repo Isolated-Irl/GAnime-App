@@ -82,6 +82,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _streamIndex = 0;
   int _episode = 0;
   String _status = '';
+  BoxFit _fit = BoxFit.contain;
 
   StreamSource get _cur => widget.streams[_streamIndex];
 
@@ -280,52 +281,71 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
-  void _showTracks() {
+  Future<void> _cycleSpeed() async {
+    const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+    final cur = _player.state.rate;
+    final next = rates.firstWhere((r) => r > cur + 0.001, orElse: () => 1.0);
+    await _player.setRate(next);
+    if (mounted) setState(() => _status = 'Speed ${next}x');
+  }
+
+  void _cycleFit() {
+    setState(() {
+      _fit = switch (_fit) {
+        BoxFit.contain => BoxFit.cover,
+        BoxFit.cover => BoxFit.fitWidth,
+        _ => BoxFit.contain,
+      };
+    });
+  }
+
+  void _showAudio() => _trackSheet(audio: true);
+  void _showSubs() => _trackSheet(audio: false);
+
+  void _trackSheet({required bool audio}) {
     final tracks = _player.state.tracks;
+    final items = <Widget>[
+      ListTile(title: Text(audio ? 'Audio tracks' : 'Subtitle tracks')),
+      ListTile(
+        title: Text(audio ? 'Auto (default)' : 'Off'),
+        onTap: () {
+          if (audio) {
+            _player.setAudioTrack(AudioTrack.auto());
+          } else {
+            _player.setSubtitleTrack(SubtitleTrack.no());
+          }
+          Navigator.pop(context);
+        },
+      ),
+    ];
+    if (audio) {
+      for (final t in tracks.audio) {
+        items.add(ListTile(
+          title: Text(t.title ?? t.id),
+          subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
+          onTap: () {
+            _player.setAudioTrack(t);
+            Navigator.pop(context);
+          },
+        ));
+      }
+    } else {
+      for (final t in tracks.subtitle) {
+        items.add(ListTile(
+          title: Text(t.title ?? t.id),
+          subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
+          onTap: () {
+            _player.setSubtitleTrack(t);
+            Navigator.pop(context);
+          },
+        ));
+      }
+    }
+    items.add(const SizedBox(height: 24));
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (context) => ListView(
-        shrinkWrap: true,
-        children: [
-          const ListTile(title: Text('Audio tracks')),
-          ListTile(
-            title: const Text('Auto (default)'),
-            onTap: () {
-              _player.setAudioTrack(AudioTrack.auto());
-              Navigator.pop(context);
-            },
-          ),
-          for (final t in tracks.audio)
-            ListTile(
-              title: Text(t.title ?? t.id),
-              subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
-              onTap: () {
-                _player.setAudioTrack(t);
-                Navigator.pop(context);
-              },
-            ),
-          const Divider(),
-          const ListTile(title: Text('Subtitle tracks')),
-          ListTile(
-            title: const Text('Off'),
-            onTap: () {
-              _player.setSubtitleTrack(SubtitleTrack.no());
-              Navigator.pop(context);
-            },
-          ),
-          for (final t in tracks.subtitle)
-            ListTile(
-              title: Text(t.title ?? t.id),
-              subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
-              onTap: () {
-                _player.setSubtitleTrack(t);
-                Navigator.pop(context);
-              },
-            ),
-          const SizedBox(height: 24),
-        ],
-      ),
+      builder: (context) => ListView(shrinkWrap: true, children: items),
     );
   }
 
@@ -368,6 +388,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           Video(
             controller: _controller,
             controls: NoVideoControls,
+            fit: _fit,
             fill: Colors.black,
           ),
           StreamBuilder<bool>(
@@ -387,7 +408,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
             showSkipButtons:
                 widget.settings.aniskipEnabled && widget.settings.aniskipShowButton,
             onBack: () => Navigator.of(context).maybePop(),
-            onTracks: _showTracks,
+            onAudio: _showAudio,
+            onSubs: _showSubs,
+            onCycleSpeed: _cycleSpeed,
+            onCycleFit: _cycleFit,
             onSources: (widget.allStreams ?? widget.streams).length > 1
                 ? _showSources
                 : null,

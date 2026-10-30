@@ -292,13 +292,51 @@ class FirebaseSync {
     final raw = await pullRaw();
     if (raw == null) return null;
     final fields = raw['fields'] as Map<String, dynamic>? ?? {};
+    // App format: whole doc as a JSON string in the `ganime` field.
     final ganime = fields['ganime'] as Map<String, dynamic>?;
     final s = ganime?['stringValue'] as String?;
-    if (s == null) return null;
-    try {
-      return jsonDecode(s) as Map<String, dynamic>;
-    } catch (_) {
-      return null;
+    if (s != null) {
+      try {
+        return jsonDecode(s) as Map<String, dynamic>;
+      } catch (_) {
+        return null;
+      }
     }
+    // Website format: native Firestore fields (the website never writes a
+    // `ganime` wrapper). Decode them so the app can see website-synced data.
+    final profiles = _decodeValue(fields['profiles']);
+    if (profiles is! List) return null;
+    final out = <String, dynamic>{'profiles': profiles};
+    final active = _decodeValue(fields['activeProfileId']);
+    if (active is String && active.isNotEmpty) {
+      out['activeProfileId'] = active;
+    }
+    return out;
+  }
+
+  /// Decode a Firestore REST typed value to a plain Dart value.
+  dynamic _decodeValue(dynamic v) {
+    if (v is! Map<String, dynamic>) return v;
+    if (v.containsKey('stringValue')) return v['stringValue'];
+    if (v.containsKey('booleanValue')) return v['booleanValue'];
+    if (v.containsKey('integerValue')) {
+      return int.tryParse('${v['integerValue']}');
+    }
+    if (v.containsKey('doubleValue')) {
+      return (v['doubleValue'] as num?)?.toDouble();
+    }
+    if (v.containsKey('nullValue')) return null;
+    if (v.containsKey('arrayValue')) {
+      final vals =
+          (v['arrayValue'] as Map<String, dynamic>?)?['values'] as List?;
+      return (vals ?? []).map(_decodeValue).toList();
+    }
+    if (v.containsKey('mapValue')) {
+      final fs = (v['mapValue'] as Map<String, dynamic>?)?['fields']
+          as Map<String, dynamic>?;
+      if (fs == null) return <String, dynamic>{};
+      return {for (final e in fs.entries) e.key: _decodeValue(e.value)};
+    }
+    return v;
   }
 }
