@@ -19,6 +19,8 @@ class StreamsScreen extends StatefulWidget {
   final String profileId;
   final AppSettings settings;
   final Future<void> Function()? onMarkWatched;
+  final List<EpisodeInfo>? episodes;      // -> player episode list
+  final Set<int>? watchedEpisodes;        // -> player watched marks
   const StreamsScreen({
     super.key,
     required this.anime,
@@ -26,6 +28,8 @@ class StreamsScreen extends StatefulWidget {
     required this.profileId,
     required this.settings,
     this.onMarkWatched,
+    this.episodes,
+    this.watchedEpisodes,
   });
 
   @override
@@ -204,9 +208,17 @@ class _StreamsScreenState extends State<StreamsScreen> {
                               builder: (_) => PlayerScreen(
                                 anime: widget.anime,
                                 episode: widget.episode,
-                                streams: [s],
+                                streams: g.streams,
                                 settings: widget.settings,
                                 onMarkWatched: widget.onMarkWatched,
+                                // full feature set:
+                                profileId: widget.profileId,
+                                episodes: widget.episodes,
+                                watchedEpisodes: widget.watchedEpisodes,
+                                allStreams: g.streams,
+                                addonId: g.addon.id,
+                                addonName: g.addon.name,
+                                totalEpisodes: widget.anime.episodes,
                               ),
                             ),
                           );

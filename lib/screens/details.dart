@@ -308,6 +308,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           episode: ep,
           profileId: widget.profileId,
           settings: widget.settings,
+          episodes: _episodes,
+          watchedEpisodes: _watched,
           onMarkWatched: () async {
             final next = Set<int>.from(_watched)..add(ep);
             await Store.setWatched(widget.profileId, _anime.id, next);
