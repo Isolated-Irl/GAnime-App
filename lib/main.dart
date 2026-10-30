@@ -147,18 +147,32 @@ class _GAnimeAppState extends State<GAnimeApp> {
       final remoteProfiles = (doc['profiles'] as List?) ?? [];
       if (remoteProfiles.isNotEmpty) {
         final local = await Store.profiles(_account);
-        final byId = <String, Profile>{};
-        for (final p in local) {
-          byId[p.id] = p; // local first...
-        }
+        final remote = <Profile>[];
         for (final p in remoteProfiles) {
           try {
-            final prof = Profile.fromJson(
-                Map<String, dynamic>.from(p as Map));
-            byId[prof.id] = prof; // ...remote OVERWRITES on same id
+            remote.add(Profile.fromJson(Map<String, dynamic>.from(p as Map)));
           } catch (_) {}
         }
-        await Store.saveProfiles(_account, byId.values.toList());
+        if (local.isEmpty) {
+          // Website rule: fresh login takes the cloud as-is, no merge.
+          await Store.saveProfiles(_account, remote);
+          final activeId = doc['activeProfileId'] as String?;
+          if (activeId != null &&
+              activeId.isNotEmpty &&
+              remote.any((p) => p.id == activeId)) {
+            await Store.setActiveProfile(_account, activeId);
+          }
+        } else {
+          // Both sides have data: merge, remote wins on same-id conflict.
+          final byId = <String, Profile>{};
+          for (final p in local) {
+            byId[p.id] = p;
+          }
+          for (final p in remote) {
+            byId[p.id] = p;
+          }
+          await Store.saveProfiles(_account, byId.values.toList());
+        }
       }
       return true;
     } catch (_) {

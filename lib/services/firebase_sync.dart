@@ -292,41 +292,31 @@ class FirebaseSync {
     final raw = await pullRaw();
     if (raw == null) return null;
     final fields = raw['fields'] as Map<String, dynamic>? ?? {};
-    // The website and the app write to the SAME document in DIFFERENT
-    // formats (website: native Firestore fields; app: a `ganime` JSON
-    // string). A document can carry BOTH, so profiles must be unioned
-    // from both sources — never return early on just one.
-    final allProfiles = <String, Map<String, dynamic>>{};
-    Map<String, dynamic>? appDoc;
-    // 1. App format: whole doc as a JSON string in the `ganime` field.
+    // Website rule: the cloud's NATIVE fields are canonical. On a fresh
+    // login the website applies the cloud doc as-is (no merge with local).
+    // The app's `ganime` JSON string is only a fallback for app-only users
+    // whose document has no native fields. Never union the two — that would
+    // resurrect stale profiles the website already replaced.
+    final out = <String, dynamic>{};
+    final webProfiles = _decodeValue(fields['profiles']);
+    if (webProfiles is List && webProfiles.isNotEmpty) {
+      out['profiles'] =
+          webProfiles.whereType<Map<String, dynamic>>().toList();
+      final active = _decodeValue(fields['activeProfileId']);
+      if (active is String && active.isNotEmpty) {
+        out['activeProfileId'] = active;
+      }
+      return out;
+    }
+    // Fallback: app-format `ganime` field.
     final ganime = fields['ganime'] as Map<String, dynamic>?;
     final s = ganime?['stringValue'] as String?;
-    if (s != null) {
-      try {
-        appDoc = jsonDecode(s) as Map<String, dynamic>;
-        for (final p in (appDoc['profiles'] as List?) ?? []) {
-          final j = p as Map<String, dynamic>;
-          allProfiles['${j['id']}'] = j;
-        }
-      } catch (_) {}
+    if (s == null) return null;
+    try {
+      return jsonDecode(s) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
     }
-    // 2. Website format: native Firestore fields.
-    final webProfiles = _decodeValue(fields['profiles']);
-    if (webProfiles is List) {
-      for (final p in webProfiles) {
-        if (p is Map<String, dynamic>) {
-          allProfiles.putIfAbsent('${p['id']}', () => p);
-        }
-      }
-    }
-    if (allProfiles.isEmpty && appDoc == null) return null;
-    final out = appDoc ?? <String, dynamic>{};
-    out['profiles'] = allProfiles.values.toList();
-    final active = _decodeValue(fields['activeProfileId']);
-    if (active is String && active.isNotEmpty) {
-      out['activeProfileId'] = active;
-    }
-    return out;
   }
 
   /// Decode a Firestore REST typed value to a plain Dart value.
