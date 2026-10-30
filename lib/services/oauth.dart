@@ -126,8 +126,19 @@ class OAuthService {
     );
     final data = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (r.statusCode != 200 || data['access_token'] == null) {
-      throw Exception(
-          data['error'] ?? data['message'] ?? 'AniList exchange failed');
+      // AniList returns errors as {errors: [{message: ...}]}, relay may
+      // return {error: ...} — surface the real message for diagnosis.
+      var msg = 'AniList exchange failed';
+      final errs = data['errors'] as List?;
+      if (errs != null && errs.isNotEmpty) {
+        final m = (errs.first as Map?)?['message'];
+        if (m != null) msg = 'AniList: $m';
+      } else if (data['error'] != null) {
+        msg = 'AniList: ${data['error_description'] ?? data['error']}';
+      } else if (data['message'] != null) {
+        msg = 'AniList: ${data['message']}';
+      }
+      throw Exception(msg);
     }
     return data;
   }

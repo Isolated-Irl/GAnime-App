@@ -38,6 +38,28 @@ class Trackers {
     return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// Simkl poster URL builder (website parity: simklPosterUrl).
+  /// Handles full URLs, protocol-relative, and bare poster paths.
+  static String _simklPosterUrl(String poster) {
+    final p = poster.trim();
+    if (p.isEmpty) return '';
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    if (p.startsWith('//')) return 'https:$p';
+    final hasSizeSuffix =
+        RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?\$').hasMatch(p);
+    if (p.contains('simkl.in/')) {
+      final path = p.replaceFirst(RegExp(r'^https?://'), '');
+      if (hasSizeSuffix) return 'https://$path';
+      return 'https://${path.replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)\$'), '')}_m.webp';
+    }
+    final bare = p
+        .replaceFirst(RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?\$'), '')
+        .replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)\$'), '');
+    if (bare.startsWith('posters/')) return 'https://simkl.in/${bare}_m.webp';
+    if (bare.contains('/')) return 'https://simkl.in/posters/${bare}_m.webp';
+    return 'https://simkl.in/posters/${bare.length >= 2 ? bare.substring(0, 2) : bare}/${bare}_m.webp';
+  }
+
   static Future<List<LibraryEntry>> simklLists(
       String clientId, String token) async {
     final r = await http.get(
@@ -55,11 +77,13 @@ class Trackers {
       final show = m['show'] as Map<String, dynamic>? ?? {};
       final ids = m['ids'] as Map<String, dynamic>? ?? {};
       final status = (m['status'] as String?) ?? 'watching';
+      // Simkl poster URL (website parity: simklPosterUrl in anilist.js).
+      final cover = _simklPosterUrl((show['poster'] as String?) ?? '');
       out.add(LibraryEntry(
         key: 'simkl_${ids['simkl'] ?? ids['simkl_id'] ?? ''}',
         source: 'simkl',
         title: (show['title'] as String?) ?? '',
-        cover: '',
+        cover: cover,
         status: status == 'watching'
             ? 'CURRENT'
             : status == 'completed'

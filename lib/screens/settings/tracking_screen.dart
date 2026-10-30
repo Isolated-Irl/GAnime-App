@@ -243,11 +243,14 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       final data = await OAuthService.exchangeMal(code, verifier);
       var username = '';
       try {
-        final r = await http.get(
+        // Website parity: POST with access_token in body (not GET with header).
+        final r = await http.post(
             Uri.parse('$_relayUrl/mal/me'),
-            headers: {'Authorization': 'Bearer ${data['access_token']}'});
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'access_token': data['access_token']}));
         final j = jsonDecode(utf8.decode(r.bodyBytes));
-        username = (j['name'] ?? '').toString();
+        final d = j['data'] as Map?;
+        username = ((d?['name'] ?? j['name']) ?? '').toString();
       } catch (_) {}
       final m = await Store.tracker();
       m['malClientId'] = OAuthService.malClientId;
