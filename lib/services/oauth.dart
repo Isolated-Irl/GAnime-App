@@ -114,10 +114,15 @@ class OAuthService {
 
   /// Exchange AniList authorization code for tokens via relay.
   /// (AniList dropped implicit flow; code flow is required.)
+  // AniList exchange via Render proxy (2026-10-30): Cloudflare Workers'
+  // IP range is blocked by AniList ("manually blocked"). The proxy holds
+  // the client secret server-side; the app never sees it.
+  static const _anilistProxyUrl = 'https://ganime-anilist-proxy.onrender.com';
+
   static Future<Map<String, dynamic>> exchangeAnilist(String code) async {
     final redirect = _oauthRedirect('anilist');
     final r = await http.post(
-      Uri.parse('$relayUrl/exchange/anilist'),
+      Uri.parse(_anilistProxyUrl),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'code': code,
