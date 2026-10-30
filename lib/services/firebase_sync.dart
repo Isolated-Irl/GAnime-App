@@ -292,21 +292,36 @@ class FirebaseSync {
     final raw = await pullRaw();
     if (raw == null) return null;
     final fields = raw['fields'] as Map<String, dynamic>? ?? {};
-    // App format: whole doc as a JSON string in the `ganime` field.
+    // The website and the app write to the SAME document in DIFFERENT
+    // formats (website: native Firestore fields; app: a `ganime` JSON
+    // string). A document can carry BOTH, so profiles must be unioned
+    // from both sources — never return early on just one.
+    final allProfiles = <String, Map<String, dynamic>>{};
+    Map<String, dynamic>? appDoc;
+    // 1. App format: whole doc as a JSON string in the `ganime` field.
     final ganime = fields['ganime'] as Map<String, dynamic>?;
     final s = ganime?['stringValue'] as String?;
     if (s != null) {
       try {
-        return jsonDecode(s) as Map<String, dynamic>;
-      } catch (_) {
-        return null;
+        appDoc = jsonDecode(s) as Map<String, dynamic>;
+        for (final p in (appDoc['profiles'] as List?) ?? []) {
+          final j = p as Map<String, dynamic>;
+          allProfiles['${j['id']}'] = j;
+        }
+      } catch (_) {}
+    }
+    // 2. Website format: native Firestore fields.
+    final webProfiles = _decodeValue(fields['profiles']);
+    if (webProfiles is List) {
+      for (final p in webProfiles) {
+        if (p is Map<String, dynamic>) {
+          allProfiles.putIfAbsent('${p['id']}', () => p);
+        }
       }
     }
-    // Website format: native Firestore fields (the website never writes a
-    // `ganime` wrapper). Decode them so the app can see website-synced data.
-    final profiles = _decodeValue(fields['profiles']);
-    if (profiles is! List) return null;
-    final out = <String, dynamic>{'profiles': profiles};
+    if (allProfiles.isEmpty && appDoc == null) return null;
+    final out = appDoc ?? <String, dynamic>{};
+    out['profiles'] = allProfiles.values.toList();
     final active = _decodeValue(fields['activeProfileId']);
     if (active is String && active.isNotEmpty) {
       out['activeProfileId'] = active;
