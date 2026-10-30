@@ -14,12 +14,10 @@ import '../models.dart';
 import '../services/episodes.dart';
 import '../services/kitsu.dart';
 import '../services/anilist.dart';
-import '../services/addons.dart';
-import '../services/addon_ids.dart';
 import '../widgets/ga_image.dart';
 import '../services/trackers.dart';
+import 'streams.dart';
 import '../store.dart';
-import 'player.dart';
 import '../widgets/skeletons.dart';
 
 class DetailsScreen extends StatefulWidget {
@@ -77,6 +75,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
   bool _filterOpen = false;
   String? _libStatus; // app status code, null = not in library
   String _studio = ''; // main studio from AniList, '' = unknown (no chip)
+  // Canonical anime for this screen. Calendar/tracker entries arrive
+  // as AniList objects (anilistId set, id = AniList id); _load() swaps
+  // in the Kitsu object for the same show so episodes, images and all
+  // local state agree with the same title opened from Home.
+  late Anime _anime;
 
   @override
   void initState() {
@@ -85,15 +88,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
             .contains(widget.settings.episodeLayout)
         ? widget.settings.episodeLayout
         : 'detailed';
+    _anime = widget.anime;
     _load();
   }
 
-  bool get _isMovie => widget.anime.format == 'MOVIE';
+  bool get _isMovie => _anime.format == 'MOVIE';
 
   int get _total {
     if (_isMovie) return 1;
     if (_episodes.isNotEmpty) return _episodes.length;
-    return widget.anime.episodes ?? 0;
+    return _anime.episodes ?? 0;
   }
 
   /// First unwatched episode (website logic); wraps to 1 when all watched.
@@ -117,46 +121,68 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _load() async {
     try {
-      final eps = await EpisodesService.forAnime(widget.anime);
-      var w = await Store.watched(widget.profileId, widget.anime.id);
-      // Resolve the AniList id once: needed for the watched-state
-      // migration below and for the main-studio chip (website parity).
-      int? alId;
-      try {
-        alId = await Kitsu.resolveAnilistId(widget.anime.id);
-      } catch (_) {}
-      // Best-effort migration: older installs keyed watched state by
-      // AniList id. If the new Kitsu key is empty, copy the old entry
-      // over once (never blocks, never overwrites existing state).
-      if (w.isEmpty && alId != null && alId != widget.anime.id) {
+      // Normalize AniList-sourced entries (Calendar/tracker) to the Kitsu
+      // object for the same show. After this, _anime.id IS the Kitsu id:
+      // episodes, posters/banner and every piece of local state (watched,
+      // saved, library) agree with the same title opened from Home — one
+      // identity instead of two. Result is memoized for the session.
+      if (_anime.anilistId != null && _anime.anilistId != _anime.id) {
+        final k = await Kitsu.fromAnilistCached(_anime.anilistId!);
+        if (k != null) {
+          // Keep the AniList id (studio chip, tracker pushes) and the
+          // airing info the calendar already knew.
+          _anime = k.copyWith(
+            anilistId: _anime.anilistId,
+            nextEpisode: _anime.nextEpisode,
+            airingAt: _anime.airingAt,
+          );
+        }
+      }
+      final a = _anime;
+      final alId = a.anilistId;
+
+      // Parallel where possible: episodes + watched + saved + library fly
+      // together; the studio call fires only when the catalog didn't carry
+      // it. Previously these were 5+ sequential awaits with the AniList-id
+      // lookup done twice — that was the visible lag on calendar opens.
+      final results = await Future.wait<dynamic>([
+        EpisodesService.forAnime(a),
+        Store.watched(widget.profileId, a.id),
+        Store.savedEps(widget.profileId, a.id),
+        Store.localLibrary(widget.profileId),
+        if (a.studio.isEmpty && alId != null)
+          AniList.details(alId)
+              .then<String>((d) => d.studio, onError: (_) => '')
+        else
+          Future<String>.value(a.studio),
+      ]);
+      final eps = results[0] as List<EpisodeInfo>;
+      var w = results[1] as Set<int>;
+      final saved = results[2] as Set<int>;
+      final lib = results[3] as List<LibraryEntry>;
+      final studio = results[4] as String;
+
+      // Best-effort migration: watched state written under the AniList key
+      // (pre-normalization installs) is copied to the Kitsu key once,
+      // never overwriting existing Kitsu-keyed state.
+      if (w.isEmpty && alId != null && alId != a.id) {
         try {
           final old = await Store.watched(widget.profileId, alId);
           if (old.isNotEmpty) {
-            await Store.setWatched(widget.profileId, widget.anime.id, old);
+            await Store.setWatched(widget.profileId, a.id, old);
             w = old;
           }
         } catch (_) {}
       }
-      // Main studio chip (website parity: details badge row shows the
-      // main studio, e.g. "Toei Animation"). Best-effort; no chip when
-      // unknown.
-      String studio = '';
-      if (alId != null) {
-        try {
-          studio = (await AniList.details(alId)).studio;
-        } catch (_) {}
-      }
-      final saved = await Store.savedEps(widget.profileId, widget.anime.id);
+
       String? libStatus;
       try {
-        final lib = await Store.localLibrary(widget.profileId);
         final e = lib
-            .where((e) =>
-                e.key == 'local_${widget.anime.id}' ||
-                e.anilistId == widget.anime.id)
+            .where((e) => e.key == 'local_${a.id}' || e.anilistId == a.id)
             .firstOrNull;
         libStatus = e?.status;
       } catch (_) {}
+
       if (mounted) {
         setState(() {
           _episodes = eps;
@@ -186,7 +212,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     } else {
       next.add(ep);
     }
-    await Store.setWatched(widget.profileId, widget.anime.id, next);
+    await Store.setWatched(widget.profileId, _anime.id, next);
     if (mounted) setState(() => _watched = next);
   }
 
@@ -197,7 +223,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     } else {
       next.add(ep);
     }
-    await Store.setSavedEps(widget.profileId, widget.anime.id, next);
+    await Store.setSavedEps(widget.profileId, _anime.id, next);
     if (mounted) setState(() => _saved = next);
   }
 
@@ -207,14 +233,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final total = _total;
     if (total <= 0) return;
     if (_allWatched) {
-      await Store.setWatched(widget.profileId, widget.anime.id, <int>{});
+      await Store.setWatched(widget.profileId, _anime.id, <int>{});
       if (mounted) setState(() => _watched = <int>{});
       return;
     }
     final all = List.generate(total, (i) => i + 1).toSet();
-    await Store.setWatched(widget.profileId, widget.anime.id, all);
+    await Store.setWatched(widget.profileId, _anime.id, all);
     if (mounted) setState(() => _watched = all);
-    await widget.onMarkWatched?.call(widget.anime, total);
+    await widget.onMarkWatched?.call(_anime, total);
   }
 
   Future<void> _setLayout(String v) async {
@@ -226,7 +252,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _setLibraryStatus(String? code) async {
-    final a = widget.anime;
+    final a = _anime;
     final lib = await Store.localLibrary(widget.profileId);
     final i = lib.indexWhere(
         (e) => e.key == 'local_${a.id}' || e.anilistId == a.id);
@@ -258,7 +284,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _openTrailer() async {
-    final id = widget.anime.trailerId;
+    final id = _anime.trailerId;
     if (id.isEmpty) return;
     final uri = Uri.parse('https://www.youtube.com/watch?v=$id');
     try {
@@ -273,112 +299,31 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _playEpisode(int ep) async {
-    // Addon stream resolution (website parity):
-    // 1) installed + enabled addons only (re-read fresh: a disable/remove
-    //    in Settings > Addons takes effect on the next play);
-    // 2) per-addon /stream/<type>/ path (general addons want "series",
-    //    anime-only ones "anime" — hardcoding "anime" 404s on general
-    //    addons, the reported "no stream addon found" bug);
-    // 3) every id dialect the addon understands (kitsu:/tt:/anilist:/
-    //    mal:), merged and de-duplicated.
-    // 4) Fallback: if the current profile has no addons, check other
-    //    profiles (addons are per-profile in storage, but the user
-    //    expects an installed addon to work everywhere).
-    var addons = (await Store.addons(widget.profileId))
-        .where((a) => a.enabled)
-        .toList();
-    if (addons.isEmpty) {
-      // Fallback: try addons from any profile.
-      final all = await Store.allAddons();
-      addons = all.where((a) => a.enabled).toList();
-    }
-    if (addons.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'No stream addon installed or enabled. Add one under Settings > Addons — the app ships with none.'),
-        ),
-      );
-      return;
-    }
-    // Legacy records saved before types/idPrefixes existed: refetch the
-    // manifest once so the per-addon type + id dialect resolve correctly.
-    for (var i = 0; i < addons.length; i++) {
-      final a = addons[i];
-      if (a.types.isEmpty) {
-        try {
-          final fresh = await AddonsService.fetchManifest(a.manifestUrl);
-          final updated = a.copyWith(
-            types: fresh.types,
-            idPrefixes: fresh.idPrefixes,
-          );
-          addons[i] = updated;
-          final all = await Store.addons(widget.profileId);
-          final idx =
-              all.indexWhere((e) => e.manifestUrl == a.manifestUrl);
-          if (idx >= 0) {
-            all[idx] = updated;
-            await Store.saveAddons(widget.profileId, all);
-          }
-        } catch (_) {}
-      }
-    }
-    final isMovie = widget.anime.format.toUpperCase() == 'MOVIE';
-    final ids = await AddonIdResolver.resolve(widget.anime);
-    final streams = <StreamSource>[];
-    final seen = <String>{};
-    final noIdNotes = <String>[];
-    for (final a in addons) {
-      final type = AddonsService.streamTypeFor(a, isMovie);
-      final sids = AddonIdResolver.streamIdsFor(
-        a,
-        ids,
-        title: widget.anime.title,
-        isMovie: isMovie,
-        episode: ep,
-      );
-      if (sids.isEmpty) {
-        noIdNotes.add(
-            '${a.name} understands: ${a.idPrefixes.join(', ')}');
-        continue;
-      }
-      for (final sid in sids) {
-        try {
-          final found = await AddonsService.streams(a, type, sid);
-          for (final s in found) {
-            if (s.url.isNotEmpty && seen.add(s.url)) streams.add(s);
-          }
-        } catch (_) {}
-      }
-    }
-    if (!mounted) return;
-    if (streams.isEmpty) {
-      final msg = noIdNotes.length == addons.length
-          ? 'No compatible ID for this title — ${noIdNotes.join('; ')}.'
-          : 'No streams found for episode $ep. The installed addon(s) returned nothing for this title.';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg)),
-      );
-      return;
-    }
+    // Stream fetch lives in the Streams screen: per-addon groups,
+    // progressive loading, user picks a link.
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => PlayerScreen(
-          anime: widget.anime,
+        builder: (_) => StreamsScreen(
+          anime: _anime,
           episode: ep,
-          streams: streams,
+          profileId: widget.profileId,
           settings: widget.settings,
           onMarkWatched: () async {
             final next = Set<int>.from(_watched)..add(ep);
-            await Store.setWatched(widget.profileId, widget.anime.id, next);
+            await Store.setWatched(widget.profileId, _anime.id, next);
             if (mounted) setState(() => _watched = next);
-            await widget.onMarkWatched?.call(widget.anime, ep);
+            await widget.onMarkWatched?.call(_anime, ep);
           },
         ),
       ),
     );
+    // Watched may have changed in the player (85% rule).
+    try {
+      final w = await Store.watched(widget.profileId, _anime.id);
+      if (mounted) setState(() => _watched = w);
+    } catch (_) {}
   }
+
 
   // ---------- episode ranges (website chunking) ----------
   List<_EpRange> _ranges(int total) {
@@ -430,7 +375,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final skToken = (t['simklToken'] as String?) ?? '';
     final skName = (t['simklUsername'] as String?) ?? '';
     final skId =
-        (t['simklIdFor_${widget.anime.id}'] as num?)?.toInt();
+        (t['simklIdFor_${_anime.id}'] as num?)?.toInt();
     final malUser = (t['malUsername'] as String?) ?? '';
     final total = _total;
     final count = _watchedCount;
@@ -446,7 +391,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         return;
       }
       try {
-        final al = await Kitsu.resolveAnilistId(widget.anime.id);
+        final al = await Kitsu.resolveAnilistId(_anime.id);
         if (al == null) throw Exception('no mapping');
         await Trackers.anilistSave(alToken, al, maxEp);
         if (mounted) {
@@ -497,7 +442,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             children: [
               const Text('Tracking',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Text(widget.anime.title,
+              Text(_anime.title,
                   style: TextStyle(color: Colors.grey.shade400)),
               const SizedBox(height: 12),
               Text('This device: $count / $total episodes watched'),
@@ -1036,7 +981,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final a = widget.anime;
+    final a = _anime;
     final accent = Theme.of(context).colorScheme.primary;
     final total = _total;
     final nextEp = _nextEp;
@@ -1054,15 +999,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Clean banner (website mobile): full image, nothing else.
+                // Height adapts to the banner's REAL aspect ratio — Kitsu
+                // coverImages range from square-ish to cinemascope, and a
+                // fixed-height BoxFit.cover hero cropped heads off or
+                // letterboxed black depending on the title.
                 if (a.banner.isNotEmpty)
-                  GaImage(
-                    url: a.banner,
-                    height: 200,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorFallback: Container(
-                        height: 120, color: GaColors.of(context).card),
-                  )
+                  _AspectHero(url: a.banner)
                 else
                   Container(height: 120, color: GaColors.of(context).card),
                 Padding(
@@ -1549,6 +1491,67 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   color: Colors.grey.shade600, size: 20),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+/// Full-width hero whose height matches the image's actual aspect ratio
+/// (clamped). Resolves the image stream once, then animates to the right
+/// height — no cropped heads, no black letterbox, whatever shape Kitsu's
+/// coverImage comes in.
+class _AspectHero extends StatefulWidget {
+  final String url;
+  const _AspectHero({required this.url});
+
+  @override
+  State<_AspectHero> createState() => _AspectHeroState();
+}
+
+class _AspectHeroState extends State<_AspectHero> {
+  double? _aspect;
+
+  @override
+  void initState() {
+    super.initState();
+    NetworkImage(widget.url)
+        .resolve(const ImageConfiguration())
+        .addListener(
+      ImageStreamListener(
+        (info, _) {
+          if (!mounted ||
+              info.image.width == 0 ||
+              info.image.height == 0) {
+            return;
+          }
+          setState(() => _aspect = info.image.width / info.image.height);
+        },
+        onError: (_, _) {},
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final w = MediaQuery.of(context).size.width;
+    final h = _aspect == null
+        ? 200.0
+        // Fill the width; grow/shrink with the image's real shape.
+        // Floor 200 keeps layout stable before/while loading; the cap
+        // keeps square-ish banners from eating the whole screen.
+        : (w / _aspect!).clamp(200.0, w * 0.72);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      height: h,
+      width: double.infinity,
+      child: GaImage(
+        url: widget.url,
+        height: h,
+        width: double.infinity,
+        fit: BoxFit.cover,
+        errorFallback: Container(
+            height: 200, color: GaColors.of(context).card),
       ),
     );
   }
