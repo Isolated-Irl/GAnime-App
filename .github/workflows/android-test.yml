@@ -32,6 +32,18 @@ jobs:
       - name: Flutter analyze
         run: flutter analyze
 
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/ganime-release.jks
+          cat > android/key.properties <<EOF
+          storeFile=ganime-release.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+
       - name: Build release APK
         run: flutter build apk --release
 
