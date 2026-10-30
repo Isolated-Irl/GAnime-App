@@ -321,6 +321,12 @@ class FirebaseSync {
   Map<String, dynamic> _trackerToNative(
       Map<String, dynamic> t, int now) {
     final out = <String, dynamic>{};
+    // Disconnect tombstones: if the user disconnected, emit a tombstone
+    // entry so the merge knows it's deliberate (not just missing data).
+    // The tombstone beats any cloud conn saved at or before it.
+    final anilistDisc = (t['anilistDisconnectedAt'] as num?)?.toInt() ?? 0;
+    final simklDisc = (t['simklDisconnectedAt'] as num?)?.toInt() ?? 0;
+    final malDisc = (t['malDisconnectedAt'] as num?)?.toInt() ?? 0;
     if ('${t['anilistToken'] ?? ''}'.isNotEmpty) {
       out['anilist'] = {
         'accessToken': '${t['anilistToken']}',
@@ -330,6 +336,8 @@ class FirebaseSync {
         },
         'savedAt': now,
       };
+    } else if (anilistDisc > 0) {
+      out['anilist'] = {'disconnectedAt': anilistDisc, 'savedAt': anilistDisc};
     }
     if ('${t['simklToken'] ?? ''}'.isNotEmpty) {
       out['simkl'] = {
@@ -340,6 +348,8 @@ class FirebaseSync {
         'user': {'name': '${t['simklUsername'] ?? ''}'},
         'savedAt': now,
       };
+    } else if (simklDisc > 0) {
+      out['simkl'] = {'disconnectedAt': simklDisc, 'savedAt': simklDisc};
     }
     if ('${t['malToken'] ?? ''}'.isNotEmpty) {
       out['mal'] = {
@@ -349,6 +359,8 @@ class FirebaseSync {
         'user': {'name': '${t['malUsername'] ?? ''}'},
         'savedAt': now,
       };
+    } else if (malDisc > 0) {
+      out['mal'] = {'disconnectedAt': malDisc, 'savedAt': malDisc};
     }
     return out;
   }
@@ -514,6 +526,9 @@ class FirebaseSync {
     out['mylist'] = mylist;
 
     // Tracking: per provider, NEWEST conn wins (savedAt). Website rule.
+    // Disconnect tombstone: a disconnectedAt newer than (or equal to) the
+    // other side's savedAt means a deliberate disconnect — drop the provider
+    // entirely instead of resurrecting it.
     final lt = Map<String, dynamic>.from((ls['tracking'] as Map?) ?? {});
     final ct = Map<String, dynamic>.from((cs['tracking'] as Map?) ?? {});
     final mergedTracking = <String, dynamic>{};
@@ -521,6 +536,12 @@ class FirebaseSync {
       final l = lt[prov] as Map?;
       final c = ct[prov] as Map?;
       if (l == null && c == null) continue;
+      final lDisc = (l?['disconnectedAt'] as num?)?.toInt() ?? 0;
+      final cDisc = (c?['disconnectedAt'] as num?)?.toInt() ?? 0;
+      final lAt = (l?['savedAt'] as num?)?.toInt() ?? 0;
+      final cAt = (c?['savedAt'] as num?)?.toInt() ?? 0;
+      if (lDisc > 0 && lDisc >= cAt) continue; // local disconnect wins
+      if (cDisc > 0 && cDisc >= lAt) continue; // cloud disconnect wins
       if (l == null) {
         mergedTracking[prov] = c;
         continue;
@@ -529,8 +550,6 @@ class FirebaseSync {
         mergedTracking[prov] = l;
         continue;
       }
-      final lAt = (l['savedAt'] as num?)?.toInt() ?? 0;
-      final cAt = (c['savedAt'] as num?)?.toInt() ?? 0;
       mergedTracking[prov] = cAt >= lAt ? c : l;
     }
     out['tracking'] = mergedTracking;
@@ -782,34 +801,58 @@ class FirebaseSync {
       }
     }
     // Tracker logins (website `{anilist,simkl,mal}` conns -> app's
-    // flat tracker map).
+    // flat tracker map). A cloud tombstone (disconnectedAt) wipes the
+    // local keys so a website-side disconnect is honored.
     final wt = pdata['tracking'] as Map<String, dynamic>?;
     if (wt != null && wt.isNotEmpty) {
       final m = <String, dynamic>{};
       final al = wt['anilist'] as Map?;
       if (al != null) {
-        final user = al['user'] as Map?;
-        m['anilistToken'] = '${al['accessToken'] ?? ''}';
-        m['anilistUserId'] = '${user?['id'] ?? ''}';
-        m['anilistUsername'] = '${user?['name'] ?? ''}';
+        if (((al['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
+          // Cloud tombstone: wipe local AniList keys.
+          m['anilistToken'] = '';
+          m['anilistUserId'] = '';
+          m['anilistUsername'] = '';
+          m['anilistDisconnectedAt'] =
+              (al['disconnectedAt'] as num).toInt();
+        } else {
+          final user = al['user'] as Map?;
+          m['anilistToken'] = '${al['accessToken'] ?? ''}';
+          m['anilistUserId'] = '${user?['id'] ?? ''}';
+          m['anilistUsername'] = '${user?['name'] ?? ''}';
+        }
       }
       final sk = wt['simkl'] as Map?;
       if (sk != null) {
-        final user = sk['user'] as Map?;
-        m['simklClientId'] = '${sk['clientId'] ?? ''}';
-        m['simklToken'] = '${sk['accessToken'] ?? ''}';
-        m['simklRefreshToken'] = '${sk['refreshToken'] ?? ''}';
-        m['simklExpiresAt'] = (sk['expiresAt'] as num?)?.toInt() ?? 0;
-        m['simklUsername'] =
-            '${user?['name'] ?? user?['username'] ?? ''}';
+        if (((sk['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
+          m['simklToken'] = '';
+          m['simklRefreshToken'] = '';
+          m['simklUsername'] = '';
+          m['simklDisconnectedAt'] = (sk['disconnectedAt'] as num).toInt();
+        } else {
+          final user = sk['user'] as Map?;
+          m['simklClientId'] = '${sk['clientId'] ?? ''}';
+          m['simklToken'] = '${sk['accessToken'] ?? ''}';
+          m['simklRefreshToken'] = '${sk['refreshToken'] ?? ''}';
+          m['simklExpiresAt'] = (sk['expiresAt'] as num?)?.toInt() ?? 0;
+          m['simklUsername'] =
+              '${user?['name'] ?? user?['username'] ?? ''}';
+        }
       }
       final mal = wt['mal'] as Map?;
       if (mal != null) {
-        final user = mal['user'] as Map?;
-        m['malClientId'] = '${mal['clientId'] ?? ''}';
-        m['malToken'] = '${mal['accessToken'] ?? ''}';
-        m['malRefreshToken'] = '${mal['refreshToken'] ?? ''}';
-        m['malUsername'] = '${user?['name'] ?? ''}';
+        if (((mal['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
+          m['malToken'] = '';
+          m['malRefreshToken'] = '';
+          m['malUsername'] = '';
+          m['malDisconnectedAt'] = (mal['disconnectedAt'] as num).toInt();
+        } else {
+          final user = mal['user'] as Map?;
+          m['malClientId'] = '${mal['clientId'] ?? ''}';
+          m['malToken'] = '${mal['accessToken'] ?? ''}';
+          m['malRefreshToken'] = '${mal['refreshToken'] ?? ''}';
+          m['malUsername'] = '${user?['name'] ?? ''}';
+        }
       }
       if (m.isNotEmpty) await Store.saveTracker(m);
     }
