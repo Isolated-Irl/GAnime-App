@@ -2354,9 +2354,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// stream ids and tracker pushes agree, falling back to AniList
   /// details. Entries without an id can't open details.
   Future<void> _openLibraryEntry(LibraryEntry e) async {
-    if (e.anilistId == null) return;
-    final a = await Kitsu.fromAnilist(e.anilistId!) ??
-        await AniList.details(e.anilistId!);
+    var alId = e.anilistId;
+    if (alId == null || alId <= 0) {
+      // MAL/Simkl entries without an AniList ID: title-search fallback.
+      try {
+        final res = await AniList.search(e.title);
+        if (res.isEmpty || !mounted) return;
+        final q = e.title.toLowerCase();
+        final match = res.firstWhere(
+          (a) => a.title.toLowerCase() == q,
+          orElse: () => res.first,
+        );
+        alId = match.id;
+      } catch (_) {
+        return;
+      }
+    }
+    final a = await Kitsu.fromAnilist(alId) ?? await AniList.details(alId);
     if (!mounted) return;
     await openDetails(context,
         anime: a,

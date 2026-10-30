@@ -60,10 +60,17 @@ class Trackers {
     return 'https://simkl.in/posters/${bare.length >= 2 ? bare.substring(0, 2) : bare}/${bare}_m.webp';
   }
 
+  /// Timestamp normalizer: Simkl returns ISO strings, AniList returns epoch numbers.
+  static int _ts(dynamic v) {
+    if (v is num) return v.toInt();
+    if (v is String) return DateTime.tryParse(v)?.millisecondsSinceEpoch ?? 0;
+    return 0;
+  }
+
   static Future<List<LibraryEntry>> simklLists(
       String clientId, String token) async {
     final r = await http.get(
-      Uri.parse('https://api.simkl.com/sync/all-items/anime'),
+      Uri.parse('https://api.simkl.com/sync/all-items/anime?extended=full'),
       headers: {
         'Authorization': 'Bearer $token',
         'simkl-api-key': clientId,
@@ -79,9 +86,14 @@ class Trackers {
       final status = (m['status'] as String?) ?? 'watching';
       // Simkl poster URL (website parity: simklPosterUrl in anilist.js).
       final cover = _simklPosterUrl((show['poster'] as String?) ?? '');
+      // AniList ID: check both show.ids and item-level ids (Simkl varies).
+      final showIds = show['ids'] as Map<String, dynamic>?;
+      final anilistId = (showIds?['anilist'] as num?)?.toInt() ??
+          (ids['anilist'] as num?)?.toInt();
       out.add(LibraryEntry(
         key: 'simkl_${ids['simkl'] ?? ids['simkl_id'] ?? ''}',
         source: 'simkl',
+        anilistId: anilistId,
         title: (show['title'] as String?) ?? '',
         cover: cover,
         status: status == 'watching'
@@ -93,6 +105,8 @@ class Trackers {
                     : 'CURRENT',
         progress: (m['watched_episodes'] as num?)?.toInt() ?? 0,
         total: (show['total_episodes'] as num?)?.toInt(),
+        score: (m['rating'] as num?)?.toDouble(),
+        updatedAt: _ts(m['last_watched_at']) ~/ 1000,
       ));
     }
     return out;
@@ -153,6 +167,7 @@ class Trackers {
         progress: (ls['num_watched_episodes'] as num?)?.toInt() ?? 0,
         total: (anime['num_episodes'] as num?)?.toInt(),
         score: (ls['score'] as num?)?.toDouble(),
+        updatedAt: _ts(ls['updated_at']) ~/ 1000,
       ));
     }
     return out;
