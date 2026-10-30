@@ -191,6 +191,15 @@ query (\$from: Int, \$to: Int) {
     return (data['Viewer'] as Map<String, dynamic>?) ?? {};
   }
 
+  /// AniList score can come back as num or String depending on the
+  /// user's score format — parse defensively.
+  static double? _parseScore(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
+  }
+
   static Future<List<LibraryEntry>> userLists(
       String token, int userId) async {
     const q = '''
@@ -218,7 +227,7 @@ query (\$userId: Int) {
           status: (j['status'] as String?) ?? 'CURRENT',
           progress: (j['progress'] as num?)?.toInt() ?? 0,
           total: m.episodes,
-          score: (j['score'] as num?)?.toDouble(),
+          score: _parseScore(j['score']),
           anilistId: m.id,
           updatedAt: (j['updatedAt'] as num?)?.toInt() ?? 0,
         ));
