@@ -1,28 +1,11 @@
-// Episode data via Kitsu (catalogue ids are Kitsu ids now).
-// Falls back to a plain numbered list when Kitsu is down or has no
-// episodes for the title, so Details never blocks on it.
+// Episode data: the catalogue is AniList-based and AniList exposes no
+// per-episode titles/stills, so Details builds a reliable numbered list
+// from the AniList episode total (or the airing schedule's next episode
+// for releasing titles whose total is still unknown). Never blocks.
 import '../models.dart';
-import 'kitsu.dart';
-import 'addon_ids.dart';
 
 class EpisodesService {
   static Future<List<EpisodeInfo>> forAnime(Anime a) async {
-    try {
-      // Calendar/Tracker items carry AniList IDs, not Kitsu IDs.
-      // Resolve to Kitsu first so we get real episodes (titles, stills)
-      // instead of hanging on a wrong ID.
-      int kitsuId = a.id;
-      try {
-        final resolved = await AddonIdResolver.resolve(a);
-        if (resolved.kitsu != null) {
-          kitsuId = int.tryParse(resolved.kitsu!) ?? a.id;
-        }
-      } catch (_) {}
-      final eps = await Kitsu.episodes(kitsuId);
-      if (eps.isNotEmpty) return eps;
-    } catch (_) {
-      // Fall through to the numbered fallback below.
-    }
     // For releasing titles, episode count is often unknown (null).
     // Use nextEpisode from the airing schedule if available —
     // the calendar knows EP 5 is out even if the total is unknown.

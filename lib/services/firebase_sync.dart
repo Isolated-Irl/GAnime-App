@@ -164,7 +164,6 @@ class FirebaseSync {
   /// Merge-first, matching the web app's pushOnly/syncNow:
   ///   * profiles: union by id, LOCAL wins on same-id conflict (website rule)
   ///   * byProfile stores: union/newest-wins per website mergeDocs
-  ///   * tracking: newest conn wins per provider (savedAt)
   ///   * tombstones: unioned, never resurrected
   /// The PATCH uses updateMask so the website's fields (and any other
   /// fields) are preserved — a mask-less PATCH would REPLACE the whole
@@ -290,8 +289,6 @@ class FirebaseSync {
             },
         },
         'mylist': <dynamic>[],
-        // Tracker logins are PER-DEVICE (2026-10-30): never collected
-        // into the cloud doc. Tokens live only in this device's Store.
         '_ts': {
           'settings': now,
           'addons': now,
@@ -314,11 +311,6 @@ class FirebaseSync {
       },
     };
   }
-
-  // REMOVED 2026-10-30: _trackerToNative deleted — tracker logins
-  // are per-device now, never converted for cloud sync.
-
-
   /// Decode the cloud's native top-level fields (website's _decodeDoc
   /// restricted to the fields the app understands).
   Map<String, dynamic> _decodeNative(Map<String, dynamic> fields) {
@@ -479,12 +471,6 @@ class FirebaseSync {
     }.toList();
     out['mylist'] = mylist;
 
-    // Tracking is PER-DEVICE (2026-10-30): never merged, never read
-    // from the cloud. Each device keeps its own tracker logins.
-    // Strip any tracking field so stale cloud tokens never ride
-    // in the merged doc.
-    out.remove('tracking');
-
     out['_ts'] = {
       for (final k in ['settings', 'addons', 'watched', 'locallib',
           'mylist'])
@@ -581,9 +567,13 @@ class FirebaseSync {
       }
       if (lib.isNotEmpty) await Store.saveLocalLibrary(pid, lib);
     }
-    // Tracker logins are PER-DEVICE (2026-10-30): never adopted from
-    // the cloud. Each device keeps its own tracker connections in
-    // its local Store.
+    // Per-profile extras (addons only — tracker logins are per-device).
+    final pid = activeId ?? (profiles.isNotEmpty ? profiles.first.id : '');
+    final pdata = byProfile[pid] as Map?;
+    if (pdata != null) {
+      await FirebaseSync.pullProfileExtras(
+          {'byProfile': byProfile}, pid);
+    }
   }
 
   /// Stable JSON for change comparison.
@@ -693,7 +683,8 @@ class FirebaseSync {
     return v;
   }
 
-  /// Website parity: pulls per-profile extras (addons + tracker logins)
+  /// Website parity: pulls per-profile extras (addons only; tracker
+  /// logins are per-device and never synced).
   /// from a cloud doc's native `byProfile.{pid}` format. Called on fresh
   /// login, and on manual Sync Now so website-side connects appear without
   /// a sign-out/in cycle. (2026-10-30: the app only pulled these on fresh
@@ -725,62 +716,6 @@ class FirebaseSync {
       if (addons.isNotEmpty) {
         await Store.saveAddons(pid, addons);
       }
-    }
-    // Tracker logins (website `{anilist,simkl,mal}` conns -> app's
-    // flat tracker map). A cloud tombstone (disconnectedAt) wipes the
-    // local keys so a website-side disconnect is honored.
-    final wt = pdata['tracking'] as Map<String, dynamic>?;
-    if (wt != null && wt.isNotEmpty) {
-      final m = <String, dynamic>{};
-      final al = wt['anilist'] as Map?;
-      if (al != null) {
-        if (((al['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
-          // Cloud tombstone: wipe local AniList keys.
-          m['anilistToken'] = '';
-          m['anilistUserId'] = '';
-          m['anilistUsername'] = '';
-          m['anilistDisconnectedAt'] =
-              (al['disconnectedAt'] as num).toInt();
-        } else {
-          final user = al['user'] as Map?;
-          m['anilistToken'] = '${al['accessToken'] ?? ''}';
-          m['anilistUserId'] = '${user?['id'] ?? ''}';
-          m['anilistUsername'] = '${user?['name'] ?? ''}';
-        }
-      }
-      final sk = wt['simkl'] as Map?;
-      if (sk != null) {
-        if (((sk['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
-          m['simklToken'] = '';
-          m['simklRefreshToken'] = '';
-          m['simklUsername'] = '';
-          m['simklDisconnectedAt'] = (sk['disconnectedAt'] as num).toInt();
-        } else {
-          final user = sk['user'] as Map?;
-          m['simklClientId'] = '${sk['clientId'] ?? ''}';
-          m['simklToken'] = '${sk['accessToken'] ?? ''}';
-          m['simklRefreshToken'] = '${sk['refreshToken'] ?? ''}';
-          m['simklExpiresAt'] = (sk['expiresAt'] as num?)?.toInt() ?? 0;
-          m['simklUsername'] =
-              '${user?['name'] ?? user?['username'] ?? ''}';
-        }
-      }
-      final mal = wt['mal'] as Map?;
-      if (mal != null) {
-        if (((mal['disconnectedAt'] as num?)?.toInt() ?? 0) > 0) {
-          m['malToken'] = '';
-          m['malRefreshToken'] = '';
-          m['malUsername'] = '';
-          m['malDisconnectedAt'] = (mal['disconnectedAt'] as num).toInt();
-        } else {
-          final user = mal['user'] as Map?;
-          m['malClientId'] = '${mal['clientId'] ?? ''}';
-          m['malToken'] = '${mal['accessToken'] ?? ''}';
-          m['malRefreshToken'] = '${mal['refreshToken'] ?? ''}';
-          m['malUsername'] = '${user?['name'] ?? ''}';
-        }
-      }
-      if (m.isNotEmpty) await Store.saveTracker(m);
     }
   }
 }

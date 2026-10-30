@@ -74,15 +74,13 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       : (_malConnected ? 'Connected' : 'Not connected');
 
   Future<void> _disconnect(String pkey, String title, List<String> keys) async {
+    // Trackers are per-device (never cloud-synced): disconnect = just
+    // remove the local keys. Nothing to tombstone, nothing to propagate.
     final m = await Store.tracker();
-    // Tombstone: record the disconnect time so the merge knows this is a
-    // deliberate disconnect (not just missing data), and the cloud/website
-    // drops it too instead of resurrecting it.
-    // (Store.saveTracker triggers onDirty → auto-push carries it to cloud.)
-    m['${pkey}DisconnectedAt'] = DateTime.now().millisecondsSinceEpoch;
     for (final k in keys) {
       m.remove(k);
     }
+    m.remove('${pkey}DisconnectedAt'); // legacy tombstone, no longer used
     await Store.saveTracker(m);
     _msg = '$title disconnected.';
     await _reload();

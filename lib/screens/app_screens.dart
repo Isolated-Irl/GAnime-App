@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../services/anilist.dart';
-import '../services/kitsu.dart';
 import '../services/trackers.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
@@ -216,7 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _homeFetching = true;
     try {
       final fresh = await _loadHome();
-      // Stamp ONLY on success; persist the 6 Kitsu rails (not the local
+      // Stamp ONLY on success; persist the 6 AniList rails (not the local
       // library — that stays live).
       final railsJson = jsonEncode(
         (fresh.sublist(0, 6))
@@ -233,12 +232,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<List<dynamic>> _loadHome() {
     return Future.wait([
-      _safe(Kitsu.trending()),
-      _safe(Kitsu.popularThisSeason()),
-      _safe(Kitsu.upcomingNextSeason()),
-      _safe(Kitsu.popular()),
-      _safe(Kitsu.topRated()),
-      _safe(Kitsu.topMovies()),
+      _safe(AniList.trending()),
+      _safe(AniList.popularThisSeason()),
+      _safe(AniList.upcomingNextSeason()),
+      _safe(AniList.popular()),
+      _safe(AniList.topRated()),
+      _safe(AniList.topMovies()),
       Store.localLibrary(widget.profileId),
     ]);
   }
@@ -425,7 +424,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 setState(() => _heroIndex = i),
                             itemBuilder: (_, i) {
                               final a = heroItems[i];
-                              // Full-res hero art: Kitsu coverImage.original
+                              // Full-res hero art: AniList coverImage.extraLarge
                               // (bannerXL), then banner, then poster.
                               final art = a.bannerXL.isNotEmpty
                                   ? a.bannerXL
@@ -812,14 +811,48 @@ class SearchScreen extends StatefulWidget {
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
-/// Kitsu sort options for search, shared by the filter sheet and the
-/// results toolbar (website parity: toolbar sort and sheet sort share
-/// state — both read/write _SearchScreenState._sort).
-const _kitsuSortLabels = {
-  'ratingRank': 'Top rated',
-  '-userCount': 'Most popular',
-  '-startDate': 'Newest',
+/// AniList sort options for search, shared by the filter sheet and the
+/// results toolbar (website parity: App.SORTS — toolbar sort and sheet
+/// sort share state, both read/write _SearchScreenState._sort).
+const _anilistSortLabels = {
+  'POPULARITY_DESC': 'Popularity',
+  'SCORE_DESC': 'Average Score',
+  'TRENDING_DESC': 'Trending',
+  'TITLE_ROMAJI': 'Title',
+  'FAVOURITES_DESC': 'Favorites',
+  'START_DATE_DESC': 'Release Date',
 };
+/// Maps the app's stored subtype filter values to AniList MediaFormat.
+String? _anilistFormat(String? subtype) {
+  switch (subtype) {
+    case 'TV':
+      return 'TV';
+    case 'movie':
+      return 'MOVIE';
+    case 'OVA':
+      return 'OVA';
+    case 'ONA':
+      return 'ONA';
+    case 'special':
+      return 'SPECIAL';
+    default:
+      return subtype?.toUpperCase();
+  }
+}
+
+/// Maps the app's stored status filter values to AniList MediaStatus.
+String? _anilistStatus(String? status) {
+  switch (status) {
+    case 'current':
+      return 'RELEASING';
+    case 'finished':
+      return 'FINISHED';
+    case 'upcoming':
+      return 'NOT_YET_RELEASED';
+    default:
+      return status?.toUpperCase();
+  }
+}
 
 class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
@@ -836,7 +869,7 @@ class _SearchScreenState extends State<SearchScreen> {
   int? _year;
   String? _subtype; // TV | movie | OVA | ONA | special
   String? _status; // current | finished | upcoming
-  String? _sort; // ratingRank | -userCount | -startDate
+  String? _sort; // AniList MediaSort: POPULARITY_DESC | SCORE_DESC | ...
   // Which filter-sheet panel is open (website pattern: one panel at a
   // time, inline below its control — no overlay dropdowns). Null = closed.
   // 'genres' | 'year' | 'season' | 'format' | 'status' | 'sort'
@@ -846,7 +879,7 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
-    Kitsu.genreList().then((g) {
+    AniList.genreList().then((g) {
       if (mounted) setState(() => _allGenres = g);
     });
   }
@@ -870,13 +903,13 @@ class _SearchScreenState extends State<SearchScreen> {
       _fuzzy = [];
     });
     try {
-      final r = await Kitsu.search(
+      final r = await AniList.search(
         q,
         genres: _genres.isEmpty ? null : _genres.toList(),
         year: _year,
         season: _season,
-        subtype: _subtype,
-        status: _status,
+        format: _anilistFormat(_subtype),
+        status: _anilistStatus(_status),
         sort: _sort,
       );
       // Misspelling rescue (website parity): when the query is non-empty
@@ -890,15 +923,15 @@ class _SearchScreenState extends State<SearchScreen> {
             ..sort((a, b) => b.length.compareTo(a.length));
           final longest = tokens.isNotEmpty ? tokens.first : '';
           final sameAsQuery = longest.toLowerCase() == q.toLowerCase();
-          // Kitsu's relevance sort is sort=null (website's SEARCH_MATCH).
+          // AniList relevance sort is SEARCH_MATCH (website parity).
           if (longest.length >= 3 && !(sameAsQuery && _sort == null)) {
-            final retry = await Kitsu.search(
+            final retry = await AniList.search(
               longest,
               genres: _genres.isEmpty ? null : _genres.toList(),
               year: _year,
               season: _season,
-              subtype: _subtype,
-              status: _status,
+              format: _anilistFormat(_subtype),
+              status: _anilistStatus(_status),
               sort: null,
             );
             final seen = r.map((a) => a.id).toSet();
@@ -906,7 +939,7 @@ class _SearchScreenState extends State<SearchScreen> {
               if (seen.add(t.id)) fuzzy.add(t);
             }
           }
-          final local = Kitsu.fuzzyLocal(
+          final local = AniList.fuzzyLocal(
               q, r.map((a) => a.id).toSet().union(fuzzy.map((a) => a.id).toSet()));
           fuzzy.addAll(local);
         } catch (_) {}
@@ -940,7 +973,7 @@ class _SearchScreenState extends State<SearchScreen> {
     void loadSeasonCounts(int y) {
       seasonCounts = null;
       refresh?.call(() {});
-      Kitsu.seasonCounts(y).then((m) {
+      AniList.seasonCounts(y).then((m) {
         seasonCounts = m;
         refresh?.call(() {});
       });
@@ -969,7 +1002,7 @@ class _SearchScreenState extends State<SearchScreen> {
       'finished': 'Finished',
       'upcoming': 'Upcoming',
     };
-    const sortLabels = _kitsuSortLabels;
+    const sortLabels = _anilistSortLabels;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1124,7 +1157,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
                 const SizedBox(height: 16),
                 // Season: a proper dropdown box like Year/Format/Status.
-                // Kitsu needs seasonYear + season together, so the box
+                // AniList allows season alone, but the box
                 // stays disabled until a year is picked.
                 _filterDropdown<String?>(
                   'season',
@@ -1287,7 +1320,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 items: [
                   const DropdownMenuItem<String?>(
                       value: null, child: Text('Relevance')),
-                  ..._kitsuSortLabels.entries.map((e) =>
+                  ..._anilistSortLabels.entries.map((e) =>
                       DropdownMenuItem<String?>(
                           value: e.key, child: Text(e.value))),
                 ],
@@ -2044,14 +2077,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
-                  // Calendar entries carry AniList ids; resolve to the Kitsu
-                  // catalogue entry so episodes, stream ids and tracker
-                  // pushes agree. Falls back to the AniList object.
-                  onTap: () async {
-                    final k = await Kitsu.fromAnilist(a.id);
-                    if (!context.mounted) return;
+                  // Calendar entries carry AniList ids; the catalogue is
+                  // AniList-based so open directly.
+                  onTap: () {
+                    // Calendar entries carry AniList ids; the catalogue is
+                    // AniList-based now, so open directly — no lookup delay.
                     openDetails(context,
-                        anime: k ?? a,
+                        anime: a,
                         profileId: widget.profileId,
                         settings: widget.settings,
                         onMarkWatched: widget.onMarkWatched);
@@ -2350,27 +2382,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   /// Opens the details screen for a library entry. Tracker entries
-  /// carry AniList ids; prefer the Kitsu catalogue entry so episodes,
-  /// stream ids and tracker pushes agree, falling back to AniList
-  /// details. Entries without an id can't open details.
+  /// carry AniList ids; the catalogue is AniList-based so details
+  /// load straight from AniList. Entries without an id can't open.
   Future<void> _openLibraryEntry(LibraryEntry e) async {
-    var alId = e.anilistId;
-    if (alId == null || alId <= 0) {
-      // MAL/Simkl entries without an AniList ID: title-search fallback.
-      try {
-        final res = await AniList.search(e.title);
-        if (res.isEmpty || !mounted) return;
-        final q = e.title.toLowerCase();
-        final match = res.firstWhere(
-          (a) => a.title.toLowerCase() == q,
-          orElse: () => res.first,
-        );
-        alId = match.id;
-      } catch (_) {
-        return;
-      }
-    }
-    final a = await Kitsu.fromAnilist(alId) ?? await AniList.details(alId);
+    if (e.anilistId == null) return;
+    // Catalogue is AniList-based: go straight to AniList details.
+    // (The old Kitsu-first lookup added 3 roundtrips before this.)
+    final a = await AniList.details(e.anilistId!);
     if (!mounted) return;
     await openDetails(context,
         anime: a,

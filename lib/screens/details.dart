@@ -3,7 +3,7 @@
 // library / mark-all-watched / trailer action row, Watching Progress card
 // with tracking sheet, episode filter row (Filter menu + All + ranges),
 // and Detailed / Minimum episode layouts (persisted in AppSettings).
-// Episodes come from Kitsu; watched + saved state is local per profile.
+// Episodes are numbered from the AniList total; watched + saved state is local per profile.
 // Tapping an episode opens the stream picker, then the player.
 // If no addon is installed, streams are empty and the player screen
 // explains that — the app never invents a stream source.
@@ -12,7 +12,6 @@ import '../theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../services/episodes.dart';
-import '../services/kitsu.dart';
 import '../services/anilist.dart';
 import '../widgets/ga_image.dart';
 import '../services/trackers.dart';
@@ -77,7 +76,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   String _studio = ''; // main studio from AniList, '' = unknown (no chip)
   // Canonical anime for this screen. Calendar/tracker entries arrive
   // as AniList objects (anilistId set, id = AniList id); _load() swaps
-  // in the Kitsu object for the same show so episodes, images and all
+  // in the AniList object for the same show so episodes, images and all
   // local state agree with the same title opened from Home.
   late Anime _anime;
 
@@ -121,22 +120,19 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _load() async {
     try {
-      // Normalize AniList-sourced entries (Calendar/tracker) to the Kitsu
-      // object for the same show. After this, _anime.id IS the Kitsu id:
-      // episodes, posters/banner and every piece of local state (watched,
-      // saved, library) agree with the same title opened from Home — one
-      // identity instead of two. Result is memoized for the session.
+      // Catalogue is AniList-based: _anime.id IS the AniList id.
+      // If an entry arrived with a differing anilistId (legacy state),
+      // refresh from AniList so posters/banner and local state agree.
       if (_anime.anilistId != null && _anime.anilistId != _anime.id) {
-        final k = await Kitsu.fromAnilistCached(_anime.anilistId!);
-        if (k != null) {
-          // Keep the AniList id (studio chip, tracker pushes) and the
-          // airing info the calendar already knew.
-          _anime = k.copyWith(
+        try {
+          final fresh = await AniList.details(_anime.anilistId!);
+          // Keep the airing info the calendar already knew.
+          _anime = fresh.copyWith(
             anilistId: _anime.anilistId,
-            nextEpisode: _anime.nextEpisode,
-            airingAt: _anime.airingAt,
+            nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
+            airingAt: _anime.airingAt ?? fresh.airingAt,
           );
-        }
+        } catch (_) {}
       }
       final a = _anime;
       final alId = a.anilistId;
@@ -162,9 +158,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
       final lib = results[3] as List<LibraryEntry>;
       final studio = results[4] as String;
 
-      // Best-effort migration: watched state written under the AniList key
-      // (pre-normalization installs) is copied to the Kitsu key once,
-      // never overwriting existing Kitsu-keyed state.
+      // Best-effort migration: watched state written under a differing
+      // id key (legacy installs) is copied to the current id once,
+      // never overwriting existing state.
       if (w.isEmpty && alId != null && alId != a.id) {
         try {
           final old = await Store.watched(widget.profileId, alId);
@@ -393,8 +389,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         return;
       }
       try {
-        final al = await Kitsu.resolveAnilistId(_anime.id);
-        if (al == null) throw Exception('no mapping');
+        final al = _anime.anilistId ?? _anime.id;
         await Trackers.anilistSave(alToken, al, maxEp);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

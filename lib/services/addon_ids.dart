@@ -9,7 +9,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models.dart';
-import 'kitsu.dart';
 
 /// All id forms known for one title.
 class AddonIds {
@@ -47,7 +46,7 @@ class AddonIdResolver {
     }
   }
 
-  /// Resolve every id form for [a]. Catalogue ids are Kitsu ids, so the
+  /// Resolve every id form for [a]. Catalogue ids are AniList ids, so the
   /// kitsu: form is always known; the rest come from ani.zip / Jikan.
   /// Never throws; returns partial ids when some sources are down.
   static Future<AddonIds> resolve(Anime a) async {
@@ -59,17 +58,10 @@ class AddonIdResolver {
     int? season;
     int? epOffset;
 
-    // 0) AniList id via the app's existing Kitsu mapping helper.
-    // If a.id is a Kitsu ID, this resolves to AniList.
-    // If a.id is ALREADY an AniList ID (Calendar, Tracker), this fails —
-    // so fall back to using a.id directly as the AniList ID.
-    try {
-      anilist = await Kitsu.resolveAnilistId(a.id);
-    } catch (_) {}
-    // Fallback: assume a.id is an AniList ID (e.g., from Calendar).
-    // The ani.zip query below will validate it — if it's wrong, no
+    // 0) Catalogue is AniList-based: a.id IS the AniList id.
+    // The ani.zip query below validates it — if it's wrong, no
     // mappings will be found and we'll use the original kitsu value.
-    anilist ??= a.id;
+    anilist = a.anilistId ?? a.id;
 
     // 1) ani.zip: anilist id -> kitsu / imdb / mal + season info.
     // (Also backfills the kitsu id when the catalogue id is stale.)
@@ -164,7 +156,7 @@ class AddonIdResolver {
         ? (int.tryParse(sMatch.group(1) ?? sMatch.group(2) ?? '') ?? 1)
         : 1;
     final seasonNum = ids.season ?? titleSeason;
-    // Kitsu first: season-exact for anime.
+    // AniList id first: season-exact for anime.
     if (ids.kitsu != null && wants('kitsu')) {
       out.add(isMovie ? 'kitsu:${ids.kitsu}' : 'kitsu:${ids.kitsu}:$ep');
     }

@@ -13,7 +13,6 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'models.dart';
 import 'services/firebase_sync.dart';
-import 'services/kitsu.dart';
 import 'services/trackers.dart';
 import 'store.dart';
 import 'theme.dart';
@@ -333,16 +332,14 @@ class _GAnimeAppState extends State<GAnimeApp> {
 
   Future<void> _onMarkWatched(Anime anime, int episode) async {
     // Push progress to trackers, best-effort, never blocks the UI.
-    // Catalogue ids are Kitsu ids; the AniList id is resolved first.
+    // Catalogue ids are AniList ids; use directly.
     int? anilistId;
     try {
       final t = await Store.tracker();
       final anilistToken = (t['anilistToken'] as String?) ?? '';
       if (anilistToken.isNotEmpty) {
-        anilistId = await Kitsu.resolveAnilistId(anime.id);
-        if (anilistId != null) {
-          await Trackers.anilistSave(anilistToken, anilistId, episode);
-        }
+        anilistId = anime.anilistId ?? anime.id;
+        await Trackers.anilistSave(anilistToken, anilistId, episode);
       }
       final simklClient = (t['simklClientId'] as String?) ?? '';
       final simklToken = (t['simklToken'] as String?) ?? '';

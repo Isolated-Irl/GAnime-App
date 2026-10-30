@@ -8,7 +8,7 @@ class Anime {
   final String romaji;
   final String cover;
   final String banner;
-  final String bannerXL; // Kitsu coverImage.original — full-res hero source
+  final String bannerXL; // coverImage.extraLarge — full-res hero source
   final String description;
   final String format;
   final String status;
@@ -18,9 +18,8 @@ class Anime {
   final double? score;
   final List<String> genres;
   final int? malId;
-  // Set by AniList sources (calendar/tracker). Details normalizes
-  // those entries to the Kitsu object for the same show via this id,
-  // so local state (watched/saved/library) keys off ONE identity.
+  // AniList id. The catalogue is AniList-based, so id == anilistId
+  // for catalogue entries; tracker/calendar entries carry it explicitly.
   final int? anilistId;
   final int? year;
   final String season;
@@ -81,7 +80,7 @@ class Anime {
           (img['medium'] as String?) ??
           '',
       banner: (j['bannerImage'] as String?) ?? '',
-      bannerXL: '',
+      bannerXL: (img['extraLarge'] as String?) ?? '',
       description: clean(j['description'] as String?),
       format: (j['format'] as String?) ?? '',
       status: (j['status'] as String?) ?? '',

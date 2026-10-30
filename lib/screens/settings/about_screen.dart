@@ -41,8 +41,6 @@ class AboutSettingsScreen extends StatelessWidget {
         const SizedBox(height: 16),
         _credit('AniList GraphQL API',
             'Provides comprehensive anime metadata, rankings, airing schedules, and cover imagery.'),
-        _credit('Kitsu API',
-            "Catalogue and episode data for the app's Home, Search and Details screens."),
         _credit('ani.zip API',
             'Cross-database mappings between AniList, MyAnimeList, TVDb, and IMDb IDs.'),
         _credit('AniSkip Service',
