@@ -2621,6 +2621,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
             ),
             Container(
+              key: _sortBtnKey,
+              decoration: BoxDecoration(
+                  color: GaColors.of(context).card, shape: BoxShape.circle),
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 40, height: 40),
+                icon: const Icon(Icons.sort, size: 20),
+                tooltip: 'Sort library',
+                onPressed: _toggleSortMenu,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
               decoration: BoxDecoration(
                   color: GaColors.of(context).card, shape: BoxShape.circle),
               child: IconButton(
@@ -2651,21 +2665,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 }),
                 const SizedBox(width: 8),
               ],
-              // Sort icon button (website: .lib-sort-icon at row end)
-              Container(
-                key: _sortBtnKey,
-                decoration: BoxDecoration(
-                    color: GaColors.of(context).card,
-                    shape: BoxShape.circle),
-                child: IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                      width: 38, height: 38),
-                  icon: const Icon(Icons.sort, size: 20),
-                  tooltip: 'Sort library',
-                  onPressed: _toggleSortMenu,
-                ),
-              ),
             ],
           ),
         ),

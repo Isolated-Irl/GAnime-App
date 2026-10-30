@@ -481,39 +481,43 @@ Widget skeletonCalendarRows(BuildContext context, {int count = 4}) {
 
 /// Library list skeletons: ghost of the real ListTile rows — #222222
 /// rounded-16 card, 16px horizontal / 8px vertical padding, 40x56
-/// radius-6 thumb, 16px title line, 12px status line, 16px title gap
-/// (ListTile's horizontalTitleGap).
-Widget skeletonLibraryRows(BuildContext context, {int count = 5}) {
+/// Website-parity library grid skeleton: 2-column poster cards matching
+/// _LibraryCard — 2:3 poster block, title lines, score line, progress bar.
+Widget skeletonLibraryRows(BuildContext context, {int count = 6}) {
   return Skeleton(
-    child: Column(
-      children: [
-        for (int i = 0; i < count; i++)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              color: GaColors.of(context).card,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Row(
-              children: [
-                SkeletonBlock(width: 40, height: 56, radius: 6),
-                SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SkeletonBlock(height: 16, radius: 6),
-                      SizedBox(height: 8),
-                      SkeletonBlock(width: 200, height: 12, radius: 6),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        const cols = 2;
+        const spacing = 12.0;
+        final cellWidth = (constraints.maxWidth - spacing) / cols;
+        final posterH = cellWidth / (2 / 3);
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            // Match _LibraryCard: poster + ~92px of text below.
+            childAspectRatio: cellWidth / (posterH + 92.0),
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: 16,
           ),
-      ],
+          itemCount: count,
+          itemBuilder: (_, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SkeletonBlock(width: cellWidth, height: posterH, radius: 12),
+              const SizedBox(height: 8),
+              const SkeletonBlock(height: 14, radius: 6),
+              const SizedBox(height: 6),
+              const SkeletonBlock(width: 120, height: 14, radius: 6),
+              const SizedBox(height: 6),
+              const SkeletonBlock(width: 60, height: 12, radius: 6),
+              const SizedBox(height: 6),
+              const SkeletonBlock(height: 6, radius: 3),
+            ],
+          ),
+        );
+      },
     ),
   );
 }
