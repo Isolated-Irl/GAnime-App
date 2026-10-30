@@ -306,6 +306,10 @@ class FirebaseSync {
       if (active is String && active.isNotEmpty) {
         out['activeProfileId'] = active;
       }
+      final byProfile = _decodeValue(fields['byProfile']);
+      if (byProfile is Map<String, dynamic> && byProfile.isNotEmpty) {
+        out['byProfile'] = byProfile;
+      }
       return out;
     }
     // Fallback: app-format `ganime` field.

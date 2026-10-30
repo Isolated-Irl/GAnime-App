@@ -156,11 +156,18 @@ class _GAnimeAppState extends State<GAnimeApp> {
         if (local.isEmpty) {
           // Website rule: fresh login takes the cloud as-is, no merge.
           await Store.saveProfiles(_account, remote);
+          String? pid;
           final activeId = doc['activeProfileId'] as String?;
           if (activeId != null &&
               activeId.isNotEmpty &&
               remote.any((p) => p.id == activeId)) {
             await Store.setActiveProfile(_account, activeId);
+            pid = activeId;
+          } else if (remote.isNotEmpty) {
+            pid = remote.first.id;
+          }
+          if (pid != null) {
+            await _pullProfileExtras(doc, pid);
           }
         } else {
           // Both sides have data: merge, remote wins on same-id conflict.
@@ -174,9 +181,81 @@ class _GAnimeAppState extends State<GAnimeApp> {
           await Store.saveProfiles(_account, byId.values.toList());
         }
       }
+      // The login pull fetched cloud data — record it so the Account
+      // screen stops saying "Never synced yet".
+      await Store.setSyncRecord(
+        at: DateTime.now().toIso8601String(),
+        status: 'synced',
+        detail: 'Downloaded from cloud',
+      );
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Fresh-login extras (website parity): pull the active profile's addons
+  /// and tracker logins from the cloud's `byProfile` data. Website stores
+  /// per-profile data there; the app applies it on fresh login so a new
+  /// device gets everything, not just the profile list.
+  Future<void> _pullProfileExtras(
+      Map<String, dynamic> doc, String pid) async {
+    final byProfile = doc['byProfile'] as Map<String, dynamic>?;
+    final pdata = byProfile?[pid] as Map<String, dynamic>?;
+    if (pdata == null) return;
+    // Addons (website shape -> AddonRecord; `logo` -> `logoUrl`,
+    // numeric `addedAt` -> ISO string).
+    final rawAddons = pdata['addons'] as List?;
+    if (rawAddons != null && rawAddons.isNotEmpty) {
+      final addons = <AddonRecord>[];
+      for (final a in rawAddons) {
+        try {
+          final jm = Map<String, dynamic>.from(a as Map);
+          jm['logoUrl'] = jm['logoUrl'] ?? jm['logo'];
+          if (jm['addedAt'] is num) {
+            jm['addedAt'] = DateTime.fromMillisecondsSinceEpoch(
+                    (jm['addedAt'] as num).toInt())
+                .toIso8601String();
+          }
+          final rec = AddonRecord.fromJson(jm);
+          if (rec.manifestUrl.isNotEmpty) addons.add(rec);
+        } catch (_) {}
+      }
+      if (addons.isNotEmpty) {
+        await Store.saveAddons(pid, addons);
+      }
+    }
+    // Tracker logins (website `{anilist,simkl,mal}` conns -> app's
+    // flat tracker map).
+    final wt = pdata['tracking'] as Map<String, dynamic>?;
+    if (wt != null && wt.isNotEmpty) {
+      final m = <String, dynamic>{};
+      final al = wt['anilist'] as Map?;
+      if (al != null) {
+        final user = al['user'] as Map?;
+        m['anilistToken'] = '${al['accessToken'] ?? ''}';
+        m['anilistUserId'] = '${user?['id'] ?? ''}';
+        m['anilistUsername'] = '${user?['name'] ?? ''}';
+      }
+      final sk = wt['simkl'] as Map?;
+      if (sk != null) {
+        final user = sk['user'] as Map?;
+        m['simklClientId'] = '${sk['clientId'] ?? ''}';
+        m['simklToken'] = '${sk['accessToken'] ?? ''}';
+        m['simklRefreshToken'] = '${sk['refreshToken'] ?? ''}';
+        m['simklExpiresAt'] = (sk['expiresAt'] as num?)?.toInt() ?? 0;
+        m['simklUsername'] =
+            '${user?['name'] ?? user?['username'] ?? ''}';
+      }
+      final mal = wt['mal'] as Map?;
+      if (mal != null) {
+        final user = mal['user'] as Map?;
+        m['malClientId'] = '${mal['clientId'] ?? ''}';
+        m['malToken'] = '${mal['accessToken'] ?? ''}';
+        m['malRefreshToken'] = '${mal['refreshToken'] ?? ''}';
+        m['malUsername'] = '${user?['name'] ?? ''}';
+      }
+      if (m.isNotEmpty) await Store.saveTracker(m);
     }
   }
 

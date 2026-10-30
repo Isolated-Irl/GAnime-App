@@ -352,7 +352,7 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
     });
   }
 
-  Future<void> _run(Future<void> Function() fn, String okMsg) async {
+  Future<void> _run(Future<void> Function() fn, [String? okMsg]) async {
     final email = _email.text.trim();
     if (email.isEmpty) {
       _say('Enter your email address first.');
@@ -365,7 +365,7 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
     });
     try {
       await fn();
-      _say(okMsg, ok: true);
+      if (okMsg != null) _say(okMsg, ok: true);
     } catch (e) {
       _say('$e'.replaceFirst('Exception: ', ''));
     } finally {
@@ -378,7 +378,7 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
             .signIn(_email.text.trim(), _password.text);
         await Store.setGuest(false);
         widget.onSignedIn();
-      }, 'Signed in.');
+      });
 
   Future<void> _createAccount() => _run(() async {
         if (_password.text.isEmpty) {
@@ -388,7 +388,7 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
             .signUp(_email.text.trim(), _password.text);
         await Store.setGuest(false);
         widget.onSignedIn();
-      }, 'Account created.');
+      });
 
   Future<void> _forgot() => _run(() async {
         await widget.firebase.sendPasswordReset(_email.text.trim());
@@ -434,7 +434,16 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
               const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         onPressed: _busy ? null : onTap,
-        child: Text(label),
+        child: _busy
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Colors.black,
+                ),
+              )
+            : Text(label),
       ),
     );
   }
@@ -455,7 +464,16 @@ class _WelcomeBackScreenState extends State<WelcomeBackScreen> {
               const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         onPressed: _busy ? null : onTap,
-        child: Text(label),
+        child: _busy
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Colors.black,
+                ),
+              )
+            : Text(label),
       ),
     );
   }
