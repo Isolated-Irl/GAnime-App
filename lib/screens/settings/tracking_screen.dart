@@ -73,8 +73,13 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       ? "@${_t['malUsername']}"
       : (_malConnected ? 'Connected' : 'Not connected');
 
-  Future<void> _disconnect(String title, List<String> keys) async {
+  Future<void> _disconnect(String pkey, String title, List<String> keys) async {
     final m = await Store.tracker();
+    // Tombstone: record the disconnect time so the merge knows this is a
+    // deliberate disconnect (not just missing data), and the cloud/website
+    // drops it too instead of resurrecting it.
+    // (Store.saveTracker triggers onDirty → auto-push carries it to cloud.)
+    m['${pkey}DisconnectedAt'] = DateTime.now().millisecondsSinceEpoch;
     for (final k in keys) {
       m.remove(k);
     }
@@ -136,16 +141,19 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       final ok = await launchUrl(
         Uri.parse('https://anilist.co/api/v2/oauth/authorize'
             '?client_id=$_anilistAppClientId&redirect_uri=$redirect'
-            '&response_type=token&state=$state'),
+            '&response_type=code&state=$state'),
         mode: LaunchMode.externalApplication,
       );
       if (!ok) throw Exception('Could not open browser');
-      final cb = await _waitLink('anilist', state, fragment: true);
-      final tok = cb == null ? null : _frag(cb)['access_token'];
-      if (tok == null) {
+      // Code flow: AniList redirects with ?code=...&state=... (query, not fragment).
+      final cb = await _waitLink('anilist', state);
+      final code = cb?.queryParameters['code'];
+      if (code == null) {
         setState(() => _msg = 'AniList login cancelled or timed out.');
         return;
       }
+      final data = await OAuthService.exchangeAnilist(code);
+      final tok = data['access_token'] as String;
       final v = await Trackers.anilistViewer(tok);
       final m = await Store.tracker();
       m['anilistToken'] = tok;
@@ -523,7 +531,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           key: 'anilist',
           onConnect: _connectAnilist,
           onReconnect: _connectAnilist,
-          onDisconnect: () => _disconnect('AniList', const [
+          onDisconnect: () => _disconnect('anilist', 'AniList', const [
             'anilistToken',
             'anilistUserId',
             'anilistUsername',
@@ -538,7 +546,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           onConnect: _connectMal,
           onReconnect: _connectMal,
           onSyncUpdate: _connectMal,
-          onDisconnect: () => _disconnect('MyAnimeList', const [
+          onDisconnect: () => _disconnect('mal', 'MyAnimeList', const [
             'malClientId',
             'malToken',
             'malRefreshToken',
@@ -553,7 +561,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
           key: 'simkl',
           onConnect: _connectSimkl,
           onReconnect: _connectSimkl,
-          onDisconnect: () => _disconnect('Simkl', const [
+          onDisconnect: () => _disconnect('simkl', 'Simkl', const [
             'simklClientId',
             'simklToken',
             'simklRefreshToken',

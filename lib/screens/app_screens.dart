@@ -2130,6 +2130,101 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
+/// Website-parity library poster card: 2:3 cover art, title (2 lines),
+/// "★ score" meta, progress bar + "x / y eps" (mirrors .lib-item +
+/// .lib-prog from the website).
+class _LibraryCard extends StatelessWidget {
+  final LibraryEntry entry;
+  final VoidCallback onTap;
+  const _LibraryCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final e = entry;
+    // Progress bar: website's .wavy-track/.wavy-fill (accent fill).
+    final total = e.total ?? 0;
+    final denom = total > 0 ? total : 0;
+    final pct = denom > 0
+        ? (e.progress / denom).clamp(0.0, 1.0)
+        : 0.0;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Poster art: fixed 2:3, rounded 12px (website .poster-art).
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border:
+                    Border.all(color: const Color(0xFF333333), width: 1),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: e.cover.isEmpty
+                    ? Container(color: Colors.grey.shade800)
+                    : GaImage(
+                        url: e.cover,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        errorFallback:
+                            Container(color: Colors.grey.shade800),
+                      ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            e.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style:
+                const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 2),
+          // Website .poster-meta: "★ {score} · {year}" (score may be absent).
+          Text(
+            e.score != null
+                ? '★ ${(e.score! / 10).toStringAsFixed(1)}'
+                : '★ —',
+            style:
+                const TextStyle(fontSize: 11, color: Color(0xFF808080)),
+          ),
+          const SizedBox(height: 6),
+          // Website .lib-prog: progress bar + "x / y eps".
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: pct,
+                    minHeight: 5,
+                    backgroundColor: const Color(0xFF333333),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                        Theme.of(context).colorScheme.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${e.progress}${total > 0 ? ' / $total' : ''} eps',
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFAAAAAA),
+                    fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _LibraryScreenState extends State<LibraryScreen> {
   // Web tab order: Local, AniList, MAL, Simkl.
   int _tab = 0;
@@ -2140,9 +2235,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   // Website parity: 8-option library sort (LIBRARY_SORTS), default
   // UPDATED_DESC, persisted per device.
   String _sort = 'UPDATED_DESC';
-  // Website parity: the sort button opens a custom dropdown menu (not a
-  // native popup) with the active option checkmarked.
-  bool _sortMenuOpen = false;
+  // Website parity: the sort button opens a dropdown menu overlay
+  // (positioned under the button, like .lib-sort-menu) with the active
+  // option checkmarked.
+  final _sortBtnKey = GlobalKey();
+  OverlayEntry? _sortMenuOverlay;
   // Provider username for the "AniList · @user" sub-header (website parity).
   String _providerUser = '';
 
@@ -2250,6 +2347,126 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
     if (!mounted) return;
     setState(() => _providerUser = user);
+  }
+
+  /// Opens the details screen for a library entry. Tracker entries
+  /// carry AniList ids; prefer the Kitsu catalogue entry so episodes,
+  /// stream ids and tracker pushes agree, falling back to AniList
+  /// details. Entries without an id can't open details.
+  Future<void> _openLibraryEntry(LibraryEntry e) async {
+    if (e.anilistId == null) return;
+    final a = await Kitsu.fromAnilist(e.anilistId!) ??
+        await AniList.details(e.anilistId!);
+    if (!mounted) return;
+    await openDetails(context,
+        anime: a,
+        profileId: widget.profileId,
+        settings: widget.settings,
+        onMarkWatched: widget.onMarkWatched);
+  }
+
+  /// Toggles the sort dropdown menu (website: .lib-sort-menu).
+  /// Uses an OverlayEntry positioned under the sort button so it renders
+  /// above all content, matching the website's absolute-positioned menu.
+  void _toggleSortMenu() {
+    if (_sortMenuOverlay != null) {
+      _hideSortMenu();
+    } else {
+      _showSortMenu();
+    }
+  }
+
+  void _showSortMenu() {
+    final renderBox =
+        _sortBtnKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+    final overlay = Overlay.of(context);
+    _sortMenuOverlay = OverlayEntry(
+      builder: (ctx) => Stack(
+        children: [
+          // Tap outside to dismiss.
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: _hideSortMenu,
+              behavior: HitTestBehavior.translucent,
+              child: const SizedBox.expand(),
+            ),
+          ),
+          // Dropdown menu (website: 200px wide, right-aligned under button).
+          Positioned(
+            right: MediaQuery.of(ctx).size.width - offset.dx - size.width,
+            top: offset.dy + size.height + 6,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: 200,
+                decoration: BoxDecoration(
+                  color: GaColors.of(ctx).card,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF333333)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.6),
+                      blurRadius: 30,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final e in _sortLabels.entries)
+                      InkWell(
+                        onTap: () async {
+                          await Store.setLibrarySort(e.key);
+                          _hideSortMenu();
+                          if (!mounted) return;
+                          setState(() => _sort = e.key);
+                        },
+                        borderRadius: BorderRadius.circular(14),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(e.value,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14)),
+                              ),
+                              if (e.key == _sort)
+                                Icon(Icons.check,
+                                    size: 18,
+                                    color: Theme.of(ctx)
+                                        .colorScheme
+                                        .primary),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    overlay.insert(_sortMenuOverlay!);
+  }
+
+  void _hideSortMenu() {
+    _sortMenuOverlay?.remove();
+    _sortMenuOverlay = null;
+  }
+
+  @override
+  void dispose() {
+    _hideSortMenu();
+    super.dispose();
   }
 
   Future<void> _loadTab({bool force = false}) async {
@@ -2370,21 +2587,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
       'Dropped',
       'Rewatching',
     ];
-    // Website parity: the active tab/filter chip is GREEN, not white.
+    // Website parity: the active tab/filter chip uses the theme accent
+    // (website default is White; Emerald theme = green). Text color is
+    // luminance-based so white accents get dark text (contrast fix).
     Widget pill(String label, bool selected, VoidCallback onTap) {
-      final green = Theme.of(context).colorScheme.primary;
+      final accent = Theme.of(context).colorScheme.primary;
+      final onAccent =
+          accent.computeLuminance() > 0.5 ? Colors.black : Colors.white;
       return GestureDetector(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: selected ? green : GaColors.of(context).card,
+            color: selected ? accent : GaColors.of(context).card,
             borderRadius: BorderRadius.circular(24),
           ),
           child: Text(label,
               style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : Colors.white)),
+                  color: selected ? onAccent : Colors.white)),
         ),
       );
     }
@@ -2411,70 +2632,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 onPressed: () => _loadTab(force: true),
               ),
             ),
-            const SizedBox(width: 8),
-            Container(
-              decoration: BoxDecoration(
-                  color: GaColors.of(context).card, shape: BoxShape.circle),
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 40, height: 40),
-                icon: const Icon(Icons.sort),
-                tooltip: 'Sort library',
-                onPressed: () =>
-                    setState(() => _sortMenuOpen = !_sortMenuOpen),
-              ),
-            ),
           ],
         ),
-        // Website parity: custom sort dropdown menu (not a native popup),
-        // with the active option checkmarked. Toggles with the sort button.
-        if (_sortMenuOpen)
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            decoration: BoxDecoration(
-              color: GaColors.of(context).card,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF333333)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final e in _sortLabels.entries)
-                  InkWell(
-                    onTap: () async {
-                      await Store.setLibrarySort(e.key);
-                      if (!mounted) return;
-                      setState(() {
-                        _sort = e.key;
-                        _sortMenuOpen = false;
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(14),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(e.value,
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 14)),
-                          ),
-                          if (e.key == _sort)
-                            Icon(Icons.check,
-                                size: 18,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
         const SizedBox(height: 16),
+        // Website parity: tab row with sort icon button at the right end.
+        // The sort menu is a dropdown overlay positioned under the button.
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -2489,6 +2651,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 }),
                 const SizedBox(width: 8),
               ],
+              // Sort icon button (website: .lib-sort-icon at row end)
+              Container(
+                key: _sortBtnKey,
+                decoration: BoxDecoration(
+                    color: GaColors.of(context).card,
+                    shape: BoxShape.circle),
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                      width: 38, height: 38),
+                  icon: const Icon(Icons.sort, size: 20),
+                  tooltip: 'Sort library',
+                  onPressed: _toggleSortMenu,
+                ),
+              ),
             ],
           ),
         ),
@@ -2541,46 +2718,34 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
           )
         else
-          for (final e in filtered)
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: GaColors.of(context).card,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: ListTile(
-                leading: e.cover.isNotEmpty
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: GaImage(
-                          url: e.cover,
-                          width: 40,
-                          height: 56,
-                          fit: BoxFit.cover,
-                          errorFallback: const Icon(Icons.image),
-                        ),
-                      )
-                    : const Icon(Icons.image),
-                title: Text(e.title),
-                subtitle: Text(
-                    '${e.status} • EP ${e.progress}${e.total != null ? '/${e.total}' : ''} • ${e.source}'),
-                onTap: e.anilistId == null
-                    ? null
-                    : () async {
-                        // Tracker entries carry AniList ids; prefer the Kitsu
-                        // catalogue entry so episodes, stream ids and tracker
-                        // pushes agree, falling back to AniList details.
-                        final a = await Kitsu.fromAnilist(e.anilistId!) ??
-                            await AniList.details(e.anilistId!);
-                        if (!context.mounted) return;
-                        await openDetails(context,
-                            anime: a,
-                            profileId: widget.profileId,
-                            settings: widget.settings,
-                            onMarkWatched: widget.onMarkWatched);
-                      },
-              ),
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Website parity: 2-column poster grid (.search-grid).
+              const count = 2;
+              const spacing = 12.0;
+              final cellWidth =
+                  (constraints.maxWidth - spacing * (count - 1)) / count;
+              // Poster 2:3 + title (2 lines) + meta + progress bar + eps text.
+              final cellHeight =
+                  cellWidth / (2 / 3) + 92.0;
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: count,
+                  childAspectRatio: cellWidth / cellHeight,
+                  crossAxisSpacing: spacing,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: filtered.length,
+                itemBuilder: (_, i) =>
+                    _LibraryCard(
+                  entry: filtered[i],
+                  onTap: () => _openLibraryEntry(filtered[i]),
+                ),
+              );
+            },
+          ),
       ],
     );
   }

@@ -61,7 +61,7 @@ class OAuthService {
     // Simkl requires scope for write access (Phase 1: without scope,
     // token is read-only).
     const scope = 'media:read media:write';
-    return 'https://simkl.com/oauth/authorize'
+    return 'https://simkl.com/oauth2/authorize'
         '?response_type=code'
         '&client_id=${Uri.encodeComponent(simklClientId)}'
         '&redirect_uri=${Uri.encodeComponent(redirect)}'
@@ -108,6 +108,26 @@ class OAuthService {
     if (r.statusCode != 200 || data['access_token'] == null) {
       throw Exception(
           data['error_description'] ?? data['error'] ?? 'Simkl exchange failed');
+    }
+    return data;
+  }
+
+  /// Exchange AniList authorization code for tokens via relay.
+  /// (AniList dropped implicit flow; code flow is required.)
+  static Future<Map<String, dynamic>> exchangeAnilist(String code) async {
+    final redirect = _oauthRedirect('anilist');
+    final r = await http.post(
+      Uri.parse('$relayUrl/exchange/anilist'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'code': code,
+        'redirect_uri': redirect,
+      }),
+    );
+    final data = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+    if (r.statusCode != 200 || data['access_token'] == null) {
+      throw Exception(
+          data['error'] ?? data['message'] ?? 'AniList exchange failed');
     }
     return data;
   }
