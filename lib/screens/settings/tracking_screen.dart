@@ -142,7 +142,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
         Uri.parse('https://anilist.co/api/v2/oauth/authorize'
             '?client_id=$_anilistAppClientId&redirect_uri=$redirect'
             '&response_type=code&state=$state'),
-        mode: LaunchMode.externalApplication,
+        mode: LaunchMode.inAppBrowserView,
       );
       if (!ok) throw Exception('Could not open browser');
       // Code flow: AniList redirects with ?code=...&state=... (query, not fragment).
@@ -181,7 +181,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       final state = OAuthService.generateState();
       final ok = await launchUrl(
           Uri.parse(OAuthService.simklAuthorizeUrl(challenge, state)),
-          mode: LaunchMode.externalApplication);
+          mode: LaunchMode.inAppBrowserView);
       if (!ok) throw Exception('Could not open browser');
       final cb = await _waitLink('simkl', state);
       final code = cb?.queryParameters['code'];
@@ -232,7 +232,7 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
       final state = OAuthService.generateState();
       final ok = await launchUrl(
           Uri.parse(OAuthService.malAuthorizeUrl(verifier, state)),
-          mode: LaunchMode.externalApplication);
+          mode: LaunchMode.inAppBrowserView);
       if (!ok) throw Exception('Could not open browser');
       final cb = await _waitLink('mal', state);
       final code = cb?.queryParameters['code'];
