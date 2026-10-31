@@ -104,6 +104,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   String? _error;
   Timer? _slowTimer;
   bool _slowLoading = false; // True only if loading takes >450ms (no flash)
+  bool _hasFullData = false; // True when _anime has banner+description
   bool _synopsisExpanded = false;
   late String _layout; // 'detailed' | 'minimum'
   int? _rangeFrom; // null = All
@@ -124,6 +125,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
         ? widget.settings.episodeLayout
         : 'detailed';
     _anime = widget.anime;
+    // Only mark as having full data if banner+description are present.
+    // Thin versions (from library) wait for the full fetch in _load().
+    _hasFullData = _anime.banner.isNotEmpty && _anime.description.isNotEmpty;
     // Delayed skeleton: only show if loading takes >450ms.
     _slowTimer = Timer(const Duration(milliseconds: 450), () {
       if (mounted && _loading) setState(() => _slowLoading = true);
@@ -195,6 +199,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _episodes = _episodeCache[initialKey] ?? _episodes;
           _loading = false;
           _slowLoading = false;
+          _hasFullData = true;
         });
       }
       // Catalogue is AniList-based: _anime.id IS the AniList id.
@@ -339,6 +344,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _libStatus = libStatus;
           _studio = studio;
           _loading = false;
+          // Mark full data if we now have banner+description.
+          if (_anime.banner.isNotEmpty && _anime.description.isNotEmpty) {
+            _hasFullData = true;
+          }
           // Website default: jump to the first range when the list is long.
           if (_rangeFrom == null && _total > 48) _rangeFrom = 1;
         });
@@ -1889,6 +1898,55 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Never render thin data — show skeleton while waiting for full data.
+    if (!_hasFullData) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              skeletonHero(),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      height: 28,
+                      width: 200,
+                      decoration: BoxDecoration(
+                        color: Colors.white12,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      height: 16,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      height: 16,
+                      width: 250,
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final a = _anime;
     final accent = Theme.of(context).colorScheme.primary;
     final total = _total;
