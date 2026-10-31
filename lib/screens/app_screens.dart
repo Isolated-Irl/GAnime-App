@@ -2212,11 +2212,13 @@ class _LibraryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final e = entry;
     // Progress bar: website's .wavy-track/.wavy-fill (accent fill).
+    // Unknown total (#4): static dimmed bar using 12-ep cour fallback
+    // (or aired count), clamped 0.15-0.85 so it never looks empty/done.
     final total = e.total ?? 0;
-    final denom = total > 0 ? total : 0;
-    final pct = denom > 0
-        ? (e.progress / denom).clamp(0.0, 1.0)
-        : 0.0;
+    final hasTotal = total > 0;
+    final pct = hasTotal
+        ? (e.progress / total).clamp(0.0, 1.0)
+        : (e.progress == 0 ? 0.0 : (e.progress / 12).clamp(0.15, 0.85));
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -2264,6 +2266,8 @@ class _LibraryCard extends StatelessWidget {
                 const TextStyle(fontSize: 11, color: Color(0xFF808080)),
           ),
           const SizedBox(height: 6),
+          // Spacer pushes progress to bottom so cards align (#3).
+          const Spacer(),
           // Website .lib-prog: progress bar + "x / y eps".
           Row(
             children: [
@@ -2275,13 +2279,19 @@ class _LibraryCard extends StatelessWidget {
                     minHeight: 5,
                     backgroundColor: const Color(0xFF333333),
                     valueColor: AlwaysStoppedAnimation<Color>(
-                        Theme.of(context).colorScheme.primary),
+                      hasTotal
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.55), // dimmed = estimate (#4)
+                    ),
                   ),
                 ),
               ),
               const SizedBox(width: 8),
               Text(
-                '${e.progress}${total > 0 ? ' / $total' : ''} eps',
+                hasTotal ? '${e.progress} / $total eps' : '${e.progress} / ? eps', // (#5)
                 style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFFAAAAAA),
