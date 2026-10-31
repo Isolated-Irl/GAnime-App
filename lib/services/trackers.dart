@@ -10,13 +10,11 @@ import 'package:http/http.dart' as http;
 import '../models.dart';
 import '../store.dart';
 import 'anilist.dart';
-import 'app_logger.dart';
 import 'oauth.dart';
 
 class Trackers {
   /// Log an API failure (endpoint + HTTP code only — never tokens/bodies).
   static void _logFail(String endpoint, int code) {
-    AppLogger().log('TRACKER', 'API failure: $endpoint -> HTTP $code');
   }
 
   // ---- AniList ----

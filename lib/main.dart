@@ -12,7 +12,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'models.dart';
-import 'services/app_logger.dart';
 import 'services/firebase_sync.dart';
 import 'services/trackers.dart';
 import 'store.dart';
@@ -27,8 +26,6 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // Crash/error logging first: installs FlutterError.onError and
   // PlatformDispatcher.onError before anything else can fail.
-  AppLogger().init();
-  AppLogger().log('APP', 'GAnime starting');
   MediaKit.ensureInitialized();
   runApp(const GAnimeApp());
 }

@@ -16,7 +16,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models.dart';
 import '../services/aniskip.dart';
-import '../services/app_logger.dart';
 import '../services/addons.dart';
 import '../services/addon_ids.dart';
 import '../store.dart';
@@ -137,7 +136,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final dir = await getApplicationDocumentsDirectory();
       await platform.setProperty('log-file', '${dir.path}/mpv.log');
       await platform.setProperty('msg-level', 'all=info');
-      AppLogger().log('PLAYER', 'mpv log -> ${dir.path}/mpv.log');
     } catch (_) {}
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -169,8 +167,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     await _applyHwDecProperty(nextHw);
     final src = _cur;
-    AppLogger().log('PLAYER',
-        'HW toggle -> ${nextHw ? 'HW' : 'SW'}, reopening at $currentPos');
     await _enqueueOpen(
         () => _player.open(Media(src.url, start: currentPos), play: isPlaying));
     if (mounted) {
@@ -193,8 +189,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _isHw = widget.settings.hardwareDecoding;
-    AppLogger().log('PLAYER',
-        'init: "${widget.anime.title}" ep ${widget.episode}, stream #${widget.initialIndex}, decoder=${_isHw ? 'HW' : 'SW'}');
     _player = Player(
       configuration: const PlayerConfiguration(
         bufferSize: 64 * 1024 * 1024, // 64MB stream buffer — absorbs torrent swarm bursts
@@ -209,7 +203,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _player.stream.tracks.listen(_autoSelectTracks);
     // Catch stream failures gracefully instead of crashing.
     _player.stream.error.listen((err) {
-      AppLogger().log('PLAYER', 'stream error: $err');
       if (mounted) setState(() => _status = 'Stream error: $err');
     });
     // Defer the video open until the Android surface is mounted (post-frame),
@@ -300,8 +293,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     final src = _cur;
     _autoSelected = false;
-    AppLogger().log('PLAYER',
-        'opening stream: ${AppLogger.urlLabel(src.url, src.quality)} (${src.name})');
     setState(() => _status = 'Opening ${src.name} …');
     await _enqueueOpen(() async {
       await _player.open(Media(src.url));
