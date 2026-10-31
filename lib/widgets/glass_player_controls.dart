@@ -21,6 +21,7 @@ class GlassPlayerControls extends StatefulWidget {
   final String title;
   final String status;
   final List<SkipInterval> skips;
+  final List<double> chapters; // 0..1 ratios for seekbar breaks (mpvKt style)
   final bool showSkipButtons;
   final VoidCallback onBack;
   final VoidCallback onAudio;
@@ -40,6 +41,7 @@ class GlassPlayerControls extends StatefulWidget {
     required this.title,
     required this.status,
     required this.skips,
+    required this.chapters,
     required this.showSkipButtons,
     required this.onBack,
     required this.onAudio,
@@ -469,6 +471,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                       position: pos,
                       duration: dur,
                       skips: widget.skips,
+                      chapters: widget.chapters,
                       onSeek: (d) => _p.seek(d),
                       onDragging: (v) {
                         _dragging = v;
@@ -491,12 +494,14 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
 class _SeekBar extends StatefulWidget {
   final Duration position, duration;
   final List<SkipInterval> skips;
+  final List<double> chapters; // 0..1 — drawn as breaks (mpvKt style)
   final ValueChanged<Duration> onSeek;
   final ValueChanged<bool> onDragging;
   const _SeekBar({
     required this.position,
     required this.duration,
     required this.skips,
+    required this.chapters,
     required this.onSeek,
     required this.onDragging,
   });
@@ -544,14 +549,17 @@ class _SeekBarState extends State<_SeekBar> {
                 ratio,
                 0.85,
                 ratio >= 0.85,
-                // Chapter ticks at each skip window (mpvKt style).
-                total > 0
-                    ? [
-                        for (final s in widget.skips)
-                          if (s.end * 1000 <= total)
-                            (s.start * 1000 / total).clamp(0.0, 1.0),
-                      ]
-                    : const <double>[],
+                // Chapter breaks from mpv chapter-list (mpvKt style).
+                // Falls back to skip-window starts if no chapters.
+                widget.chapters.isNotEmpty
+                    ? widget.chapters
+                    : (total > 0
+                        ? [
+                            for (final s in widget.skips)
+                              if (s.end * 1000 <= total)
+                                (s.start * 1000 / total).clamp(0.0, 1.0),
+                          ]
+                        : const <double>[]),
               ),
             ),
           ),
@@ -564,7 +572,7 @@ class _SeekBarState extends State<_SeekBar> {
 class _SeekPainter extends CustomPainter {
   final double ratio, marker;
   final bool passed;
-  final List<double> markers; // chapter ticks (skip window starts)
+  final List<double> markers; // chapter positions 0..1 — drawn as breaks
   _SeekPainter(this.ratio, this.marker, this.passed,
       [this.markers = const <double>[]]);
 
@@ -573,13 +581,42 @@ class _SeekPainter extends CustomPainter {
     const pad = 8.0;
     final left = pad, right = s.width - pad, y = s.height / 2;
     final trackW = right - left;
-    final track = RRect.fromLTRBR(left, y - 3, right, y + 3, const Radius.circular(3));
-    canvas.drawRRect(track, Paint()..color = const Color(0x40FFFFFF));
+    const breakW = 3.0; // gap width at each chapter (mpvKt style)
+
+    // Build sorted break positions in pixels.
+    final breaks = markers
+        .map((m) => left + trackW * m.clamp(0.0, 1.0))
+        .where((bx) => bx > left + 4 && bx < right - 4)
+        .toList()
+      ..sort();
+
+    // Draw track + progress as segments, leaving gaps at breaks.
+    final trackPaint = Paint()..color = const Color(0x40FFFFFF);
+    final progressPaint = Paint()..color = Colors.white;
     final x = left + trackW * ratio;
-    canvas.drawRRect(
-      RRect.fromLTRBR(left, y - 3, x, y + 3, const Radius.circular(3)),
-      Paint()..color = Colors.white,
-    );
+
+    double segStart = left;
+    for (final bx in [...breaks, right + 10]) {
+      final segEnd = (bx - breakW / 2).clamp(segStart, right);
+      if (segEnd > segStart) {
+        // Background track segment.
+        canvas.drawRRect(
+          RRect.fromLTRBR(segStart, y - 3, segEnd, y + 3, const Radius.circular(3)),
+          trackPaint,
+        );
+        // Progress segment (only up to current position).
+        final pxEnd = segEnd.clamp(segStart, x);
+        if (pxEnd > segStart) {
+          canvas.drawRRect(
+            RRect.fromLTRBR(segStart, y - 3, pxEnd, y + 3, const Radius.circular(3)),
+            progressPaint,
+          );
+        }
+      }
+      segStart = bx + breakW / 2;
+      if (segStart >= right) break;
+    }
+
     // 85% marker (diamond) — turns green once passed.
     final mx = left + trackW * marker;
     final d = Path()
@@ -589,13 +626,6 @@ class _SeekPainter extends CustomPainter {
       ..lineTo(mx - 5, y)
       ..close();
     canvas.drawPath(d, Paint()..color = passed ? Colors.greenAccent : Colors.white70);
-    // Chapter ticks: thin vertical notches at each skip-window start.
-    final tick = Paint()..color = Colors.white70;
-    for (final m in markers) {
-      if ((m - ratio).abs() < 0.004) continue; // hidden under the thumb
-      final tx = left + trackW * m;
-      canvas.drawRect(Rect.fromLTWH(tx - 0.75, y - 6, 1.5, 12), tick);
-    }
     // Thumb: two flat circles instead of a blurred shadow — this painter
     // repaints on every position tick, so a per-tick blur was wasted GPU.
     canvas.drawCircle(Offset(x, y + 1.5), 7.5, Paint()..color = Colors.black26);

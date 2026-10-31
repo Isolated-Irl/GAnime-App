@@ -80,6 +80,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
   List<SkipInterval> _skips = [];
+  List<double> _chapters = []; // 0..1 ratios from mpv chapter-list
   bool _marked85 = false;
   bool _autoSelected = false;
   bool _jumping = false;
@@ -254,6 +255,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (_autoSelected) return;
     if (tracks.audio.isEmpty && tracks.subtitle.isEmpty) return;
     _autoSelected = true;
+    _loadChapters(); // Fetch chapter markers for seekbar breaks.
     final audioLang = widget.settings.audioLanguage;
     if (audioLang.isNotEmpty) {
       for (final t in tracks.audio) {
@@ -284,6 +286,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
       detectRecap: widget.settings.aniskipDetectRecap,
     );
     if (mounted) setState(() => _skips = skips);
+  }
+
+  /// Fetch chapter list from mpv for seekbar breaks (mpvKt style).
+  /// Chapters come from the video file's embedded metadata.
+  Future<void> _loadChapters() async {
+    try {
+      final dynamic platform = _player.platform;
+      final list = await platform.getProperty('chapter-list');
+      if (list is List && mounted) {
+        final dur = _player.state.duration.inMilliseconds;
+        if (dur > 0) {
+          final ratios = <double>[];
+          for (final c in list) {
+            if (c is Map) {
+              final time = (c['time'] as num?)?.toDouble();
+              if (time != null && time > 0) {
+                ratios.add((time * 1000 / dur).clamp(0.0, 1.0));
+              }
+            }
+          }
+          setState(() => _chapters = ratios);
+        }
+      }
+    } catch (_) {
+      // Chapters are optional — no breaks if unavailable.
+    }
   }
 
   Future<void> _openCurrent() async {
@@ -475,12 +503,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     final items = <Widget>[
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-        child: Text(audio ? 'Audio tracks' : 'Subtitle tracks',
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w700)),
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(audio ? 'Audio tracks' : 'Subtitle tracks',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700)),
+            ),
+            // Clock → delay panel (subtitle or audio).
+            IconButton(
+              icon: const Icon(Icons.access_time, color: Colors.white70, size: 20),
+              tooltip: audio ? 'Audio delay' : 'Subtitle delay',
+              onPressed: () {
+                Navigator.pop(context);
+                if (audio) {
+                  _showAudioDelay();
+                } else {
+                  _showSubtitleDelay();
+                }
+              },
+            ),
+            // Gear → style settings (subtitles only).
+            if (!audio)
+              IconButton(
+                icon: const Icon(Icons.settings, color: Colors.white70, size: 20),
+                tooltip: 'Subtitle settings',
+                onPressed: () {
+                  Navigator.pop(context);
+                  _showSubtitleSettings();
+                },
+              ),
+          ],
+        ),
       ),
       row(
         title: audio ? 'Auto (default)' : 'Off',
@@ -537,6 +594,81 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  Future<void> _setMpvProp(String key, dynamic value) async {
+    try {
+      final dynamic platform = _player.platform;
+      await platform.setProperty(key, value);
+    } catch (_) {}
+  }
+
+  /// Subtitle style settings (mpvKt-style): Typography, Colors, Miscellaneous.
+  void _showSubtitleSettings() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        alignment: Alignment.bottomCenter,
+        insetPadding: const EdgeInsets.all(16),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: GlassSurface(
+          radius: 18,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 520),
+            child: _SubtitleSettingsPanel(
+              onSet: _setMpvProp,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Subtitle delay with Voice heard / Text seen auto-sync.
+  void _showSubtitleDelay() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        alignment: Alignment.bottomCenter,
+        insetPadding: const EdgeInsets.all(16),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: GlassSurface(
+          radius: 18,
+          child: _DelayPanel(
+            title: 'Subtitle delay',
+            onSet: (v) => _setMpvProp('sub-delay', v),
+            getPosition: () => _player.state.position.inMilliseconds / 1000.0,
+            heardLabel: 'Voice heard',
+            seenLabel: 'Text seen',
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Audio delay with Sound heard / Sound spotted auto-sync.
+  void _showAudioDelay() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        alignment: Alignment.bottomCenter,
+        insetPadding: const EdgeInsets.all(16),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: GlassSurface(
+          radius: 18,
+          child: _DelayPanel(
+            title: 'Audio delay',
+            onSet: (v) => _setMpvProp('audio-delay', v),
+            getPosition: () => _player.state.position.inMilliseconds / 1000.0,
+            heardLabel: 'Sound heard',
+            seenLabel: 'Sound spotted',
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showSources() async {
     final list = widget.allStreams ?? widget.streams;
     if (list.length < 2) return;
@@ -586,6 +718,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             title: '${widget.anime.title} — EP $_episode',
             status: _status,
             skips: _skips,
+            chapters: _chapters,
             showSkipButtons:
                 widget.settings.aniskipEnabled && widget.settings.aniskipShowButton,
             onBack: () => Navigator.of(context).maybePop(),
@@ -605,6 +738,438 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         _episode < widget.totalEpisodes!))
                 ? () => _jumpEpisode(_episode + 1)
                 : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Subtitle style settings panel (mpvKt-style).
+/// Sections: Typography, Colors, Miscellaneous.
+class _SubtitleSettingsPanel extends StatefulWidget {
+  final Future<void> Function(String key, dynamic value) onSet;
+  const _SubtitleSettingsPanel({required this.onSet});
+
+  @override
+  State<_SubtitleSettingsPanel> createState() => _SubtitleSettingsPanelState();
+}
+
+class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
+  bool _typographyOpen = true;
+  bool _colorsOpen = false;
+  bool _miscOpen = false;
+
+  // Typography state
+  bool _bold = false;
+  bool _italic = false;
+  String _align = 'center'; // left/center/right
+  double _fontSize = 55;
+  double _borderSize = 3;
+  double _shadowOffset = 0;
+  int _borderStyle = 1; // 0=none, 1=outline+shadow, 2=opaque box
+
+  // Colors state (0-255)
+  int _r = 255, _g = 255, _b = 255, _a = 255;
+
+  // Misc state
+  bool _assOverride = false;
+  double _scale = 1.0;
+  double _position = 100;
+
+  Widget _sectionHeader(String title, bool open, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
+            ),
+            Icon(open ? Icons.expand_less : Icons.expand_more,
+                color: Colors.white70),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sliderRow(String label, double value, double min, double max,
+      ValueChanged<double> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text('$label\n${value.toStringAsFixed(value < 10 ? 1 : 0)}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ),
+          Expanded(
+            child: Slider(
+              value: value,
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _colorSlider(String label, int value, Color activeColor,
+      ValueChanged<double> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text('$label\n$value',
+                style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ),
+          Expanded(
+            child: Slider(
+              value: value.toDouble(),
+              min: 0,
+              max: 255,
+              activeColor: activeColor,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String get _colorHex =>
+      '#${_r.toRadixString(16).padLeft(2, '0')}${_g.toRadixString(16).padLeft(2, '0')}${_b.toRadixString(16).padLeft(2, '0')}${_a.toRadixString(16).padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text('Subtitle settings',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800)),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white70),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          // ---------- Typography ----------
+          _sectionHeader('Typography', _typographyOpen,
+              () => setState(() => _typographyOpen = !_typographyOpen)),
+          if (_typographyOpen) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  _styleBtn(Icons.format_bold, _bold, () {
+                    setState(() => _bold = !_bold);
+                    widget.onSet('sub-bold', _bold ? 'yes' : 'no');
+                  }),
+                  const SizedBox(width: 8),
+                  _styleBtn(Icons.format_italic, _italic, () {
+                    setState(() => _italic = !_italic);
+                    widget.onSet('sub-italic', _italic ? 'yes' : 'no');
+                  }),
+                  const SizedBox(width: 16),
+                  _alignBtn(Icons.format_align_left, _align == 'left', () {
+                    setState(() => _align = 'left');
+                    widget.onSet('sub-align-x', 'left');
+                  }),
+                  _alignBtn(Icons.format_align_center, _align == 'center', () {
+                    setState(() => _align = 'center');
+                    widget.onSet('sub-align-x', 'center');
+                  }),
+                  _alignBtn(Icons.format_align_right, _align == 'right', () {
+                    setState(() => _align = 'right');
+                    widget.onSet('sub-align-x', 'right');
+                  }),
+                ],
+              ),
+            ),
+            _sliderRow('Font size', _fontSize, 10, 100, (v) {
+              setState(() => _fontSize = v);
+              widget.onSet('sub-font-size', v);
+            }),
+            _sliderRow('Border size', _borderSize, 0, 10, (v) {
+              setState(() => _borderSize = v);
+              widget.onSet('sub-border-size', v);
+            }),
+            _sliderRow('Shadow offset', _shadowOffset, 0, 10, (v) {
+              setState(() => _shadowOffset = v);
+              widget.onSet('sub-shadow-offset', v);
+            }),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const Text('Border style',
+                      style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: _borderStyle,
+                    dropdownColor: const Color(0xFF2A2B30),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    items: const [
+                      DropdownMenuItem(value: 0, child: Text('None')),
+                      DropdownMenuItem(value: 1, child: Text('Outline + shadow')),
+                      DropdownMenuItem(value: 2, child: Text('Opaque box')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) {
+                        setState(() => _borderStyle = v);
+                        widget.onSet('sub-border-style', v.toString());
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const Divider(color: Colors.white12, height: 1),
+          // ---------- Colors ----------
+          _sectionHeader('Colors', _colorsOpen,
+              () => setState(() => _colorsOpen = !_colorsOpen)),
+          if (_colorsOpen) ...[
+            _colorSlider('Red', _r, Colors.red, (v) {
+              setState(() => _r = v.toInt());
+              widget.onSet('sub-color', _colorHex);
+            }),
+            _colorSlider('Green', _g, Colors.green, (v) {
+              setState(() => _g = v.toInt());
+              widget.onSet('sub-color', _colorHex);
+            }),
+            _colorSlider('Blue', _b, Colors.blue, (v) {
+              setState(() => _b = v.toInt());
+              widget.onSet('sub-color', _colorHex);
+            }),
+            _colorSlider('Alpha', _a, Colors.white, (v) {
+              setState(() => _a = v.toInt());
+              widget.onSet('sub-color', _colorHex);
+            }),
+          ],
+          const Divider(color: Colors.white12, height: 1),
+          // ---------- Miscellaneous ----------
+          _sectionHeader('Miscellaneous', _miscOpen,
+              () => setState(() => _miscOpen = !_miscOpen)),
+          if (_miscOpen) ...[
+            SwitchListTile(
+              title: const Text('Override ASS/SSA subtitles',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+              value: _assOverride,
+              onChanged: (v) {
+                setState(() => _assOverride = v);
+                widget.onSet('sub-ass-override', v ? 'force' : 'no');
+              },
+            ),
+            _sliderRow('Scale', _scale, 0.1, 3.0, (v) {
+              setState(() => _scale = v);
+              widget.onSet('sub-scale', v);
+            }),
+            _sliderRow('Position', _position, 0, 100, (v) {
+              setState(() => _position = v);
+              widget.onSet('sub-pos', v);
+            }),
+          ],
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _styleBtn(IconData icon, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: active ? Colors.white24 : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Icon(icon, color: Colors.white, size: 20),
+      ),
+    );
+  }
+
+  Widget _alignBtn(IconData icon, bool active, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: active ? Colors.white24 : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon,
+            color: active ? Colors.white : Colors.white54, size: 20),
+      ),
+    );
+  }
+}
+
+/// Delay panel with auto-sync (Voice heard / Text seen pattern).
+class _DelayPanel extends StatefulWidget {
+  final String title;
+  final Future<void> Function(double value) onSet;
+  final double Function() getPosition;
+  final String heardLabel;
+  final String seenLabel;
+  const _DelayPanel({
+    required this.title,
+    required this.onSet,
+    required this.getPosition,
+    required this.heardLabel,
+    required this.seenLabel,
+  });
+
+  @override
+  State<_DelayPanel> createState() => _DelayPanelState();
+}
+
+class _DelayPanelState extends State<_DelayPanel> {
+  double _delayMs = 0;
+  double? _heardAt;
+  double? _seenAt;
+
+  void _apply(double ms) {
+    setState(() => _delayMs = ms);
+    widget.onSet(ms / 1000.0); // mpv uses seconds
+  }
+
+  void _tryAutoSync() {
+    if (_heardAt != null && _seenAt != null) {
+      // Heard at T1, saw at T2. If text came after voice (T2 > T1),
+      // subtitles are late → negative delay to show earlier.
+      final delayMs = (_heardAt! - _seenAt!) * 1000;
+      _apply(delayMs.clamp(-10000, 10000));
+      setState(() {
+        _heardAt = null;
+        _seenAt = null;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(widget.title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800)),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white70),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.remove_circle_outline,
+                    color: Colors.white70),
+                onPressed: () => _apply(_delayMs - 50),
+              ),
+              Expanded(
+                child: Column(
+                  children: [
+                    const Text('Delay',
+                        style:
+                            TextStyle(color: Colors.white54, fontSize: 11)),
+                    Text('${_delayMs.toInt()} ms',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon:
+                    const Icon(Icons.add_circle_outline, color: Colors.white70),
+                onPressed: () => _apply(_delayMs + 50),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Tap one when you hear it, the other when you see it — delay is calculated automatically.',
+            style: TextStyle(color: Colors.white54, fontSize: 11),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    setState(() => _heardAt = widget.getPosition());
+                    _tryAutoSync();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _heardAt != null
+                        ? Colors.green.shade700
+                        : const Color(0xFF3A3B40),
+                  ),
+                  child: Text(widget.heardLabel),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    setState(() => _seenAt = widget.getPosition());
+                    _tryAutoSync();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _seenAt != null
+                        ? Colors.green.shade700
+                        : const Color(0xFF3A3B40),
+                  ),
+                  child: Text(widget.seenLabel),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () => _apply(0),
+            child: const Text('Reset to 0'),
           ),
         ],
       ),
