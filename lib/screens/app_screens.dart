@@ -1732,7 +1732,20 @@ class _SearchScreenState extends State<SearchScreen> {
           const SizedBox(height: 12),
         if (_loading) skeletonPosterGrid(count: 9),
         if (_error != null) Text('Search failed: $_error'),
-        if (_searched && !_loading && _error == null) _resultsToolbar(),
+        if (_searched && !_loading && _error == null) ...[
+          _resultsToolbar(),
+          if (_results.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (_view == 'grid')
+              AnimeGrid(
+                  items: _results,
+                  profileId: widget.profileId,
+                  settings: widget.settings,
+                  onMarkWatched: widget.onMarkWatched)
+            else
+              ..._results.map(_resultRow),
+          ],
+        ],
         if (!_loading &&
             _error == null &&
             _searched &&
@@ -1743,15 +1756,6 @@ class _SearchScreenState extends State<SearchScreen> {
             child: Center(
                 child: Text('No results found. Try different filters.')),
           ),
-        const SizedBox(height: 12),
-        if (_view == 'grid')
-          AnimeGrid(
-              items: _results,
-              profileId: widget.profileId,
-              settings: widget.settings,
-              onMarkWatched: widget.onMarkWatched)
-        else
-          ..._results.map(_resultRow),
         // Website parity: "CLOSEST MATCHES (FUZZY)" below the results.
         if (_fuzzy.isNotEmpty) ...[
           const SizedBox(height: 20),
