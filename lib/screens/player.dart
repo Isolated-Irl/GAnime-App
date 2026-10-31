@@ -33,6 +33,7 @@ class PlayerScreen extends StatefulWidget {
   final Anime anime;
   final int episode;
   final List<StreamSource> streams;
+  final int initialIndex;
   final AppSettings settings;
   final Future<void> Function()? onMarkWatched;
 
@@ -50,6 +51,7 @@ class PlayerScreen extends StatefulWidget {
     required this.anime,
     required this.episode,
     required this.streams,
+    this.initialIndex = 0,
     required this.settings,
     this.onMarkWatched,
     this.profileId,
@@ -97,6 +99,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } catch (_) {}
   }
 
+  /// Boot-time mpv setup: applies the boot decoder mode (respects _isHw),
+  /// bounds demuxer memory, then opens the stream on the next frame so the
+  /// Android SurfaceTexture is attached before the codec starts decoding.
+  Future<void> _initMpvAndOpen() async {
+    final dynamic platform = _player.platform;
+    try {
+      await platform.setProperty('hwdec', _isHw ? 'auto-safe' : 'no');
+      await platform.setProperty('vo', 'gpu');
+      await platform.setProperty('framedrop', 'vo');
+      await platform.setProperty('demuxer-max-bytes', '32MiB');
+      await platform.setProperty('demuxer-max-back-bytes', '16MiB');
+    } catch (_) {}
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _openCurrent();
+        _loadSkips();
+      }
+    });
+  }
+
   /// Toggles HW/SW decoding mid-playback. MediaCodec cannot hot-swap, so the
   /// stream is re-opened at the exact current position.
   Future<void> _toggleHwDec() async {
@@ -125,6 +147,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     _episode = widget.episode;
+    _streamIndex = widget.initialIndex; // open the stream the user tapped
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -142,10 +165,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
         enableHardwareAcceleration: true,
       ),
     );
-    _applyHwDecProperty(_isHw);
     _player.stream.tracks.listen(_autoSelectTracks);
-    _openCurrent();
-    _loadSkips();
+    // Catch stream failures gracefully instead of crashing.
+    _player.stream.error.listen((err) {
+      if (mounted) setState(() => _status = 'Stream error: $err');
+    });
+    // Defer the video open until the Android surface is mounted (post-frame),
+    // so the codec never starts before the SurfaceTexture exists.
+    _initMpvAndOpen();
     _player.stream.position.listen((pos) async {
       final dur = _player.state.duration;
       if (dur.inMilliseconds <= 0 || _marked85) return;

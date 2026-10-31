@@ -678,10 +678,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 child: DropdownButton<String>(
                   value: edit.status,
                   dropdownColor: const Color(0xFF22242B),
-                  icon: const Icon(Icons.keyboard_arrow_down,
-                      color: Colors.black, size: 20),
-                  style: const TextStyle(
-                      color: Colors.black,
+                  icon: Icon(Icons.keyboard_arrow_down,
+                      color: Theme.of(dCtx).colorScheme.onPrimary, size: 20),
+                  style: TextStyle(
+                      color: Theme.of(dCtx).colorScheme.onPrimary,
                       fontWeight: FontWeight.w800,
                       fontSize: 14),
                   items: [

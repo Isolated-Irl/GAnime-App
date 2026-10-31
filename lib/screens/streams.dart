@@ -525,12 +525,14 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   void _play(_Group g, StreamSource s) {
+    final selectedIdx = g.streams.indexOf(s);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           anime: widget.anime,
           episode: widget.episode,
           streams: g.streams,
+          initialIndex: selectedIdx >= 0 ? selectedIdx : 0,
           settings: widget.settings,
           onMarkWatched: widget.onMarkWatched,
           profileId: widget.profileId,

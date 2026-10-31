@@ -2364,11 +2364,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return out;
   }
 
-  // Per-tab cache: switching tabs must NOT re-download each list.
-  // A tab is fetched once (per profile) and served from the cache on
-  // every later visit; the refresh button forces a re-download.
+  // Per-tab cache with 60s freshness (website parity: setLibrarySource).
+  // Switching to an already-loaded tab shows its cached data instantly;
+  // a cache older than 60s shows instantly then refreshes in the background.
+  // The refresh button and Connect flow force a re-download.
   final Map<int, List<LibraryEntry>> _cache = {};
+  final Map<int, DateTime> _cacheAt = {};
   String _cacheProfile = '';
+
+  static const _cacheFreshSecs = 60;
+
+  bool _isCacheFresh(int tab) {
+    final at = _cacheAt[tab];
+    return at != null &&
+        DateTime.now().difference(at).inSeconds < _cacheFreshSecs;
+  }
 
   @override
   void initState() {
@@ -2386,6 +2396,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.profileId != widget.profileId) {
       _cache.clear();
+      _cacheAt.clear();
       _cacheProfile = widget.profileId;
       _loadTab();
     }
@@ -2614,6 +2625,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     setState(() => _connecting = false);
     if (!ok) return;
     _cache.remove(_tab);
+    _cacheAt.remove(_tab);
     _refreshProviderUser(_tab);
     await _loadTab(force: true);
   }
@@ -2625,14 +2637,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
     // Refresh it whenever the tab loads.
     _refreshProviderUser(tab);
     // Serve from the per-tab cache: tab switches are instant, no network.
+    // Website parity: a stale cache (>60s) shows instantly then refreshes
+    // in the background.
     if (!force &&
         _cacheProfile == widget.profileId &&
         _cache.containsKey(tab)) {
+      final stale = !_isCacheFresh(tab);
       setState(() {
         _entries = _cache[tab]!;
         _loading = false;
         _error = null;
       });
+      if (stale) _loadTab(force: true);
       return;
     }
     setState(() {
@@ -2687,6 +2703,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     // another is selected.
     if (!mounted || tab != _tab || _cacheProfile != profile) return;
     _cache[tab] = fetched;
+    _cacheAt[tab] = DateTime.now();
     _cacheProfile = profile;
     setState(() {
       _entries = fetched;
@@ -2811,11 +2828,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     children: [
                       for (int i = 0; i < tabNames.length; i++) ...[
                         pill(tabNames[i], i == _tab, () {
+                          // Website parity (setLibrarySource): synchronous
+                          // swap so the old tab's pills never flash.
+                          // - Fresh cache (<60s): show instantly, no fetch.
+                          // - Stale cache: show instantly, refresh in bg.
+                          // - No cache: skeleton, fetch fresh.
+                          // Errors belong to the previous tab: reset.
+                          final newTab = i;
+                          final cached = _cacheProfile == widget.profileId
+                              ? _cache[newTab]
+                              : null;
+                          final fresh =
+                              cached != null && _isCacheFresh(newTab);
                           setState(() {
-                            _tab = i;
+                            _tab = newTab;
                             _statusFilter = 'All';
+                            _error = null;
+                            if (cached != null) {
+                              _entries = cached;
+                              _loading = false;
+                            } else {
+                              _entries = [];
+                              _loading = true;
+                            }
                           });
-                          _loadTab();
+                          if (!fresh) {
+                            // No cache or stale: (re)fetch. Stale shows
+                            // cached data meanwhile; no-cache shows skeleton.
+                            _loadTab(force: true);
+                          }
                         }),
                         const SizedBox(width: 8),
                       ],
