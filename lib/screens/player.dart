@@ -261,18 +261,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (mounted) setState(() => _subStyle[key] = sv);
   }
 
+  /// Settings > Playback > Subtitle Rendering supplies the defaults
+  /// (size 10–30sp -> panel value sp*3 -> ~1.8px per sp); anything the user
+  /// changed in the in-player panel overrides it until they press Reset.
+  Map<String, String> _effectiveSubStyle() => {
+        'sub-font-size': (widget.settings.subtitleSize * 3).round().toString(),
+        ..._subStyle,
+      };
+
+  Future<void> _resetSubStyle() async {
+    if (mounted) setState(() => _subStyle = {});
+    await PlayerPrefs.set('sub_style', <String, String>{});
+  }
+
   SubtitleViewConfiguration _subViewConfig(BuildContext context) {
-    double d(String k, double fb) => double.tryParse(_subStyle[k] ?? '') ?? fb;
+    final st = _effectiveSubStyle();
+    double d(String k, double fb) => double.tryParse(st[k] ?? '') ?? fb;
 
     // mpv's default 55 maps to ~33 logical px (close to media_kit's 32).
     final fontSize = d('sub-font-size', 55) * 0.6 * d('sub-scale', 1.0);
     final borderSize = d('sub-border-size', 3);
     final shadowOff = d('sub-shadow-offset', 0);
-    final borderStyle = int.tryParse(_subStyle['sub-border-style'] ?? '') ?? 2;
+    final borderStyle = int.tryParse(st['sub-border-style'] ?? '') ?? 2;
     final pos = d('sub-pos', 100).clamp(0.0, 100.0);
 
     var color = Colors.white;
-    final c = _subStyle['sub-color'] ?? '';
+    final c = st['sub-color'] ?? '';
     if (c.length >= 9 && c.startsWith('#')) {
       final r = int.tryParse(c.substring(1, 3), radix: 16) ?? 255;
       final g = int.tryParse(c.substring(3, 5), radix: 16) ?? 255;
@@ -301,7 +315,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
 
-    final align = switch (_subStyle['sub-align-x']) {
+    final align = switch (st['sub-align-x']) {
       'left' => TextAlign.left,
       'right' => TextAlign.right,
       _ => TextAlign.center,
@@ -315,10 +329,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
         fontSize: fontSize,
         color: color,
         fontWeight:
-            _subStyle['sub-bold'] == 'yes' ? FontWeight.w800 : FontWeight.w500,
+            st['sub-bold'] == 'yes' ? FontWeight.w800 : FontWeight.w500,
         fontStyle:
-            _subStyle['sub-italic'] == 'yes' ? FontStyle.italic : FontStyle.normal,
-        backgroundColor: borderStyle == 2 ? const Color(0xAA000000) : null,
+            st['sub-italic'] == 'yes' ? FontStyle.italic : FontStyle.normal,
+        backgroundColor: borderStyle == 2
+            ? Color.fromRGBO(
+                0, 0, 0, widget.settings.subtitleBackgroundTint.clamp(0.0, 1.0))
+            : null,
         shadows: shadows,
       ),
       textAlign: align,
@@ -775,7 +792,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             constraints: const BoxConstraints(maxHeight: 560),
             child: _SubtitleSettingsPanel(
               onSet: _setSubStyle,
-              initial: Map<String, dynamic>.from(_subStyle),
+              onReset: _resetSubStyle,
+              initial: Map<String, dynamic>.from(_effectiveSubStyle()),
             ),
           ),
         ),
@@ -931,8 +949,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 class _SubtitleSettingsPanel extends StatefulWidget {
   final Future<void> Function(String key, dynamic value) onSet;
   final Map<String, dynamic> initial;
+  final Future<void> Function() onReset;
   const _SubtitleSettingsPanel({
     required this.onSet,
+    required this.onReset,
     this.initial = const <String, dynamic>{},
   });
 
@@ -1112,6 +1132,13 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
                           color: Colors.white,
                           fontSize: 17,
                           fontWeight: FontWeight.w800)),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await widget.onReset();
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: const Text('Reset to Settings'),
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white70),
