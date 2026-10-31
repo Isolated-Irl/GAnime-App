@@ -152,8 +152,31 @@ class _DetailsScreenState extends State<DetailsScreen> {
       _total > 0 &&
       List.generate(_total, (i) => i + 1).every(_watched.contains);
 
+  /// In-memory details/episodes cache so re-opening an anime (or coming
+  /// back from an episode) never flashes the skeleton again. Keyed by
+  /// AniList id when known, else by lowercase title (MAL entries).
+  static final Map<String, Anime> _detailsCache = {};
+  static final Map<String, List<EpisodeInfo>> _episodeCache = {};
+
+  String get _cacheKey {
+    final alId = _anime.anilistId;
+    if (alId != null && alId > 0) return 'al:$alId';
+    if (_anime.id > 0) return 'al:${_anime.id}';
+    return 't:${_anime.title.toLowerCase()}';
+  }
+
   Future<void> _load() async {
     try {
+      // Instant restore from cache; the network refresh below still runs
+      // silently to keep data fresh.
+      final cached = _detailsCache[_cacheKey];
+      if (cached != null && mounted) {
+        setState(() {
+          _anime = cached;
+          _episodes = _episodeCache[_cacheKey] ?? _episodes;
+          _loading = false;
+        });
+      }
       // Catalogue is AniList-based: _anime.id IS the AniList id.
       // If an entry arrived with a differing anilistId (legacy state),
       // OR with missing banner/description (stripped calendar/MAL entry),
@@ -171,6 +194,29 @@ class _DetailsScreenState extends State<DetailsScreen> {
               nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
               airingAt: _anime.airingAt ?? fresh.airingAt,
             );
+          } catch (_) {}
+        } else if (_anime.title.isNotEmpty) {
+          // MAL (or any tracker) entries arrive without an AniList id —
+          // resolve via title search or the screen would show the
+          // skeleton forever.
+          try {
+            final res = await AniList.search(_anime.title);
+            final q = _anime.title.toLowerCase();
+            Anime? best;
+            for (final a in res) {
+              final t = a.title.toLowerCase();
+              if (t == q) { best = a; break; }
+              if (best == null && t.contains(q)) best = a;
+            }
+            best ??= res.isNotEmpty ? res.first : null;
+            if (best != null && best.id > 0) {
+              final fresh = await AniList.details(best.id);
+              _anime = fresh.copyWith(
+                anilistId: best.id,
+                nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
+                airingAt: _anime.airingAt ?? fresh.airingAt,
+              );
+            }
           } catch (_) {}
         }
       }
@@ -245,6 +291,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
           // Website default: jump to the first range when the list is long.
           if (_rangeFrom == null && _total > 48) _rangeFrom = 1;
         });
+        _detailsCache[_cacheKey] = _anime;
+        _episodeCache[_cacheKey] = eps;
       }
     } catch (e) {
       if (mounted) {
@@ -1902,7 +1950,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   color: Colors.grey.shade400,
                                   fontSize: 13)),
                         ),
-                      if (total > 0) ...[
+                      if (total > 0 || count > 0) ...[
                         const SizedBox(height: 4),
                         SizedBox(
                           width: double.infinity,
@@ -2016,7 +2064,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         ],
                       ),
                       const SizedBox(height: 14),
-                      if (total > 0) ...[
+                      if (total > 0 || count > 0) ...[
                         // Watching Progress card (website).
                         Container(
                           padding: const EdgeInsets.all(14),
@@ -2054,7 +2102,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                               const SizedBox(height: 8),
                               Align(
                                 alignment: Alignment.centerLeft,
-                                child: Text('$count / $total',
+                                child: Text(
+                                    total > 0 ? '$count / $total' : '$count / ?',
                                     style: const TextStyle(
                                         fontSize: 20,
                                         fontWeight: FontWeight.bold)),
