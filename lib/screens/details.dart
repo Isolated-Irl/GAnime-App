@@ -7,6 +7,7 @@
 // Tapping an episode opens the stream picker, then the player.
 // If no addon is installed, streams are empty and the player screen
 // explains that — the app never invents a stream source.
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -102,6 +103,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   Set<int> _saved = {};
   bool _loading = true;
   String? _error;
+  Timer? _slowTimer;
+  bool _slowLoading = false; // True only if loading takes >450ms (no flash)
   bool _synopsisExpanded = false;
   late String _layout; // 'detailed' | 'minimum'
   int? _rangeFrom; // null = All
@@ -122,7 +125,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
         ? widget.settings.episodeLayout
         : 'detailed';
     _anime = widget.anime;
+    // Delayed skeleton: only show if loading takes >450ms.
+    _slowTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted && _loading) setState(() => _slowLoading = true);
+    });
     _load();
+  }
+
+  @override
+  void dispose() {
+    _slowTimer?.cancel();
+    super.dispose();
   }
 
   bool get _isMovie => _anime.format == 'MOVIE';
@@ -178,6 +191,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           _anime = cached;
           _episodes = _episodeCache[initialKey] ?? _episodes;
           _loading = false;
+          _slowLoading = false;
         });
       }
       // Catalogue is AniList-based: _anime.id IS the AniList id.
@@ -283,8 +297,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
         libStatus = e?.status;
       } catch (_) {}
 
+      _slowTimer?.cancel();
       if (mounted) {
         setState(() {
+          _slowLoading = false;
           _episodes = eps;
           _watched = w;
           _saved = saved;
@@ -304,8 +320,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
         }
       }
     } catch (e) {
+      _slowTimer?.cancel();
       if (mounted) {
         setState(() {
+          _slowLoading = false;
           _error = '$e';
           _loading = false;
         });
@@ -2242,7 +2260,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           ),
                         const SizedBox(height: 10),
                       ],
-                      if (_loading)
+                      if (_loading && _slowLoading)
                         // Skeleton matches the selected episode layout,
                         // in the same inset context as the real list
                         // (the parent already pads 16) — no extra padding,
