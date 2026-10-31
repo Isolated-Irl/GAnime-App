@@ -666,6 +666,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               endDate: alEdit.endDate);
           pushed.add('AniList');
         } catch (e) {
+          // Best-effort: tracker push failure shouldn't break the save flow.
         }
       }
       if (skConnected && skId != null) {
@@ -679,6 +680,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               memo: skEdit.memo);
           pushed.add('Simkl');
         } catch (e) {
+          // Best-effort: tracker push failure shouldn't break the save flow.
         }
       }
       if (malConnected && mId != null && mId > 0) {
@@ -693,6 +695,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           }
           pushed.add('MAL');
         } catch (e) {
+          // Best-effort: tracker push failure shouldn't break the save flow.
         }
       }
       await widget.onMarkWatched?.call(_anime, prog);
