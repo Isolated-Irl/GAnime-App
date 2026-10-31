@@ -1,9 +1,8 @@
 // Streams screen — website parity for the stream-fetch page.
-// UI matches ganime.pages.dev/#streams: header with poster + counts,
-// "Supported/Refresh" tools, per-addon tabs, and rich stream CARDS
-// (kind icon, addon, quality chip, source, seeders, size, filename,
-// language info line, audio badge) with Play + Copy actions —
-// instead of the old raw-text wall.
+// UI: header with framed poster + counts, circular back/refresh buttons,
+// per-addon tabs, and rich stream CARDS (kind icon, addon, quality chip,
+// source, seeders, size, filename, language info line, audio badge)
+// with Play + Copy actions — instead of the old raw-text wall.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models.dart';
@@ -248,63 +247,65 @@ class _StreamsScreenState extends State<StreamsScreen> {
               onTap: () => Navigator.pop(context)),
           const SizedBox(width: 10),
           if (a.cover.isNotEmpty)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.network(a.cover, width: 52, height: 74, fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => const SizedBox(width: 52, height: 74)),
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0x33FFFFFF), width: 1.5),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x3300E676),
+                    blurRadius: 18,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.network(a.cover,
+                    width: 96,
+                    height: 136,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) =>
+                        const SizedBox(width: 96, height: 136)),
+              ),
             ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(a.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 3),
-                Text(
-                  '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season 1 · Episode ${widget.episode}'} · ${a.year} · ★ ${a.score}',
-                  style: const TextStyle(color: Colors.white54, fontSize: 11.5),
-                ),
-                Text(
-                  _loading
-                      ? 'Asking your addons…'
-                      : '$_total streams from ${_groups.length} addons',
-                  style: const TextStyle(color: Colors.white54, fontSize: 11.5),
-                ),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(a.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season 1 · Episode ${widget.episode}'} · ${a.year} · ★ ${a.score}',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _loading
+                        ? 'Asking your addons…'
+                        : '$_total streams from ${_groups.length} addons',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 8),
-          Column(
-            children: [
-              GlassSurface(
-                radius: 10,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Text('✓ All · ${_loading ? "…" : _total}',
-                      style: const TextStyle(color: Colors.white, fontSize: 11.5)),
-                ),
-              ),
-              const SizedBox(height: 6),
-              GlassSurface(
-                radius: 10,
-                child: Material(
-                  type: MaterialType.transparency,
-                  child: InkWell(
-                    onTap: _loading ? null : _load,
-                    borderRadius: BorderRadius.circular(10),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      child: Text('↻ Refresh',
-                          style: TextStyle(color: Colors.white, fontSize: 11.5)),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          GlassButton(
+            icon: Icons.refresh,
+            size: 40,
+            iconSize: 20,
+            circle: true,
+            onTap: _loading ? null : _load,
           ),
         ],
       ),
@@ -359,42 +360,12 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   Widget _groupBlock(_Group g) {
+    // Addon name header + "Asked as …" note removed by design (v3):
+    // the tab row already identifies the addon, so groups render
+    // as plain card lists.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            const Icon(Icons.science_outlined, color: Colors.white, size: 16),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(g.addon.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
-            ),
-            GlassSurface(
-              radius: 8,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                child: Text('${g.streams.length} streams',
-                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
-              ),
-            ),
-            if (!g.done) ...[
-              const SizedBox(width: 8),
-              const SizedBox(
-                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70)),
-            ],
-          ],
-        ),
-        if (g.note != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(g.note!,
-                style: const TextStyle(color: Colors.white38, fontSize: 11)),
-          ),
         const SizedBox(height: 8),
         for (final s in g.streams) _streamCard(g, s),
       ],
