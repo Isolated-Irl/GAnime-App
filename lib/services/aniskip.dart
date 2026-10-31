@@ -34,7 +34,11 @@ class AniSkip {
         'mixed-ed': 'ed',
         'recap': 'recap',
       };
-      final out = <SkipInterval>[];
+      // The API returns EVERY community submission for the episode — for
+      // popular shows that's 2+ intros and 2+ outros. Keep only the
+      // best-voted interval per kind (op/ed/recap).
+      final best = <String, SkipInterval>{};
+      final bestVotes = <String, int>{};
       for (final item in (j['results'] as List?) ?? []) {
         final m = item as Map<String, dynamic>;
         final interval = m['interval'] as Map<String, dynamic>? ?? {};
@@ -42,14 +46,20 @@ class AniSkip {
         final end = (interval['endTime'] as num?)?.toDouble() ?? 0;
         if (end <= start) continue;
         final st = (m['skipType'] as String?) ?? 'op';
-        out.add(SkipInterval(
-          kind: kinds[st] ?? 'op',
+        final kind = kinds[st] ?? 'op';
+        final votes = (m['votes'] as num?)?.toInt() ?? 0;
+        if (best.containsKey(kind) && votes <= (bestVotes[kind] ?? 0)) {
+          continue;
+        }
+        best[kind] = SkipInterval(
+          kind: kind,
           label: names[st] ?? 'Skip',
           start: start,
           end: end,
-        ));
+        );
+        bestVotes[kind] = votes;
       }
-      return out;
+      return best.values.toList();
     } catch (_) {
       return [];
     }

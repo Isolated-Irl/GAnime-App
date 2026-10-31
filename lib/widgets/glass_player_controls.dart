@@ -5,7 +5,6 @@
 // double-tap sides seek ±10s (with flash), auto-hides after 4s while
 // playing. Lock mode shows only the unlock button and disables gestures.
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import '../models.dart';
@@ -375,34 +374,48 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Skip buttons are time-gated: each appears only while playback is
+        // inside its window (5s lead-in so it's there when the OP starts)
+        // and disappears once the window passes — mpvKt behavior.
         if (widget.showSkipButtons && widget.skips.isNotEmpty)
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final s in widget.skips)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: GlassSurface(
-                        radius: 12,
-                        child: Material(
-                          type: MaterialType.transparency,
-                          child: InkWell(
-                            onTap: () => _p.seek(Duration(milliseconds: (s.end * 1000).toInt())),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              child: Text(s.label, style: const TextStyle(color: Colors.white, fontSize: 13)),
+          StreamBuilder<Duration>(
+            stream: _p.stream.position,
+            initialData: _p.state.position,
+            builder: (_, snap) {
+              final pos = (snap.data ?? Duration.zero).inMilliseconds / 1000.0;
+              final active = widget.skips
+                  .where((s) => pos >= s.start - 5 && pos < s.end)
+                  .toList();
+              if (active.isEmpty) return const SizedBox.shrink();
+              return Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final s in active)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: GlassSurface(
+                            radius: 12,
+                            child: Material(
+                              type: MaterialType.transparency,
+                              child: InkWell(
+                                onTap: () => _p.seek(Duration(milliseconds: (s.end * 1000).toInt())),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  child: Text(s.label, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         // Keys row (mpv.kt style): left cluster lock/aspect/speed,
         // right cluster next-episode.
@@ -455,6 +468,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                     child: _SeekBar(
                       position: pos,
                       duration: dur,
+                      skips: widget.skips,
                       onSeek: (d) => _p.seek(d),
                       onDragging: (v) {
                         _dragging = v;
@@ -476,11 +490,13 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
 
 class _SeekBar extends StatefulWidget {
   final Duration position, duration;
+  final List<SkipInterval> skips;
   final ValueChanged<Duration> onSeek;
   final ValueChanged<bool> onDragging;
   const _SeekBar({
     required this.position,
     required this.duration,
+    required this.skips,
     required this.onSeek,
     required this.onDragging,
   });
@@ -523,7 +539,21 @@ class _SeekBarState extends State<_SeekBar> {
           },
           child: SizedBox(
             height: 32,
-            child: CustomPaint(painter: _SeekPainter(ratio, 0.85, ratio >= 0.85)),
+            child: CustomPaint(
+              painter: _SeekPainter(
+                ratio,
+                0.85,
+                ratio >= 0.85,
+                // Chapter ticks at each skip window (mpvKt style).
+                total > 0
+                    ? [
+                        for (final s in widget.skips)
+                          if (s.end * 1000 <= total)
+                            (s.start * 1000 / total).clamp(0.0, 1.0),
+                      ]
+                    : const <double>[],
+              ),
+            ),
           ),
         );
       },
@@ -534,7 +564,9 @@ class _SeekBarState extends State<_SeekBar> {
 class _SeekPainter extends CustomPainter {
   final double ratio, marker;
   final bool passed;
-  _SeekPainter(this.ratio, this.marker, this.passed);
+  final List<double> markers; // chapter ticks (skip window starts)
+  _SeekPainter(this.ratio, this.marker, this.passed,
+      [this.markers = const <double>[]]);
 
   @override
   void paint(Canvas canvas, Size s) {
@@ -557,18 +589,25 @@ class _SeekPainter extends CustomPainter {
       ..lineTo(mx - 5, y)
       ..close();
     canvas.drawPath(d, Paint()..color = passed ? Colors.greenAccent : Colors.white70);
-    // Thumb.
-    canvas.drawCircle(
-        Offset(x, y),
-        7,
-        Paint()
-          ..color = Colors.black26
-          ..imageFilter = ImageFilter.blur(sigmaX: 3, sigmaY: 3));
+    // Chapter ticks: thin vertical notches at each skip-window start.
+    final tick = Paint()..color = Colors.white70;
+    for (final m in markers) {
+      if ((m - ratio).abs() < 0.004) continue; // hidden under the thumb
+      final tx = left + trackW * m;
+      canvas.drawRect(Rect.fromLTWH(tx - 0.75, y - 6, 1.5, 12), tick);
+    }
+    // Thumb: two flat circles instead of a blurred shadow — this painter
+    // repaints on every position tick, so a per-tick blur was wasted GPU.
+    canvas.drawCircle(Offset(x, y + 1.5), 7.5, Paint()..color = Colors.black26);
     canvas.drawCircle(Offset(x, y), 7, Paint()..color = Colors.white);
   }
 
   @override
-  bool shouldRepaint(_SeekPainter o) => o.ratio != ratio || o.passed != passed;
+  bool shouldRepaint(_SeekPainter o) =>
+      o.ratio != ratio ||
+      o.passed != passed ||
+      o.marker != marker ||
+      o.markers.length != markers.length;
 }
 
 /// Glass pill that shows the current playback rate (mpvKt style 1.00x).

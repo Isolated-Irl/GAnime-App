@@ -1,7 +1,6 @@
 // Glass surface ported from REX-Player's Modifier.glassSurface (Compose).
 // No backdrop blur: a near-transparent fill + inner highlight (top-left)
 // + inner shadow (bottom-right) + hairline border.
-import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 class GlassSurface extends StatelessWidget {
@@ -98,34 +97,47 @@ class _GlassPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size s) {
-    final rrect = RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(r));
+    final rect = Offset.zero & s;
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(r));
     canvas.drawRRect(rrect, Paint()..color = fill);
 
+    // Cheaper-than-blur glass edge: gradient strokes. At sigma ~2.5 the
+    // difference vs ImageFilter.blur is invisible on a phone, but this
+    // costs ~zero GPU per frame — important when 12+ glass widgets fade
+    // in over a playing 4K video.
     canvas.save();
     canvas.clipRRect(rrect);
-    // Inverted shape = big rect minus the button; blurred and offset so only
-    // a soft edge bleeds inside the clip.
-    final outer = Path()..addRect((Offset.zero & s).inflate(blur + 20));
-    final inverted = Path.combine(
-      PathOperation.difference,
-      outer,
-      Path()..addRRect(rrect),
-    );
-    final sigma = blur / 2;
-    // Impeller note: MaskFilter.blur renders dirty on Impeller; Paint
-    // .imageFilter is the supported blur path (soft, correct on all GPUs).
-    canvas.drawPath(
-      inverted.shift(off),
-      Paint()
-        ..color = hi
-        ..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-    );
-    canvas.drawPath(
-      inverted.shift(-off),
-      Paint()
-        ..color = sh
-        ..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-    );
+    final glow = (blur + 6).clamp(6.0, 14.0);
+    // Top + left: white highlight bleeding inward.
+    final hiPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment(0, glow / s.height * 2),
+        colors: [hi, hi.withValues(alpha: 0.0)],
+      ).createShader(rect);
+    final topLeft = Path()
+      ..moveTo(r, 0)
+      ..lineTo(s.width - r, 0)
+      ..moveTo(0, r)
+      ..lineTo(0, s.height - r);
+    canvas.drawPath(topLeft, hiPaint);
+    // Bottom + right: dark shadow bleeding inward.
+    final shPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..shader = LinearGradient(
+        begin: Alignment.bottomRight,
+        end: Alignment(0, 1 - glow / s.height * 2),
+        colors: [sh, sh.withValues(alpha: 0.0)],
+      ).createShader(rect);
+    final bottomRight = Path()
+      ..moveTo(r, s.height)
+      ..lineTo(s.width - r, s.height)
+      ..moveTo(s.width, r)
+      ..lineTo(s.width, s.height - r);
+    canvas.drawPath(bottomRight, shPaint);
     canvas.restore();
   }
 
