@@ -90,15 +90,15 @@ class Trackers {
     if (p.startsWith('http://') || p.startsWith('https://')) return p;
     if (p.startsWith('//')) return 'https:$p';
     final hasSizeSuffix =
-        RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?\$').hasMatch(p);
+        RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?$').hasMatch(p);
     if (p.contains('simkl.in/')) {
       final path = p.replaceFirst(RegExp(r'^https?://'), '');
       if (hasSizeSuffix) return 'https://$path';
-      return 'https://${path.replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)\$'), '')}_m.webp';
+      return 'https://${path.replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)$'), '')}_m.webp';
     }
     final bare = p
-        .replaceFirst(RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?\$'), '')
-        .replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)\$'), '');
+        .replaceFirst(RegExp(r'_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?$'), '')
+        .replaceFirst(RegExp(r'\.(webp|jpg|jpeg|png)$'), '');
     if (bare.startsWith('posters/')) return 'https://simkl.in/${bare}_m.webp';
     if (bare.contains('/')) return 'https://simkl.in/posters/${bare}_m.webp';
     return 'https://simkl.in/posters/${bare.length >= 2 ? bare.substring(0, 2) : bare}/${bare}_m.webp';
