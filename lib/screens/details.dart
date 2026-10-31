@@ -182,10 +182,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // Capture the key BEFORE any title-resolution replaces _anime,
       // so the cache is saved and looked up under the same key.
       final initialKey = _cacheKey;
-      // Instant restore from cache; the network refresh below still runs
-      // silently to keep data fresh.
+      // Instant restore from cache ONLY if it's full AniList data.
+      // Thin cached versions (no banner/description) are skipped —
+      // the page waits for the full fetch below instead.
       final cached = _detailsCache[initialKey];
-      if (cached != null && mounted) {
+      if (cached != null &&
+          cached.banner.isNotEmpty &&
+          cached.description.isNotEmpty &&
+          mounted) {
         setState(() {
           _anime = cached;
           _episodes = _episodeCache[initialKey] ?? _episodes;
@@ -338,11 +342,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
           // Website default: jump to the first range when the list is long.
           if (_rangeFrom == null && _total > 48) _rangeFrom = 1;
         });
-        _detailsCache[initialKey] = _anime;
-        _episodeCache[initialKey] = eps;
+        // Only cache full AniList data — never thin versions.
+        if (_anime.banner.isNotEmpty && _anime.description.isNotEmpty) {
+          _detailsCache[initialKey] = _anime;
+          _episodeCache[initialKey] = eps;
+        }
         // Also save under the resolved key so both lookups hit.
         final resolvedKey = _cacheKey;
-        if (resolvedKey != initialKey) {
+        if (resolvedKey != initialKey &&
+            _anime.banner.isNotEmpty &&
+            _anime.description.isNotEmpty) {
           _detailsCache[resolvedKey] = _anime;
           _episodeCache[resolvedKey] = eps;
         }
