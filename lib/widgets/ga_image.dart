@@ -22,11 +22,16 @@ class GaImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final cacheW = width != null
+        ? ((width! * pixelRatio * 2).round().clamp(1, 800))
+        : 400;
     return CachedNetworkImage(
       imageUrl: url,
       fit: fit,
       width: width,
       height: height,
+      memCacheWidth: cacheW,
       fadeInDuration: const Duration(milliseconds: 250),
       fadeOutDuration: const Duration(milliseconds: 100),
       placeholder: (context, _) => Container(

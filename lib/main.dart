@@ -343,7 +343,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
       }
       final simklClient = (t['simklClientId'] as String?) ?? '';
       final simklToken = (t['simklToken'] as String?) ?? '';
-      final simklId = (t['simklIdFor_${anime.id}'] as num?)?.toInt();
+      final simklId = (t['simklIdFor_${anime.anilistId ?? anime.id}'] as num?)?.toInt();
       if (simklClient.isNotEmpty &&
           simklToken.isNotEmpty &&
           simklId != null) {
@@ -577,7 +577,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
                     ? ClipRect(
                         child: BackdropFilter(
                           filter:
-                              ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                              ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                           child: Container(
                             decoration: BoxDecoration(
                               color: (_settings.amoledBlack
@@ -768,7 +768,7 @@ class _GAnimeAppState extends State<GAnimeApp> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
         child: pill,
       ),
     );

@@ -377,8 +377,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
       EpisodeInfo(number: n, title: _isMovie ? 'Complete Movie' : '');
 
   static String formatEpDate(String iso) {
+    if (iso.isEmpty) return '';
     final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(iso);
-    if (m == null) return iso.length >= 10 ? iso.substring(0, 10) : '';
+    if (m == null) {
+      final y = RegExp(r'(\d{4})').firstMatch(iso);
+      return y != null ? y.group(1)! : '';
+    }
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
@@ -397,7 +401,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final skClient = (t['simklClientId'] as String?) ?? '';
     final skToken = (t['simklToken'] as String?) ?? '';
     final skName = (t['simklUsername'] as String?) ?? '';
-    final skId = (t['simklIdFor_${_anime.id}'] as num?)?.toInt();
+    final skId = (t['simklIdFor_${_anime.anilistId ?? _anime.id}'] as num?)?.toInt();
     final malUser = (t['malUsername'] as String?) ?? '';
 
     final total = _total > 0 ? _total : (_anime.episodes ?? 0);
@@ -455,14 +459,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
             await Store.setWatched(widget.profileId, _anime.id, newWatched);
             if (mounted) setState(() => _watched = newWatched);
             final pushTasks = <String>[];
-            if (alToken.isNotEmpty && editProgress > 0) {
+            if (alToken.isNotEmpty && editProgress >= 0) {
               try {
                 final al = _anime.anilistId ?? _anime.id;
                 await Trackers.anilistSave(alToken, al, editProgress);
                 pushTasks.add('AniList');
               } catch (_) {}
             }
-            if (skClient.isNotEmpty && skToken.isNotEmpty && skId != null && editProgress > 0) {
+            if (skClient.isNotEmpty && skToken.isNotEmpty && skId != null && editProgress >= 0) {
               try {
                 await Trackers.simklSave(skClient, skToken, skId, editProgress);
                 pushTasks.add('Simkl');
@@ -1465,20 +1469,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Flexible(
+                                  const Expanded(
                                     child: Text('Watching Progress',
-                                        overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
-                                            color:
-                                                Colors.grey.shade400,
+                                            color: Color(0xFF9CA3AF),
                                             fontSize: 14)),
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text('$count / $total',
-                                      style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold)),
-                                  const SizedBox(width: 12),
                                   OutlinedButton.icon(
                                     style: OutlinedButton.styleFrom(
                                       side: BorderSide(
@@ -1495,6 +1491,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                     label: const Text('Tracking'),
                                   ),
                                 ],
+                              ),
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text('$count / $total',
+                                    style: const TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold)),
                               ),
                               const SizedBox(height: 10),
                               ClipRRect(
@@ -1666,6 +1670,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             ),
           ),
           // Floating back button over the banner (website mobile).
+          // Darkened + bordered for contrast when scrolled over content.
           Positioned(
             top: 0,
             left: 0,
@@ -1673,8 +1678,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Material(
-                  color: Colors.black54,
-                  shape: const CircleBorder(),
+                  color: Colors.black.withValues(alpha: 0.75),
+                  shape: CircleBorder(
+                    side: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.12),
+                        width: 1),
+                  ),
                   child: InkWell(
                     customBorder: const CircleBorder(),
                     onTap: () => Navigator.of(context).pop(),

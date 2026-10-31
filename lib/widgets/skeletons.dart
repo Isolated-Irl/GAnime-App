@@ -296,7 +296,7 @@ Widget skeletonEpisodeDetailed({int count = 3}) {
         // overflow its inset, like the website's .ep-big-strip).
         final w = MediaQuery.of(context).size.width * 0.84;
         return SizedBox(
-          height: 172,
+          height: 200,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const NeverScrollableScrollPhysics(),

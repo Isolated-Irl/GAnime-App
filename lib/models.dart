@@ -55,8 +55,16 @@ class Anime {
     final t = j['title'] as Map<String, dynamic>? ?? {};
     final img = j['coverImage'] as Map<String, dynamic>? ?? {};
     final next = j['nextAiringEpisode'] as Map<String, dynamic>?;
-    String clean(String? s) =>
-        (s ?? '').replaceAll(RegExp(r'<[^>]*>'), '').trim();
+    String clean(String? s) {
+      var t = (s ?? '').replaceAll(RegExp(r'<[^>]*>'), '').trim();
+      const entities = {
+        '&amp;': '&', '&quot;': '"', '&#039;': "'", '&#39;': "'",
+        '&lt;': '<', '&gt;': '>', '&mdash;': '—', '&ndash;': '–',
+        '&nbsp;': ' ',
+      };
+      entities.forEach((k, v) => t = t.replaceAll(k, v));
+      return t;
+    }
     final tr = j['trailer'] as Map<String, dynamic>?;
     // Main studio only (website parity: edges.find(isMain) || edges[0]).
     String studio = '';

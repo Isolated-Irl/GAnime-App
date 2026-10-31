@@ -426,12 +426,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 setState(() => _heroIndex = i),
                             itemBuilder: (_, i) {
                               final a = heroItems[i];
-                              // Full-res hero art: AniList coverImage.extraLarge
-                              // (bannerXL), then banner, then poster.
-                              final art = a.bannerXL.isNotEmpty
-                                  ? a.bannerXL
-                                  : (a.banner.isNotEmpty
-                                      ? a.banner
+                              // Hero art: widescreen banner first, then
+                              // full-res poster (bannerXL), then cover.
+                              final art = a.banner.isNotEmpty
+                                  ? a.banner
+                                  : (a.bannerXL.isNotEmpty
+                                      ? a.bannerXL
                                       : a.cover);
                               return Stack(
                                 fit: StackFit.expand,
@@ -2413,29 +2413,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
   // In-memory cache for fast MAL/Simkl -> AniList ID resolution
   static final Map<String, int> _resolvedIdCache = {};
 
+  /// Resolve a library entry's AniList ID in the background.
+  Future<int?> _resolveLibraryId(LibraryEntry e) async {
+    try {
+      final res = await AniList.search(e.title);
+      final q = e.title.toLowerCase();
+      Anime? best;
+      for (final a in res) {
+        final t = a.title.toLowerCase();
+        if (t == q) { best = a; break; }
+        if (best == null && t.contains(q)) best = a;
+      }
+      best ??= res.isNotEmpty ? res.first : null;
+      return best?.id;
+    } catch (_) { return null; }
+  }
+
   Future<void> _openLibraryEntry(LibraryEntry e) async {
     var alId = e.anilistId ?? _resolvedIdCache[e.key];
-    // If ID is missing, resolve it once via title search and cache it.
-    // (Navigation happens immediately below; this only fills the cache.)
     if ((alId == null || alId <= 0) && !_resolvedIdCache.containsKey(e.key)) {
-      try {
-        final res = await AniList.search(e.title);
-        final q = e.title.toLowerCase();
-        Anime? best;
-        for (final a in res) {
-          final t = a.title.toLowerCase();
-          if (t == q) {
-            best = a;
-            break;
-          }
-          if (best == null && t.contains(q)) best = a;
-        }
-        best ??= res.isNotEmpty ? res.first : null;
-        if (best != null) {
-          alId = best.id;
-          _resolvedIdCache[e.key] = alId;
-        }
-      } catch (_) {}
+      _resolveLibraryId(e).then((resolved) {
+        if (resolved != null) _resolvedIdCache[e.key] = resolved;
+      });
     }
     if (!mounted) return;
     // Open immediately with a shell — DetailsScreen loads everything
@@ -2637,15 +2636,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Website parity: tab 0 is "Cloud" when signed in, "Local" for guests.
     final tabNames = [
       widget.signedIn ? 'Cloud' : 'Local',
       'AniList',
       'MAL',
       'Simkl'
     ];
-    // Status filter mapping: Watching = CURRENT or REPEATING,
-    // Plan to Watch = PLANNING, On Hold = PAUSED, Dropped = DROPPED.
+
     bool matches(String filter, String status) {
       switch (filter) {
         case 'Watching':
@@ -2681,9 +2678,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       'Dropped',
       'Rewatching',
     ];
-    // Website parity: the active tab/filter chip uses the theme accent
-    // (website default is White; Emerald theme = green). Text color is
-    // luminance-based so white accents get dark text (contrast fix).
+
     Widget pill(String label, bool selected, VoidCallback onTap) {
       final accent = Theme.of(context).colorScheme.primary;
       final onAccent =
@@ -2704,140 +2699,143 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text('Library',
-                  style:
-                      TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-            ),
-            Container(
-              key: _sortBtnKey,
-              decoration: BoxDecoration(
-                  color: GaColors.of(context).card, shape: BoxShape.circle),
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 40, height: 40),
-                icon: const Icon(Icons.sort, size: 20),
-                tooltip: 'Sort library',
-                onPressed: _toggleSortMenu,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              decoration: BoxDecoration(
-                  color: GaColors.of(context).card, shape: BoxShape.circle),
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 40, height: 40),
-                icon: const Icon(Icons.refresh),
-                tooltip: 'Refresh this tab',
-                onPressed: () => _loadTab(force: true),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        // Website parity: tab row with sort icon button at the right end.
-        // The sort menu is a dropdown overlay positioned under the button.
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (int i = 0; i < tabNames.length; i++) ...[
-                pill(tabNames[i], i == _tab, () {
-                  setState(() {
-                    _tab = i;
-                    _statusFilter = 'All';
-                  });
-                  _loadTab();
-                }),
-                const SizedBox(width: 8),
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Library',
+                          style: TextStyle(
+                              fontSize: 28, fontWeight: FontWeight.w800)),
+                    ),
+                    Container(
+                      key: _sortBtnKey,
+                      decoration: BoxDecoration(
+                          color: GaColors.of(context).card,
+                          shape: BoxShape.circle),
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints.tightFor(
+                            width: 40, height: 40),
+                        icon: const Icon(Icons.sort, size: 20),
+                        tooltip: 'Sort library',
+                        onPressed: _toggleSortMenu,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                          color: GaColors.of(context).card,
+                          shape: BoxShape.circle),
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints.tightFor(
+                            width: 40, height: 40),
+                        icon: const Icon(Icons.refresh),
+                        tooltip: 'Refresh this tab',
+                        onPressed: () => _loadTab(force: true),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (int i = 0; i < tabNames.length; i++) ...[
+                        pill(tabNames[i], i == _tab, () {
+                          setState(() {
+                            _tab = i;
+                            _statusFilter = 'All';
+                          });
+                          _loadTab();
+                        }),
+                        const SizedBox(width: 8),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('\u2713 Synced',
+                    style: TextStyle(fontSize: 14, color: Colors.grey)),
+                if (_tab > 0 && _providerUser.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('${tabNames[_tab]} \u00b7 @$_providerUser',
+                        style:
+                            const TextStyle(fontSize: 14, color: Colors.grey)),
+                  ),
+                const SizedBox(height: 12),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (int i = 0; i < statusFilters.length; i++) ...[
+                        if (i > 0) const SizedBox(width: 8),
+                        pill('${statusFilters[i]} \u00b7 ${count(statusFilters[i])}',
+                            _statusFilter == statusFilters[i],
+                            () => setState(
+                                () => _statusFilter = statusFilters[i])),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
-            ],
+            ),
           ),
         ),
-        const SizedBox(height: 12),
-        // Website parity: "✓ Synced" plus "Provider · @username".
-        const Text('✓ Synced',
-            style: TextStyle(fontSize: 14, color: Colors.grey)),
-        if (_tab > 0 && _providerUser.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-                '${tabNames[_tab]} · @$_providerUser',
-                style:
-                    const TextStyle(fontSize: 14, color: Colors.grey)),
-          ),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (int i = 0; i < statusFilters.length; i++) ...[
-                if (i > 0) const SizedBox(width: 8),
-                pill('${statusFilters[i]} · ${count(statusFilters[i])}',
-                    _statusFilter == statusFilters[i],
-                    () => setState(
-                        () => _statusFilter = statusFilters[i])),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
         if (_loading)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: skeletonLibraryRows(context, count: 5),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              child: skeletonLibraryRows(context, count: 6),
+            ),
           )
         else if (_error != null)
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(_error!),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(_error!),
+            ),
           )
         else if (filtered.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Text(
-              _tab == 0
-                  ? 'Nothing in your ${widget.signedIn ? 'Cloud' : 'Local'} library yet — Add to Library on any title puts it here.'
-                  : 'Nothing here yet.',
-              style: const TextStyle(fontSize: 15, color: Colors.grey),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+              child: Text(
+                _tab == 0
+                    ? 'Nothing in your ${widget.signedIn ? 'Cloud' : 'Local'} library yet \u2014 Add to Library on any title puts it here.'
+                    : 'Nothing here yet.',
+                style: const TextStyle(fontSize: 15, color: Colors.grey),
+              ),
             ),
           )
         else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              // Website parity: 2-column poster grid (.search-grid).
-              const count = 2;
-              const spacing = 12.0;
-              final cellWidth =
-                  (constraints.maxWidth - spacing * (count - 1)) / count;
-              // Poster 2:3 + title (2 lines) + meta + progress bar + eps text.
-              final cellHeight =
-                  cellWidth / (2 / 3) + 92.0;
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: count,
-                  childAspectRatio: cellWidth / cellHeight,
-                  crossAxisSpacing: spacing,
-                  mainAxisSpacing: 16,
-                ),
-                itemCount: filtered.length,
-                itemBuilder: (_, i) =>
-                    _LibraryCard(
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                childAspectRatio: 0.54,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 16,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _LibraryCard(
                   entry: filtered[i],
                   onTap: () => _openLibraryEntry(filtered[i]),
                 ),
-              );
-            },
+                childCount: filtered.length,
+              ),
+            ),
           ),
       ],
     );
