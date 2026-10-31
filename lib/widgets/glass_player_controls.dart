@@ -32,6 +32,7 @@ class GlassPlayerControls extends StatefulWidget {
   final VoidCallback? onEpisodes;      // episode list panel
   final VoidCallback? onExternal;      // open in external player
   final VoidCallback? onNextEpisode;   // jump to next episode
+  final bool hwDecoding;               // HW decoder badge (display only)
 
   const GlassPlayerControls({
     super.key,
@@ -49,6 +50,7 @@ class GlassPlayerControls extends StatefulWidget {
     this.onEpisodes,
     this.onExternal,
     this.onNextEpisode,
+    this.hwDecoding = true,
   });
 
   @override
@@ -226,11 +228,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     return Row(
       children: [
         GlassButton(icon: Icons.arrow_back, size: 40, iconSize: 20, circle: true, onTap: widget.onBack),
-        if (widget.onEpisodes != null) ...[
-          const SizedBox(width: 8),
-          GlassButton(icon: Icons.view_list_outlined, size: 40, iconSize: 20, circle: true,
-              onTap: widget.onEpisodes!),
-        ],
         const SizedBox(width: 10),
         Expanded(
           child: GlassSurface(
@@ -260,21 +257,35 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
           ),
         ),
         const SizedBox(width: 10),
-        GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSubs),
-        const SizedBox(width: 8),
-        GlassButton(icon: Icons.music_note, size: 40, iconSize: 20, circle: true, onTap: widget.onAudio),
-        if (widget.onSources != null) ...[
-          const SizedBox(width: 8),
-          GlassButton(icon: Icons.dns_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSources!),
-        ],
+        // RIGHT — fixed order: external, HW badge, audio, subs, stream, episode.
         if (widget.onExternal != null) ...[
-          const SizedBox(width: 8),
           GlassButton(icon: Icons.open_in_new, size: 40, iconSize: 20, circle: true,
               onTap: widget.onExternal!),
+          const SizedBox(width: 8),
         ],
+        if (widget.hwDecoding)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GlassSurface(
+              radius: 12,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                child: Text('HW+',
+                    style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ),
+        GlassButton(icon: Icons.music_note, size: 40, iconSize: 20, circle: true, onTap: widget.onAudio),
+        const SizedBox(width: 8),
+        GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSubs),
         if (widget.onSources != null) ...[
           const SizedBox(width: 8),
           GlassButton(icon: Icons.dns_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSources!),
+        ],
+        if (widget.onEpisodes != null) ...[
+          const SizedBox(width: 8),
+          GlassButton(icon: Icons.view_list_outlined, size: 40, iconSize: 20, circle: true,
+              onTap: widget.onEpisodes!),
         ],
       ],
     );
@@ -286,17 +297,60 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
       children: [
         GlassButton(icon: Icons.replay_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(-10)),
         const SizedBox(width: 24),
+        // Play/pause button with an in-button buffering spinner:
+        // while buffering, a 12-spoke style spinner replaces the icon
+        // (the button stays tappable); the old full-screen centered
+        // spinner is gone so nothing clips under the controls.
         StreamBuilder<bool>(
-          stream: _p.stream.playing,
-          initialData: _p.state.playing,
-          builder: (_, snap) => GlassButton(
-            icon: (snap.data ?? false) ? Icons.pause : Icons.play_arrow,
-            size: 68, iconSize: 38, circle: true,
-            onTap: () {
-              _p.playOrPause();
-              _scheduleHide();
-            },
-          ),
+          stream: _p.stream.buffering,
+          initialData: _p.state.buffering,
+          builder: (_, bufSnap) {
+            final buffering = bufSnap.data ?? false;
+            return StreamBuilder<bool>(
+              stream: _p.stream.playing,
+              initialData: _p.state.playing,
+              builder: (_, playSnap) {
+                final playing = playSnap.data ?? false;
+                return GlassSurface(
+                  radius: 34,
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      onTap: () {
+                        _p.playOrPause();
+                        _scheduleHide();
+                      },
+                      customBorder: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(34)),
+                      child: SizedBox(
+                        width: 68,
+                        height: 68,
+                        child: Center(
+                          child: buffering
+                              ? const SizedBox(
+                                  width: 30,
+                                  height: 30,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(
+                                  playing ? Icons.pause : Icons.play_arrow,
+                                  color: Colors.white,
+                                  size: 38,
+                                  shadows: const [
+                                    Shadow(color: Color(0x66000000), blurRadius: 4),
+                                  ],
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
         ),
         const SizedBox(width: 24),
         GlassButton(icon: Icons.forward_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(10)),
@@ -337,65 +391,70 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
               ),
             ),
           ),
+        // Keys row (mpv.kt style): left cluster lock/aspect/speed,
+        // right cluster next-episode.
         Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            GlassButton(
-              icon: Icons.lock_open,
-              size: 36, iconSize: 18, circle: true,
-              onTap: () {
-                setState(() => _locked = true);
-                _hideTimer?.cancel();
-              },
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GlassButton(
+                  icon: Icons.lock_open,
+                  size: 36, iconSize: 18, circle: true,
+                  onTap: () {
+                    setState(() => _locked = true);
+                    _hideTimer?.cancel();
+                  },
+                ),
+                if (widget.onCycleFit != null) ...[
+                  const SizedBox(width: 8),
+                  GlassButton(icon: Icons.aspect_ratio, size: 36, iconSize: 18,
+                      circle: true, onTap: widget.onCycleFit!),
+                ],
+                if (widget.onCycleSpeed != null) ...[
+                  const SizedBox(width: 8),
+                  _RatePill(player: _p, onTap: widget.onCycleSpeed!),
+                ],
+              ],
             ),
-            if (widget.onCycleFit != null) ...[
-              const SizedBox(width: 8),
-              GlassButton(icon: Icons.aspect_ratio, size: 36, iconSize: 18,
-                  circle: true, onTap: widget.onCycleFit!),
-            ],
-            if (widget.onCycleSpeed != null) ...[
-              const SizedBox(width: 8),
-              _RatePill(player: _p, onTap: widget.onCycleSpeed!),
-            ],
-            const SizedBox(width: 8),
-            StreamBuilder<Duration>(
-              stream: _p.stream.position,
-              initialData: _p.state.position,
-              builder: (_, posSnap) => StreamBuilder<Duration>(
-                stream: _p.stream.duration,
-                initialData: _p.state.duration,
-                builder: (_, durSnap) {
-                  final pos = posSnap.data ?? Duration.zero;
-                  final dur = durSnap.data ?? Duration.zero;
-                  return Expanded(
-                    child: Row(
-                      children: [
-                        Text(fmtPlayerTime(pos), style: const TextStyle(color: Colors.white, fontSize: 12)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _SeekBar(
-                            position: pos,
-                            duration: dur,
-                            onSeek: (d) => _p.seek(d),
-                            onDragging: (v) {
-                              _dragging = v;
-                              _scheduleHide();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('-${fmtPlayerTime(dur - pos)}', style: const TextStyle(color: Colors.white, fontSize: 12)),
-                        if (widget.onNextEpisode != null) ...[
-                          const SizedBox(width: 8),
-                          GlassButton(icon: Icons.skip_next, size: 36, iconSize: 18,
-                              circle: true, onTap: widget.onNextEpisode!),
-                        ],
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
+            if (widget.onNextEpisode != null)
+              GlassButton(icon: Icons.skip_next, size: 36, iconSize: 18,
+                  circle: true, onTap: widget.onNextEpisode!),
           ],
+        ),
+        const SizedBox(height: 6),
+        // Full-width seekbar on its own row, flanked by time labels.
+        StreamBuilder<Duration>(
+          stream: _p.stream.position,
+          initialData: _p.state.position,
+          builder: (_, posSnap) => StreamBuilder<Duration>(
+            stream: _p.stream.duration,
+            initialData: _p.state.duration,
+            builder: (_, durSnap) {
+              final pos = posSnap.data ?? Duration.zero;
+              final dur = durSnap.data ?? Duration.zero;
+              return Row(
+                children: [
+                  Text(fmtPlayerTime(pos), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _SeekBar(
+                      position: pos,
+                      duration: dur,
+                      onSeek: (d) => _p.seek(d),
+                      onDragging: (v) {
+                        _dragging = v;
+                        _scheduleHide();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('-${fmtPlayerTime(dur - pos)}', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                ],
+              );
+            },
+          ),
         ),
       ],
     );
@@ -469,11 +528,11 @@ class _SeekPainter extends CustomPainter {
     const pad = 8.0;
     final left = pad, right = s.width - pad, y = s.height / 2;
     final trackW = right - left;
-    final track = RRect.fromLTRBR(left, y - 2, right, y + 2, const Radius.circular(2));
+    final track = RRect.fromLTRBR(left, y - 3, right, y + 3, const Radius.circular(3));
     canvas.drawRRect(track, Paint()..color = const Color(0x40FFFFFF));
     final x = left + trackW * ratio;
     canvas.drawRRect(
-      RRect.fromLTRBR(left, y - 2, x, y + 2, const Radius.circular(2)),
+      RRect.fromLTRBR(left, y - 3, x, y + 3, const Radius.circular(3)),
       Paint()..color = Colors.white,
     );
     // 85% marker (diamond) — turns green once passed.

@@ -238,74 +238,92 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   Widget _header(Anime a) {
+    // v3.1: buttons on their own top row (back left, refresh right),
+    // poster + description on the row below — per the reference mockup.
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 14, 6),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GlassButton(icon: Icons.arrow_back, size: 40, iconSize: 20, circle: true,
-              onTap: () => Navigator.pop(context)),
-          const SizedBox(width: 10),
-          if (a.cover.isNotEmpty)
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0x33FFFFFF), width: 1.5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x3300E676),
-                    blurRadius: 18,
-                    spreadRadius: 1,
-                  ),
-                ],
+          Row(
+            children: [
+              GlassButton(
+                  icon: Icons.arrow_back,
+                  size: 40,
+                  iconSize: 20,
+                  circle: true,
+                  onTap: () => Navigator.pop(context)),
+              const Spacer(),
+              GlassButton(
+                icon: Icons.refresh,
+                size: 40,
+                iconSize: 20,
+                circle: true,
+                onTap: _loading ? null : _load,
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: Image.network(a.cover,
-                    width: 96,
-                    height: 136,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) =>
-                        const SizedBox(width: 96, height: 136)),
-              ),
-            ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(a.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 19,
-                          fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season 1 · Episode ${widget.episode}'} · ${a.year} · ★ ${a.score}',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _loading
-                        ? 'Asking your addons…'
-                        : '$_total streams from ${_groups.length} addons',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
+            ],
           ),
-          const SizedBox(width: 8),
-          GlassButton(
-            icon: Icons.refresh,
-            size: 40,
-            iconSize: 20,
-            circle: true,
-            onTap: _loading ? null : _load,
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (a.cover.isNotEmpty)
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    border:
+                        Border.all(color: const Color(0x33FFFFFF), width: 1.5),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x3300E676),
+                        blurRadius: 18,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(a.cover,
+                        width: 96,
+                        height: 136,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            const SizedBox(width: 96, height: 136)),
+                  ),
+                ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season 1 · Episode ${widget.episode}'} · ${a.year} · ★ ${a.score}',
+                        style:
+                            const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _loading
+                            ? 'Asking your addons…'
+                            : '$_total streams from ${_groups.length} addons',
+                        style:
+                            const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

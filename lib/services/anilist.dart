@@ -410,4 +410,46 @@ mutation (\$mediaId: Int, \$progress: Int) {
 }''';
     await _post(q, {'mediaId': mediaId, 'progress': progress}, token: token);
   }
+
+  /// Full entry save: status, progress, score, start/end dates.
+  /// Only non-null fields are sent (AniList updates are partial).
+  static Future<void> saveEntry(
+    String token,
+    int mediaId, {
+    int? progress,
+    String? status,
+    double? score,
+    Map<String, int?>? startedAt,
+    Map<String, int?>? completedAt,
+  }) async {
+    const q = '''
+mutation (\$mediaId: Int, \$progress: Int, \$status: MediaListStatus, \$score: Float, \$startedAt: FuzzyDateInput, \$completedAt: FuzzyDateInput) {
+  SaveMediaListEntry(mediaId: \$mediaId, progress: \$progress, status: \$status, score: \$score, startedAt: \$startedAt, completedAt: \$completedAt) { id progress status score }
+}''';
+    final vars = <String, dynamic>{'mediaId': mediaId};
+    if (progress != null) vars['progress'] = progress;
+    if (status != null) vars['status'] = status;
+    if (score != null) vars['score'] = score;
+    if (startedAt != null) vars['startedAt'] = startedAt;
+    if (completedAt != null) vars['completedAt'] = completedAt;
+    await _post(q, vars, token: token);
+  }
+
+  /// Delete a list entry. Takes the AniList *media* id: resolves the
+  /// MediaList entry id first, then deletes it.
+  static Future<void> deleteEntry(String token, int mediaId) async {
+    const q = '''
+query (\$mediaId: Int) {
+  Media(id: \$mediaId, type: ANIME) { mediaListEntry { id } }
+}''';
+    final data = await _post(q, {'mediaId': mediaId}, token: token);
+    final entryId =
+        ((data['Media'] as Map?)?['mediaListEntry'] as Map?)?['id'] as num?;
+    if (entryId == null) return; // not on the list — nothing to delete
+    const dq = '''
+mutation (\$id: Int) {
+  DeleteMediaListEntry(id: \$id) { deleted }
+}''';
+    await _post(dq, {'id': entryId.toInt()}, token: token);
+  }
 }

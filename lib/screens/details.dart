@@ -18,6 +18,7 @@ import '../services/trackers.dart';
 import 'streams.dart';
 import '../store.dart';
 import '../widgets/skeletons.dart';
+import '../widgets/glass_surface.dart';
 import 'settings/tracking_screen.dart';
 
 class DetailsScreen extends StatefulWidget {
@@ -64,6 +65,35 @@ class _EpRange {
   int get count => to - from + 1;
   String get label => '$from - $to';
 }
+
+/// Per-tracker edit state for the Tracker Tool dialog.
+class _TrackerEdit {
+  String status; // app codes: CURRENT / COMPLETED / PLANNING / PAUSED / DROPPED
+  int progress;
+  double score = 0; // 0-10, 0 = unset
+  DateTime? startDate;
+  DateTime? endDate;
+  bool advancedOpen = false;
+  String memo = ''; // Simkl only
+  bool isPrivate = false; // Simkl only (UI state; Simkl API contract unverified)
+
+  _TrackerEdit({this.status = 'CURRENT', this.progress = 0});
+}
+
+const _trackerStatusLabels = [
+  'Watching',
+  'Completed',
+  'Plan to Watch',
+  'On Hold',
+  'Dropped',
+];
+const _trackerStatusCodes = [
+  'CURRENT',
+  'COMPLETED',
+  'PLANNING',
+  'PAUSED',
+  'DROPPED',
+];
 
 class _DetailsScreenState extends State<DetailsScreen> {
   List<EpisodeInfo> _episodes = [];
@@ -391,358 +421,859 @@ class _DetailsScreenState extends State<DetailsScreen> {
     return '${int.tryParse(m.group(3)!)} ${months[(mo - 1).clamp(0, 11)]} ${m.group(1)}';
   }
 
-  // ---------- tracker tool dialog (website parity) ----------
+  // ---------- tracker tool dialog (redesign: per-tracker glass bubbles) ----------
   Future<void> _showTrackingDialog() async {
     final t = await Store.tracker();
     if (!mounted) return;
 
     final alToken = (t['anilistToken'] as String?) ?? '';
     final alName = (t['anilistUsername'] as String?) ?? '';
+    final alMediaId = _anime.anilistId ?? _anime.id;
     final skClient = (t['simklClientId'] as String?) ?? '';
     final skToken = (t['simklToken'] as String?) ?? '';
     final skName = (t['simklUsername'] as String?) ?? '';
-    final skId = (t['simklIdFor_${_anime.anilistId ?? _anime.id}'] as num?)?.toInt();
+    final skId =
+        (t['simklIdFor_${_anime.anilistId ?? _anime.id}'] as num?)?.toInt();
+    final malToken = (t['malToken'] as String?) ?? '';
     final malUser = (t['malUsername'] as String?) ?? '';
+    final malId = _anime.malId;
+
+    final alConnected = alToken.isNotEmpty;
+    final skConnected = skToken.isNotEmpty && skClient.isNotEmpty;
+    final malConnected = malToken.isNotEmpty;
 
     final total = _total > 0 ? _total : (_anime.episodes ?? 0);
-    final currentMax = _watched.isEmpty ? 0 : _watched.reduce((x, y) => x > y ? x : y);
-    int editProgress = currentMax;
+    final currentMax =
+        _watched.isEmpty ? 0 : _watched.reduce((x, y) => x > y ? x : y);
+    String initialStatus() =>
+        (total > 0 && currentMax >= total) ? 'COMPLETED' : 'CURRENT';
+
+    final alEdit = _TrackerEdit(status: initialStatus(), progress: currentMax);
+    final skEdit = _TrackerEdit(status: initialStatus(), progress: currentMax);
+    final malEdit = _TrackerEdit(status: initialStatus(), progress: currentMax);
+    final memoCtrl = TextEditingController();
+
+    const green = Color(0xFF22C55E);
+    const red = Color(0xFFE5484D);
+    const amber = Color(0xFFF5A524);
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    String fmtDate(DateTime? d) =>
+        d == null ? '—' : '${d.day} ${months[d.month - 1]} ${d.year}';
+
+    Future<void> goToConnect(BuildContext dCtx) async {
+      Navigator.of(dCtx).pop();
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => TrackingSettingsScreen(
+            settings: widget.settings,
+            onSettings: (_) {},
+          ),
+        ),
+      );
+      _load();
+    }
+
+    Future<void> confirmDelete(BuildContext dCtx, String trackerName,
+        Future<void> Function() action) async {
+      final ok = await showDialog<bool>(
+        context: dCtx,
+        builder: (c) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1F24),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: Text('Delete from $trackerName?',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w800)),
+          content: Text(
+              'This removes "${_anime.title}" from your $trackerName list.',
+              style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(c).pop(false),
+                child: const Text('Cancel',
+                    style: TextStyle(color: Colors.white70))),
+            TextButton(
+                onPressed: () => Navigator.of(c).pop(true),
+                child: const Text('Delete',
+                    style: TextStyle(
+                        color: Color(0xFFE5484D),
+                        fontWeight: FontWeight.w800))),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      try {
+        await action();
+        if (!dCtx.mounted) return;
+        ScaffoldMessenger.of(dCtx).showSnackBar(SnackBar(
+            content: Text('Deleted from $trackerName'),
+            backgroundColor: const Color(0xFF1E1F24)));
+        Navigator.of(dCtx).pop();
+      } catch (e) {
+        if (!dCtx.mounted) return;
+        ScaffoldMessenger.of(dCtx).showSnackBar(SnackBar(
+            content: Text('Delete failed: $e'),
+            backgroundColor: const Color(0xFF1E1F24)));
+      }
+    }
+
+    Future<void> saveAll(BuildContext dCtx) async {
+      Navigator.of(dCtx).pop();
+      var prog = 0;
+      if (alConnected && alEdit.progress > prog) prog = alEdit.progress;
+      if (skConnected && skEdit.progress > prog) prog = skEdit.progress;
+      if (malConnected && malEdit.progress > prog) prog = malEdit.progress;
+
+      final newWatched = List.generate(prog, (i) => i + 1).toSet();
+      await Store.setWatched(widget.profileId, _anime.id, newWatched);
+      if (mounted) setState(() => _watched = newWatched);
+
+      final pushed = <String>[];
+      if (alConnected && alMediaId > 0) {
+        try {
+          await Trackers.anilistSaveFull(alToken, alMediaId,
+              progress: alEdit.progress,
+              status: alEdit.status,
+              score: alEdit.score > 0 ? alEdit.score : null,
+              startDate: alEdit.startDate,
+              endDate: alEdit.endDate);
+          pushed.add('AniList');
+        } catch (_) {}
+      }
+      if (skConnected && skId != null) {
+        try {
+          await Trackers.simklSaveFull(skClient, skToken,
+              simklId: skId,
+              anilistId: alMediaId > 0 ? alMediaId : null,
+              title: _anime.title,
+              progress: skEdit.progress,
+              status: skEdit.status,
+              memo: skEdit.memo);
+          pushed.add('Simkl');
+        } catch (_) {}
+      }
+      if (malConnected && malId != null && malId > 0) {
+        try {
+          await Trackers.malSave(malToken, malId,
+              status: malEdit.status,
+              episodes: malEdit.progress,
+              score: malEdit.score > 0 ? malEdit.score : null);
+          if (malEdit.startDate != null || malEdit.endDate != null) {
+            await Trackers.malUpdateDates(malToken, malId,
+                startDate: malEdit.startDate, finishDate: malEdit.endDate);
+          }
+          pushed.add('MAL');
+        } catch (_) {}
+      }
+      await widget.onMarkWatched?.call(_anime, prog);
+      if (mounted) {
+        final extra =
+            pushed.isNotEmpty ? ' & synced to ${pushed.join(', ')}' : '';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text('Saved: Ep $prog / ${total > 0 ? total : '—'}$extra'),
+            backgroundColor: const Color(0xFF1E1F24)));
+      }
+    }
 
     await showDialog<void>(
       context: context,
       barrierDismissible: true,
       builder: (dCtx) => StatefulBuilder(
-        builder: (dCtx, setDialogState) {
+        builder: (dCtx, setD) {
           final maxAllowed = total > 0 ? total : 9999;
 
-          Future<void> openTrackerUrl(String provider) async {
-            Uri? uri;
-            if (provider == 'anilist') {
-              final id = _anime.anilistId ?? _anime.id;
-              uri = Uri.parse('https://anilist.co/anime/$id');
-            } else if (provider == 'mal') {
-              if (_anime.malId != null && _anime.malId! > 0) {
-                uri = Uri.parse('https://myanimelist.net/anime/${_anime.malId}');
-              } else {
-                uri = Uri.parse('https://myanimelist.net/anime.php?q=${Uri.encodeComponent(_anime.title)}');
-              }
-            } else if (provider == 'simkl') {
-              if (skId != null) {
-                uri = Uri.parse('https://simkl.com/anime/$skId');
-              } else {
-                uri = Uri.parse('https://simkl.com/search?q=${Uri.encodeComponent(_anime.title)}');
-              }
-            }
-            if (uri != null) {
-              try {
-                await launchUrl(uri, mode: LaunchMode.externalApplication);
-              } catch (_) {}
-            }
+          Widget thickSlider({
+            required double value,
+            required double max,
+            required int divisions,
+            required ValueChanged<double> onChanged,
+          }) {
+            return SliderTheme(
+              data: SliderTheme.of(dCtx).copyWith(
+                trackHeight: 18,
+                activeTrackColor: green,
+                inactiveTrackColor:
+                    Colors.white.withValues(alpha: 0.12),
+                thumbShape:
+                    const RoundSliderThumbShape(enabledThumbRadius: 12),
+                thumbColor: Colors.white,
+                overlayColor: green.withValues(alpha: 0.25),
+                overlayShape:
+                    const RoundSliderOverlayShape(overlayRadius: 20),
+              ),
+              child: Slider(
+                value: value.clamp(0.0, max),
+                min: 0,
+                max: max,
+                divisions: divisions,
+                onChanged: onChanged,
+              ),
+            );
           }
 
-          Future<void> goToConnect() async {
-            Navigator.of(dCtx).pop();
-            await Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => TrackingSettingsScreen(
-                  settings: widget.settings,
-                  onSettings: (_) {},
+          Widget stepBtn(IconData icon, VoidCallback? onTap) {
+            return InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.08),
+                  border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.14)),
+                ),
+                child: Icon(icon,
+                    size: 18,
+                    color: onTap == null ? Colors.white24 : Colors.white),
+              ),
+            );
+          }
+
+          Widget statusPill(_TrackerEdit edit) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: green,
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                      color: green.withValues(alpha: 0.35), blurRadius: 12)
+                ],
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: edit.status,
+                  dropdownColor: const Color(0xFF22242B),
+                  icon: const Icon(Icons.keyboard_arrow_down,
+                      color: Colors.black, size: 20),
+                  style: const TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14),
+                  items: [
+                    for (var i = 0; i < _trackerStatusLabels.length; i++)
+                      DropdownMenuItem(
+                        value: _trackerStatusCodes[i],
+                        child: Text(_trackerStatusLabels[i],
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setD(() => edit.status = v);
+                  },
                 ),
               ),
             );
-            _load();
           }
 
-          Future<void> saveProgress() async {
-            Navigator.of(dCtx).pop();
-            final newWatched = List.generate(editProgress, (i) => i + 1).toSet();
-            await Store.setWatched(widget.profileId, _anime.id, newWatched);
-            if (mounted) setState(() => _watched = newWatched);
-            final pushTasks = <String>[];
-            if (alToken.isNotEmpty && editProgress >= 0) {
-              try {
-                final al = _anime.anilistId ?? _anime.id;
-                await Trackers.anilistSave(alToken, al, editProgress);
-                pushTasks.add('AniList');
-              } catch (_) {}
-            }
-            if (skClient.isNotEmpty && skToken.isNotEmpty && skId != null && editProgress >= 0) {
-              try {
-                await Trackers.simklSave(skClient, skToken, skId, editProgress);
-                pushTasks.add('Simkl');
-              } catch (_) {}
-            }
-            if (editProgress > 0) {
-              await widget.onMarkWatched?.call(_anime, editProgress);
-            }
-            if (mounted) {
-              final pushedStr = pushTasks.isNotEmpty ? ' & synced to ${pushTasks.join(", ")}' : '';
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Saved: Ep $editProgress / $total$pushedStr'),
-                  backgroundColor: const Color(0xFF1E1F24),
-                ),
-              );
-            }
-          }
-
-          return Dialog(
-            backgroundColor: const Color(0xFF18191E),
-            insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: _anime.cover.isNotEmpty
-                            ? GaImage(
-                                url: _anime.cover,
-                                width: 56,
-                                height: 76,
-                                fit: BoxFit.cover,
-                                errorFallback: Container(
-                                  width: 56,
-                                  height: 76,
-                                  color: const Color(0xFF25262C),
-                                  child: const Icon(Icons.image, size: 24, color: Colors.white24),
-                                ),
-                              )
-                            : Container(width: 56, height: 76, color: const Color(0xFF25262C)),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF22C55E).withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(color: const Color(0xFF22C55E), width: 1),
-                                  ),
-                                  child: const Text('Tracker Tool',
-                                      style: TextStyle(color: Color(0xFF22C55E), fontSize: 11, fontWeight: FontWeight.w700)),
-                                ),
-                                if (_anime.score != null) ...[
-                                  const SizedBox(width: 8),
-                                  Text('\u2605 ${(_anime.score! / 10).toStringAsFixed(1)}',
-                                      style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w700)),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Text(_anime.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, height: 1.25)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          Widget datePill(
+              String label, DateTime? date, VoidCallback onTap) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: onTap,
+                  borderRadius: BorderRadius.circular(999),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF22242B),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.12)),
                     ),
-                    child: Column(
+                    child: Center(
+                        child: Text(fmtDate(date),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700))),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          Future<void> pickDate(_TrackerEdit edit, bool isStart) async {
+            final now = DateTime.now();
+            final picked = await showDatePicker(
+              context: dCtx,
+              initialDate:
+                  (isStart ? edit.startDate : edit.endDate) ?? now,
+              firstDate: DateTime(1990),
+              lastDate: DateTime(now.year + 2, 12, 31),
+            );
+            if (picked != null) {
+              setD(() {
+                if (isStart) {
+                  edit.startDate = picked;
+                } else {
+                  edit.endDate = picked;
+                }
+              });
+            }
+          }
+
+          Widget deleteBtn(
+              String tracker, Future<void> Function() action) {
+            return SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => confirmDelete(dCtx, tracker, action),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Delete entry',
+                    style: TextStyle(fontWeight: FontWeight.w800)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: red,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            );
+          }
+
+          Widget advancedSection({
+            required _TrackerEdit edit,
+            required bool showDates,
+            required bool showMemo,
+            required Widget deleteButton,
+          }) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  onTap: () =>
+                      setD(() => edit.advancedOpen = !edit.advancedOpen),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Episode Progress',
-                                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-                            Text('$editProgress / ${total > 0 ? total : '\u2014'} eps',
-                                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              icon: const Icon(Icons.remove_circle_outline, color: Colors.white70),
-                              onPressed: editProgress > 0 ? () => setDialogState(() => editProgress--) : null,
-                            ),
-                            Expanded(
-                              child: SliderTheme(
-                                data: SliderTheme.of(dCtx).copyWith(
-                                  activeTrackColor: Theme.of(dCtx).colorScheme.primary,
-                                  inactiveTrackColor: Colors.white12,
-                                  thumbColor: Colors.white,
-                                  trackHeight: 4,
-                                ),
-                                child: Slider(
-                                  value: editProgress.toDouble().clamp(0.0, maxAllowed.toDouble()),
-                                  min: 0,
-                                  max: maxAllowed.toDouble(),
-                                  divisions: maxAllowed > 0 ? maxAllowed : 1,
-                                  onChanged: (v) => setDialogState(() => editProgress = v.toInt()),
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.white70),
-                              onPressed: editProgress < maxAllowed ? () => setDialogState(() => editProgress++) : null,
-                            ),
-                          ],
+                        const Text('Advanced',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800)),
+                        const Spacer(),
+                        Container(
+                          width: 30,
+                          height: 30,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color:
+                                    Colors.white.withValues(alpha: 0.2)),
+                            color:
+                                Colors.white.withValues(alpha: 0.06),
+                          ),
+                          child: Icon(
+                              edit.advancedOpen
+                                  ? Icons.keyboard_arrow_up
+                                  : Icons.keyboard_arrow_down,
+                              size: 18,
+                              color: Colors.white70),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  _trackerDialogCard(
-                    badgeLabel: 'AL',
-                    badgeColor: const Color(0xFF00ADFF),
-                    name: 'AniList',
-                    status: alToken.isNotEmpty ? (alName.isNotEmpty ? '@$alName' : 'Connected') : 'Not Connected',
-                    isConnected: alToken.isNotEmpty,
-                    onOpen: () => openTrackerUrl('anilist'),
-                    onConnect: goToConnect,
-                  ),
-                  const SizedBox(height: 10),
-                  _trackerDialogCard(
-                    badgeLabel: 'MAL',
-                    badgeColor: const Color(0xFF2E51A2),
-                    name: 'MyAnimeList',
-                    status: malUser.isNotEmpty ? '@$malUser' : 'Not Connected',
-                    isConnected: malUser.isNotEmpty,
-                    onOpen: () => openTrackerUrl('mal'),
-                    onConnect: goToConnect,
-                  ),
-                  const SizedBox(height: 10),
-                  _trackerDialogCard(
-                    badgeLabel: 'SK',
-                    badgeColor: const Color(0xFFFF334B),
-                    name: 'Simkl',
-                    status: skToken.isNotEmpty ? (skName.isNotEmpty ? '@$skName' : 'Connected') : 'Not Connected',
-                    isConnected: skToken.isNotEmpty,
-                    onOpen: () => openTrackerUrl('simkl'),
-                    onConnect: goToConnect,
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(dCtx).pop(),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                if (edit.advancedOpen) ...[
+                  if (showDates) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                            child: datePill('Start date',
+                                edit.startDate, () => pickDate(edit, true))),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: datePill('End date', edit.endDate,
+                                () => pickDate(edit, false))),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (showMemo) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Memo',
+                            style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600)),
+                        Text('${edit.memo.length}/140',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: memoCtrl,
+                      maxLength: 140,
+                      maxLines: 2,
+                      minLines: 1,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Memo note (max 140 chars)…',
+                        hintStyle:
+                            const TextStyle(color: Colors.white38),
+                        filled: true,
+                        fillColor:
+                            Colors.white.withValues(alpha: 0.06),
+                        counterText: '',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide.none),
+                        contentPadding:
+                            const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 12),
+                      ),
+                      onChanged: (v) {
+                        edit.memo = v;
+                        setD(() {});
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Text('Private',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600)),
+                        const Spacer(),
+                        Switch(
+                            value: edit.isPrivate,
+                            activeThumbColor: green,
+                            onChanged: (v) =>
+                                setD(() => edit.isPrivate = v)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  deleteButton,
+                ],
+              ],
+            );
+          }
+
+          Widget trackerBubble({
+            required String title,
+            required String? connectedLabel,
+            required _TrackerEdit edit,
+            required bool showDates,
+            required bool showMemo,
+            required Widget? deleteButton,
+            required VoidCallback onConnect,
+          }) {
+            return GlassSurface(
+              radius: 22,
+              fill: const Color(0x14FFFFFF),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                            child: Text(title,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800))),
+                        if (connectedLabel == null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                  color: amber.withValues(alpha: 0.6)),
+                              color: amber.withValues(alpha: 0.12),
+                            ),
+                            child: const Text('NOT CONNECTED',
+                                style: TextStyle(
+                                    color: amber,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800)),
+                          )
+                        else
+                          Text(connectedLabel,
+                              style: const TextStyle(
+                                  color: Colors.white54, fontSize: 12)),
+                      ],
+                    ),
+                    if (connectedLabel == null) ...[
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: onConnect,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: green,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(999)),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 15),
                           ),
-                          child: const Text('Close', style: TextStyle(fontWeight: FontWeight.w700)),
+                          child: const Text('Connect',
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800)),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: saveProgress,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF22C55E),
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                    ] else ...[
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          const Text('Status',
+                              style: TextStyle(
+                                  color: Colors.white54, fontSize: 13)),
+                          const Spacer(),
+                          statusPill(edit),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Text('Watched episodes',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                          const SizedBox(width: 8),
+                          stepBtn(
+                              Icons.remove,
+                              edit.progress > 0
+                                  ? () => setD(() => edit.progress--)
+                                  : null),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6),
+                              child: thickSlider(
+                                value: edit.progress.toDouble(),
+                                max: maxAllowed.toDouble(),
+                                divisions: maxAllowed,
+                                onChanged: (v) =>
+                                    setD(() => edit.progress = v.round()),
+                              ),
+                            ),
                           ),
-                          child: const Text('Save Progress', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
-                        ),
+                          stepBtn(
+                              Icons.add,
+                              edit.progress < maxAllowed
+                                  ? () => setD(() => edit.progress++)
+                                  : null),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 56,
+                            child: Text(
+                                '${edit.progress}/${total > 0 ? total : '—'}',
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Text('Score',
+                              style: TextStyle(
+                                  color: Colors.white54, fontSize: 13)),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12),
+                              child: thickSlider(
+                                value: edit.score,
+                                max: 10,
+                                divisions: 20,
+                                onChanged: (v) => setD(() =>
+                                    edit.score =
+                                        (v * 2).round() / 2),
+                              ),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 64,
+                            child: Text(
+                                '${edit.score.toStringAsFixed(1)}/10',
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      advancedSection(
+                        edit: edit,
+                        showDates: showDates,
+                        showMemo: showMemo,
+                        deleteButton:
+                            deleteButton ?? const SizedBox.shrink(),
                       ),
                     ],
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            );
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 24),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28)),
+            child: GlassSurface(
+              radius: 28,
+              fill: const Color(0x1AFFFFFF),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text('Anime Tracking',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w800)),
+                        ),
+                        InkWell(
+                          onTap: () => Navigator.of(dCtx).pop(),
+                          customBorder: const CircleBorder(),
+                          child: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white
+                                  .withValues(alpha: 0.08),
+                              border: Border.all(
+                                  color: Colors.white
+                                      .withValues(alpha: 0.16)),
+                            ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 20),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: _anime.cover.isNotEmpty
+                              ? GaImage(
+                                  url: _anime.cover,
+                                  width: 56,
+                                  height: 76,
+                                  fit: BoxFit.cover,
+                                  errorFallback: Container(
+                                    width: 56,
+                                    height: 76,
+                                    color: const Color(0xFF25262C),
+                                    child: const Icon(Icons.image,
+                                        size: 24, color: Colors.white24),
+                                  ),
+                                )
+                              : Container(
+                                  width: 56,
+                                  height: 76,
+                                  color: const Color(0xFF25262C)),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    padding:
+                                        const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: green.withValues(
+                                          alpha: 0.15),
+                                      borderRadius:
+                                          BorderRadius.circular(999),
+                                      border: Border.all(
+                                          color: green, width: 1),
+                                    ),
+                                    child: const Text('Tracker Tool',
+                                        style: TextStyle(
+                                            color: green,
+                                            fontSize: 11,
+                                            fontWeight:
+                                                FontWeight.w700)),
+                                  ),
+                                  if (_anime.score != null) ...[
+                                    const SizedBox(width: 8),
+                                    Text(
+                                        '★ ${(_anime.score! / 10).toStringAsFixed(1)}',
+                                        style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12,
+                                            fontWeight:
+                                                FontWeight.w700)),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(_anime.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                      height: 1.25)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    trackerBubble(
+                      title: 'AniList Tracking',
+                      connectedLabel: alConnected
+                          ? (alName.isNotEmpty
+                              ? '@$alName'
+                              : 'Connected')
+                          : null,
+                      edit: alEdit,
+                      showDates: true,
+                      showMemo: false,
+                      onConnect: () => goToConnect(dCtx),
+                      deleteButton:
+                          (alConnected && alMediaId > 0)
+                              ? deleteBtn('AniList',
+                                  () => Trackers.anilistDeleteEntry(
+                                      alToken, alMediaId))
+                              : null,
+                    ),
+                    const SizedBox(height: 12),
+                    trackerBubble(
+                      title: 'Simkl Tracking',
+                      connectedLabel: skConnected
+                          ? (skName.isNotEmpty
+                              ? '@$skName'
+                              : 'Connected')
+                          : null,
+                      edit: skEdit,
+                      showDates: false,
+                      showMemo: true,
+                      onConnect: () => goToConnect(dCtx),
+                      deleteButton: (skConnected && skId != null)
+                          ? deleteBtn(
+                              'Simkl',
+                              () => Trackers.simklDeleteEntry(
+                                  skClient, skToken, skId))
+                          : null,
+                    ),
+                    const SizedBox(height: 12),
+                    trackerBubble(
+                      title: 'MyAnimeList Tracking',
+                      connectedLabel: malConnected
+                          ? (malUser.isNotEmpty
+                              ? '@$malUser'
+                              : 'Connected')
+                          : null,
+                      edit: malEdit,
+                      showDates: true,
+                      showMemo: false,
+                      onConnect: () => goToConnect(dCtx),
+                      deleteButton: (malConnected &&
+                              malId != null &&
+                              malId > 0)
+                          ? deleteBtn(
+                              'MyAnimeList',
+                              () => Trackers.malDeleteEntry(
+                                  malToken, malId))
+                          : null,
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () =>
+                                Navigator.of(dCtx).pop(),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: BorderSide(
+                                  color: Colors.white
+                                      .withValues(alpha: 0.15)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(999)),
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 14),
+                            ),
+                            child: const Text('Close',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () => saveAll(dCtx),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: green,
+                              foregroundColor: Colors.black,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(999)),
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 14),
+                            ),
+                            child: const Text('Save Progress',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _trackerDialogCard({
-    required String badgeLabel,
-    required Color badgeColor,
-    required String name,
-    required String status,
-    required bool isConnected,
-    required VoidCallback onOpen,
-    required VoidCallback onConnect,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF22242B),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(8)),
-                alignment: Alignment.center,
-                child: Text(badgeLabel,
-                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
-              ),
-              const SizedBox(width: 10),
-              Text(name, style: const TextStyle(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              Text(status, style: TextStyle(color: isConnected ? Colors.white70 : Colors.grey.shade500, fontSize: 12.5)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: onOpen,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: const Color(0xFF2A2C34),
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  child: const Text('Open \u2197', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: onConnect,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: const Color(0xFF2A2C34),
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  child: Text(isConnected ? 'Manage' : 'Connect',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }

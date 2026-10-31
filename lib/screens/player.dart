@@ -19,6 +19,7 @@ import '../services/addons.dart';
 import '../services/addon_ids.dart';
 import '../store.dart';
 import '../widgets/glass_player_controls.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/player_panels.dart';
 
 String fmtDuration(Duration d) {
@@ -299,53 +300,123 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  void _showAudio() => _trackSheet(audio: true);
-  void _showSubs() => _trackSheet(audio: false);
+  void _showAudio() => _trackPopup(audio: true);
+  void _showSubs() => _trackPopup(audio: false);
 
-  void _trackSheet({required bool audio}) {
+  /// Small liquid-glass popup (VLC/MX style) anchored near the top-right,
+  /// replacing the old full-width bottom sheet. Checkmark on the active
+  /// track. Sources/Episodes panels are untouched (already glass).
+  void _trackPopup({required bool audio}) {
     final tracks = _player.state.tracks;
+    final activeId =
+        audio ? _player.state.track.audio.id : _player.state.track.subtitle.id;
+
+    Widget row({
+      required String title,
+      String? subtitle,
+      required bool active,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: () {
+            onTap();
+            Navigator.pop(context);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 13)),
+                      if (subtitle != null)
+                        Text(subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white60, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                if (active)
+                  const Icon(Icons.check, color: Colors.white, size: 18),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final items = <Widget>[
-      ListTile(title: Text(audio ? 'Audio tracks' : 'Subtitle tracks')),
-      ListTile(
-        title: Text(audio ? 'Auto (default)' : 'Off'),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        child: Text(audio ? 'Audio tracks' : 'Subtitle tracks',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w700)),
+      ),
+      row(
+        title: audio ? 'Auto (default)' : 'Off',
+        active: activeId == (audio ? 'auto' : 'no'),
         onTap: () {
           if (audio) {
             _player.setAudioTrack(AudioTrack.auto());
           } else {
             _player.setSubtitleTrack(SubtitleTrack.no());
           }
-          Navigator.pop(context);
         },
       ),
+      if (audio)
+        for (final t in tracks.audio)
+          row(
+            title: t.title ?? t.id,
+            subtitle: 'language: ${t.language ?? 'unknown'} · id: ${t.id}',
+            active: t.id == activeId,
+            onTap: () => _player.setAudioTrack(t),
+          )
+      else
+        for (final t in tracks.subtitle)
+          row(
+            title: t.title ?? t.id,
+            subtitle: 'language: ${t.language ?? 'unknown'} · id: ${t.id}',
+            active: t.id == activeId,
+            onTap: () => _player.setSubtitleTrack(t),
+          ),
+      const SizedBox(height: 8),
     ];
-    if (audio) {
-      for (final t in tracks.audio) {
-        items.add(ListTile(
-          title: Text(t.title ?? t.id),
-          subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
-          onTap: () {
-            _player.setAudioTrack(t);
-            Navigator.pop(context);
-          },
-        ));
-      }
-    } else {
-      for (final t in tracks.subtitle) {
-        items.add(ListTile(
-          title: Text(t.title ?? t.id),
-          subtitle: Text('language: ${t.language ?? 'unknown'} · id: ${t.id}'),
-          onTap: () {
-            _player.setSubtitleTrack(t);
-            Navigator.pop(context);
-          },
-        ));
-      }
-    }
-    items.add(const SizedBox(height: 24));
-    showModalBottomSheet<void>(
+
+    showDialog<void>(
       context: context,
-      showDragHandle: true,
-      builder: (context) => ListView(shrinkWrap: true, children: items),
+      builder: (ctx) => Dialog(
+        alignment: Alignment.topRight,
+        insetPadding: const EdgeInsets.only(top: 76, right: 16, left: 16),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: GlassSurface(
+          radius: 16,
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(maxWidth: 320, maxHeight: 420),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: items,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -390,15 +461,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
             controls: NoVideoControls,
             fit: _fit,
             fill: Colors.black,
-          ),
-          StreamBuilder<bool>(
-            stream: _player.stream.buffering,
-            initialData: true,
-            builder: (_, snap) => (snap.data ?? false)
-                ? const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  )
-                : const SizedBox.shrink(),
           ),
           GlassPlayerControls(
             player: _player,

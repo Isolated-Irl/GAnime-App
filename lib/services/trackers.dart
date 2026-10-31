@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import '../models.dart';
 import '../store.dart';
 import 'anilist.dart';
+import 'oauth.dart';
 
 class Trackers {
   // ---- AniList ----
@@ -21,6 +22,31 @@ class Trackers {
   static Future<void> anilistSave(
           String token, int mediaId, int progress) =>
       AniList.saveProgress(token, mediaId, progress);
+
+  static Map<String, int?>? _fuzzy(DateTime? d) =>
+      d == null ? null : {'year': d.year, 'month': d.month, 'day': d.day};
+
+  /// Full AniList entry write: status, progress, score, start/end dates.
+  /// App status codes (CURRENT/COMPLETED/PLANNING/PAUSED/DROPPED) map
+  /// 1:1 onto AniList's MediaListStatus enum.
+  static Future<void> anilistSaveFull(
+    String token,
+    int mediaId, {
+    int? progress,
+    String? status,
+    double? score,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) =>
+      AniList.saveEntry(token, mediaId,
+          progress: progress,
+          status: status,
+          score: score,
+          startedAt: _fuzzy(startDate),
+          completedAt: _fuzzy(endDate));
+
+  static Future<void> anilistDeleteEntry(String token, int mediaId) =>
+      AniList.deleteEntry(token, mediaId);
 
   // ---- Simkl ----
   static Future<Map<String, dynamic>> simklStartPin(String clientId) async {
@@ -175,6 +201,83 @@ class Trackers {
     }
   }
 
+  static const _simklStatusMap = {
+    'CURRENT': 'watching',
+    'COMPLETED': 'completed',
+    'PLANNING': 'plantowatch',
+    'PAUSED': 'hold',
+    'DROPPED': 'dropped',
+    'REPEATING': 'watching',
+  };
+
+  static Map<String, String> _simklHeaders(String clientId, String token) =>
+      {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+        'simkl-api-key': clientId,
+      };
+
+  /// Full Simkl write (website parity): status + watched episodes + memo
+  /// in ONE /sync/history call. Episodes use the seasons-array format.
+  static Future<void> simklSaveFull(
+    String clientId,
+    String token, {
+    int? simklId,
+    int? anilistId,
+    int? malId,
+    String? title,
+    int? progress,
+    String? status,
+    String? memo,
+  }) async {
+    final ids = <String, dynamic>{};
+    if (simklId != null) ids['simkl'] = simklId;
+    if (anilistId != null) ids['anilist'] = anilistId;
+    if (malId != null) ids['mal'] = malId;
+    final show = <String, dynamic>{'ids': ids};
+    if (title != null && title.isNotEmpty) show['title'] = title;
+    if (status != null) show['status'] = _simklStatusMap[status] ?? 'watching';
+    if (memo != null && memo.isNotEmpty) show['memo'] = memo;
+    if (progress != null && progress > 0) {
+      show['seasons'] = [
+        {
+          'number': 1,
+          'episodes': List.generate(progress, (i) => {'number': i + 1}),
+        }
+      ];
+    }
+    if (show.length <= 1) return; // ids only — nothing to send
+    final r = await http.post(
+      Uri.parse('https://api.simkl.com/sync/history'),
+      headers: _simklHeaders(clientId, token),
+      body: jsonEncode({
+        'shows': [show]
+      }),
+    );
+    if (r.statusCode != 200 && r.statusCode != 201) {
+      throw Exception('Simkl save failed: ${r.body}');
+    }
+  }
+
+  /// Remove a title from the Simkl list.
+  static Future<void> simklDeleteEntry(
+      String clientId, String token, int simklId) async {
+    final r = await http.post(
+      Uri.parse('https://api.simkl.com/sync/history/remove'),
+      headers: _simklHeaders(clientId, token),
+      body: jsonEncode({
+        'shows': [
+          {
+            'ids': {'simkl': simklId}
+          }
+        ]
+      }),
+    );
+    if (r.statusCode != 200 && r.statusCode != 201 && r.statusCode != 404) {
+      throw Exception('Simkl delete failed: ${r.body}');
+    }
+  }
+
   // ---- MAL (read-only public list) ----
   static Future<List<LibraryEntry>> malLists(
       String username, String clientId) async {
@@ -211,5 +314,80 @@ class Trackers {
       ));
     }
     return out;
+  }
+
+  // ---- MAL writes ----
+  // Status/episodes/score ride the existing relay contract
+  // (POST /mal/update); dates + delete go direct (native has no CORS).
+  static const _malStatusMap = {
+    'CURRENT': 'watching',
+    'COMPLETED': 'completed',
+    'PLANNING': 'plan_to_watch',
+    'PAUSED': 'on_hold',
+    'DROPPED': 'dropped',
+    'REPEATING': 'watching',
+  };
+
+  static Future<void> malSave(
+    String accessToken,
+    int malId, {
+    String? status,
+    int? episodes,
+    double? score,
+  }) async {
+    final body = <String, dynamic>{
+      'access_token': accessToken,
+      'anime_id': malId,
+    };
+    if (status != null) body['status'] = _malStatusMap[status] ?? 'watching';
+    if (episodes != null) body['num_watched_episodes'] = episodes;
+    if (score != null) body['score'] = score.round().clamp(1, 10);
+    final r = await http.post(
+      Uri.parse('${OAuthService.relayUrl}/mal/update'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (r.statusCode != 200) {
+      throw Exception('MAL save failed: ${r.body}');
+    }
+  }
+
+  static String _malDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// MAL start/finish dates (undocumented fields, accepted by the API).
+  static Future<void> malUpdateDates(
+    String accessToken,
+    int malId, {
+    DateTime? startDate,
+    DateTime? finishDate,
+  }) async {
+    final form = <String, String>{};
+    if (startDate != null) form['start_date'] = _malDate(startDate);
+    if (finishDate != null) form['finish_date'] = _malDate(finishDate);
+    if (form.isEmpty) return;
+    final r = await http.put(
+      Uri.parse('https://api.myanimelist.net/v2/anime/$malId/my_list_status'),
+      headers: {
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.entries
+          .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+          .join('&'),
+    );
+    if (r.statusCode != 200) {
+      throw Exception('MAL dates failed: ${r.body}');
+    }
+  }
+
+  static Future<void> malDeleteEntry(String accessToken, int malId) async {
+    final r = await http.delete(
+      Uri.parse('https://api.myanimelist.net/v2/anime/$malId/my_list_status'),
+      headers: {'Authorization': 'Bearer $accessToken'},
+    );
+    if (r.statusCode != 200 && r.statusCode != 404) {
+      throw Exception('MAL delete failed: ${r.body}');
+    }
   }
 }
