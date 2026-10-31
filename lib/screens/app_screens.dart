@@ -14,6 +14,7 @@ import '../services/firebase_sync.dart';
 import '../store.dart';
 import '../widgets/ga_image.dart';
 import '../widgets/anime_card.dart';
+import '../widgets/skeletons.dart';
 import 'details.dart';
 import 'settings/about_screen.dart';
 import 'settings/account_screen.dart';
@@ -348,15 +349,25 @@ class _HomeScreenState extends State<HomeScreen> {
       future: _homeFuture,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          // Loading is fast now (cached) — no skeleton, just empty.
+          // Skeleton home: hero + rail placeholders mirroring the real
+          // layout (gated by the same Layout settings), not a spinner.
           final ls = widget.settings;
+          final railTitles = <String>[
+            if (ls.railTrending) 'Trending Now',
+            if (ls.railPopularSeason) 'Popular This Season',
+            if (ls.railUpcoming) 'Upcoming Next Season',
+            if (ls.railAllTime) 'All Time Popular',
+            if (ls.railTop100) 'Top 100 Anime',
+            if (ls.railTopMovies) 'Top 100 Movies',
+          ];
           return ListView(
             children: [
-              if (ls.showHero) const SizedBox.shrink(),
+              if (ls.showHero) skeletonHero(),
               // 16px gap mirrors the real home (the section wrapper's top
               // padding) — without it the first rail header sits flush
               // against the hero and looks like it's touching.
               if (ls.showHero) const SizedBox(height: 16),
+              for (final t in railTitles) skeletonRail(title: t),
             ],
           );
         }
@@ -1717,7 +1728,7 @@ class _SearchScreenState extends State<SearchScreen> {
           // or the ghost cells would be narrower than the real ones.
           // 12px gap above so skeletons don't crowd the search bar.
           const SizedBox(height: 12),
-        if (_loading) const SizedBox.shrink(),
+        if (_loading) skeletonPosterGrid(count: 9),
         if (_error != null) Text('Search failed: $_error'),
         if (_searched && !_loading && _error == null) ...[
           _resultsToolbar(),
@@ -2070,7 +2081,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             else if (items == null)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                child: const SizedBox.shrink(),
+                child: skeletonCalendarRows(context, count: 4),
               )
             else ...[
               if (dayItems.isEmpty)
@@ -2912,7 +2923,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              child: const SizedBox.shrink(),
+              child: skeletonLibraryRows(context, count: 6),
             ),
           )
         else if (_error != null)
