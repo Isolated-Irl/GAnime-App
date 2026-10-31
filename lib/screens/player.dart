@@ -55,10 +55,18 @@ class PlayerPrefs {
 
   static Future<dynamic> get(String key) async => (await _all())[key];
 
-  static Future<void> set(String key, dynamic value) async {
-    final m = await _all();
-    m[key] = value;
-    await (await _p).setString(_k, jsonEncode(m));
+  // Writes are chained so two quick set() calls can never read the same
+  // old map and overwrite each other (that lost-update bug wiped the
+  // "remember" flag right after it was saved).
+  static Future<void> _queue = Future<void>.value();
+
+  static Future<void> set(String key, dynamic value) {
+    _queue = _queue.then((_) async {
+      final m = await _all();
+      m[key] = value;
+      await (await _p).setString(_k, jsonEncode(m));
+    }).catchError((_) {});
+    return _queue;
   }
 }
 
@@ -162,20 +170,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await platform.setProperty(
           'stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       await platform.setProperty('network-timeout', '60');
-      // ASS/SSA subs (i.e. every anime torrent) ignore sub-font-size
-      // unless overridden — without 'force' the font-size slider can
-      // never affect them.
-      // Re-enable mpv's native libass renderer (media_kit sets this to 'no'
-      // on init to avoid duplicates with Flutter's SubtitleView).
-      await platform.setProperty('sub-visibility', 'yes');
-      await platform.setProperty('sub-ass-override', 'force');
-      // Apply remembered subtitle style / delays, but only for the
-      // features whose "Remember across sessions" toggle was left on.
+      // Subtitle STYLE (size/colour/outline/position) is applied on the
+      // Flutter SubtitleView (see _subViewConfig), not on mpv.
+      // Apply remembered subtitle / audio delays (these are mpv-side).
       try {
-        if (await PlayerPrefs.get('remember_sub_style') == true) {
-          final style = (await PlayerPrefs.get('sub_style')) as Map?;
-          style?.forEach((k, v) => platform.setProperty('$k', '$v'));
-        }
         if (await PlayerPrefs.get('remember_sub_delay') == true) {
           final ms = await PlayerPrefs.get('sub_delay_ms');
           if (ms is num) {
@@ -238,9 +236,100 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  // ---- Subtitle style (rendered by Flutter's SubtitleView) ----
+  // Keys mirror the mpv names used by the settings panel ('sub-font-size'...).
+  Map<String, String> _subStyle = {};
+
+  Future<void> _loadSubStyle() async {
+    try {
+      // Remembering is ON unless the user explicitly switched it off.
+      if (await PlayerPrefs.get('remember_sub_style') == false) return;
+      final m = await PlayerPrefs.get('sub_style');
+      if (m is Map && mounted) {
+        setState(() => _subStyle =
+            m.map((k, v) => MapEntry(k.toString(), v.toString())));
+      }
+    } catch (_) {}
+  }
+
+  /// Called by the settings panel for every change: updates the live
+  /// subtitle immediately.
+  Future<void> _setSubStyle(String key, dynamic value) async {
+    final String sv = (value is double && value.truncateToDouble() == value)
+        ? value.toInt().toString()
+        : value.toString();
+    if (mounted) setState(() => _subStyle[key] = sv);
+  }
+
+  SubtitleViewConfiguration _subViewConfig(BuildContext context) {
+    double d(String k, double fb) => double.tryParse(_subStyle[k] ?? '') ?? fb;
+
+    // mpv's default 55 maps to ~33 logical px (close to media_kit's 32).
+    final fontSize = d('sub-font-size', 55) * 0.6 * d('sub-scale', 1.0);
+    final borderSize = d('sub-border-size', 3);
+    final shadowOff = d('sub-shadow-offset', 0);
+    final borderStyle = int.tryParse(_subStyle['sub-border-style'] ?? '') ?? 2;
+    final pos = d('sub-pos', 100).clamp(0.0, 100.0);
+
+    var color = Colors.white;
+    final c = _subStyle['sub-color'] ?? '';
+    if (c.length >= 9 && c.startsWith('#')) {
+      final r = int.tryParse(c.substring(1, 3), radix: 16) ?? 255;
+      final g = int.tryParse(c.substring(3, 5), radix: 16) ?? 255;
+      final b = int.tryParse(c.substring(5, 7), radix: 16) ?? 255;
+      final a = int.tryParse(c.substring(7, 9), radix: 16) ?? 255;
+      color = Color.fromARGB(a, r, g, b);
+    }
+
+    final shadows = <Shadow>[];
+    if (borderStyle == 1) {
+      final b = borderSize.clamp(0.0, 10.0) * 0.5;
+      if (b > 0) {
+        for (final o in const [
+          Offset(-1, -1), Offset(1, -1), Offset(-1, 1), Offset(1, 1),
+          Offset(0, -1), Offset(0, 1), Offset(-1, 0), Offset(1, 0),
+        ]) {
+          shadows.add(Shadow(
+              color: Colors.black, offset: Offset(o.dx * b, o.dy * b), blurRadius: 1));
+        }
+      }
+      if (shadowOff > 0) {
+        shadows.add(Shadow(
+            color: Colors.black87,
+            offset: Offset(shadowOff, shadowOff),
+            blurRadius: 2));
+      }
+    }
+
+    final align = switch (_subStyle['sub-align-x']) {
+      'left' => TextAlign.left,
+      'right' => TextAlign.right,
+      _ => TextAlign.center,
+    };
+    final h = MediaQuery.sizeOf(context).height;
+
+    return SubtitleViewConfiguration(
+      visible: true,
+      style: TextStyle(
+        height: 1.3,
+        fontSize: fontSize,
+        color: color,
+        fontWeight:
+            _subStyle['sub-bold'] == 'yes' ? FontWeight.w800 : FontWeight.w500,
+        fontStyle:
+            _subStyle['sub-italic'] == 'yes' ? FontStyle.italic : FontStyle.normal,
+        backgroundColor: borderStyle == 2 ? const Color(0xAA000000) : null,
+        shadows: shadows,
+      ),
+      textAlign: align,
+      padding: EdgeInsets.fromLTRB(16, 0, 16, 24 + (100 - pos) / 100 * h * 0.8),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadSubStyle();
     _episode = widget.episode;
     _streamIndex = widget.initialIndex; // open the stream the user tapped
     SystemChrome.setPreferredOrientations([
@@ -680,31 +769,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
         insetPadding: const EdgeInsets.all(16),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        child: FutureBuilder<Map<String, dynamic>>(
-          future: _rememberedSubStyle(),
-          builder: (context, snap) {
-            final initial = snap.data ?? const <String, dynamic>{};
-            return GlassSurface(
-              radius: 18,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 560),
-                child: _SubtitleSettingsPanel(
-                  onSet: _setMpvProp,
-                  initial: initial,
-                ),
-              ),
-            );
-          },
+        child: GlassSurface(
+          radius: 18,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 560),
+            child: _SubtitleSettingsPanel(
+              onSet: _setSubStyle,
+              initial: Map<String, dynamic>.from(_subStyle),
+            ),
+          ),
         ),
       ),
     );
-  }
-
-  /// Persisted subtitle style ('sub-*' keys) — only when its toggle was on.
-  Future<Map<String, dynamic>> _rememberedSubStyle() async {
-    if (await PlayerPrefs.get('remember_sub_style') != true) return {};
-    final m = await PlayerPrefs.get('sub_style');
-    return (m as Map?)?.cast<String, dynamic>() ?? {};
   }
 
   /// Subtitle delay with Voice heard / Text seen auto-sync.
@@ -812,9 +888,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             controls: NoVideoControls,
             fit: _fit,
             fill: Colors.black,
-            subtitleViewConfiguration: const SubtitleViewConfiguration(
-              visible: false,
-            ),
+            subtitleViewConfiguration: _subViewConfig(context),
           ),
           GlassPlayerControls(
             player: _player,
@@ -884,7 +958,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
   late int _r, _g, _b, _a;
 
   // Misc state
-  late bool _assOverride;
   late double _scale;
   late double _position;
 
@@ -909,7 +982,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
     _fontSize = _d(i['sub-font-size'], 55);
     _borderSize = _d(i['sub-border-size'], 3);
     _shadowOffset = _d(i['sub-shadow-offset'], 0);
-    _borderStyle = int.tryParse('${i['sub-border-style'] ?? 1}') ?? 1;
+    _borderStyle = int.tryParse('${i['sub-border-style'] ?? 2}') ?? 2;
     _r = _g = _b = _a = 255;
     final c = '${i['sub-color'] ?? ''}';
     if (c.length >= 9 && c.startsWith('#')) {
@@ -918,13 +991,11 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
       _b = int.tryParse(c.substring(5, 7), radix: 16) ?? 255;
       _a = int.tryParse(c.substring(7, 9), radix: 16) ?? 255;
     }
-    // Player boots with 'force' so the size slider works on ASS subs.
-    _assOverride = i['sub-ass-override'] != 'no';
     _scale = _d(i['sub-scale'], 1.0);
     _position = _d(i['sub-pos'], 100);
-    _remember = false;
+    _remember = true; // on by default; only off if the user turned it off
     PlayerPrefs.get('remember_sub_style').then((v) {
-      if (mounted) setState(() => _remember = v == true);
+      if (mounted) setState(() => _remember = v != false);
     });
   }
 
@@ -938,7 +1009,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
         'sub-shadow-offset': _fmt(_shadowOffset),
         'sub-border-style': '$_borderStyle',
         'sub-color': _colorHex,
-        'sub-ass-override': _assOverride ? 'force' : 'no',
         'sub-scale': _fmt(_scale),
         'sub-pos': _position.round().toString(),
       };
@@ -1149,15 +1219,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
           _sectionHeader('Miscellaneous', _miscOpen,
               () => setState(() => _miscOpen = !_miscOpen)),
           if (_miscOpen) ...[
-            SwitchListTile(
-              title: const Text('Override ASS/SSA subtitles',
-                  style: TextStyle(color: Colors.white, fontSize: 13)),
-              value: _assOverride,
-              onChanged: (v) {
-                setState(() => _assOverride = v);
-                _set('sub-ass-override', v ? 'force' : 'no');
-              },
-            ),
             _sliderRow('Scale', _scale, 0.1, 3.0, (v) {
               setState(() => _scale = v);
               _set('sub-scale', v);
