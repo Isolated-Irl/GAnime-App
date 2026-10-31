@@ -8,6 +8,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models.dart';
+import '../store.dart';
 import 'anilist.dart';
 
 class Trackers {
@@ -40,6 +41,17 @@ class Trackers {
 
   /// Simkl poster URL builder (website parity: simklPosterUrl).
   /// Handles full URLs, protocol-relative, and bare poster paths.
+  /// Simkl watched count: handles watched_episodes_count (int),
+  /// watched_episodes (int or List of episodes when extended).
+  static int _simklProgress(Map<String, dynamic> m) {
+    if (m['watched_episodes_count'] != null) {
+      return _n(m['watched_episodes_count']);
+    }
+    final w = m['watched_episodes'];
+    if (w is List) return w.length;
+    return _n(w);
+  }
+
   static String _simklPosterUrl(String poster) {
     final p = poster.trim();
     if (p.isEmpty) return '';
@@ -92,6 +104,8 @@ class Trackers {
     if (r.statusCode != 200) throw Exception('Simkl lists failed');
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <LibraryEntry>[];
+    final trackerStore = await Store.tracker();
+    bool trackerDirty = false;
     for (final item in (j['anime'] as List?) ?? []) {
       final m = item as Map<String, dynamic>;
       final show = m['show'] as Map<String, dynamic>? ?? {};
@@ -103,8 +117,15 @@ class Trackers {
       final showIds = show['ids'] as Map<String, dynamic>?;
       final anilistId =
           _optInt(showIds?['anilist']) ?? _optInt(ids['anilist']);
+      final simklId =
+          _optInt(ids['simkl']) ?? _optInt(ids['simkl_id']) ?? _optInt(showIds?['simkl']);
+      // Persist Simkl ID mapping so watch pushes work
+      if (anilistId != null && simklId != null) {
+        trackerStore['simklIdFor_$anilistId'] = simklId;
+        trackerDirty = true;
+      }
       out.add(LibraryEntry(
-        key: 'simkl_${ids['simkl'] ?? ids['simkl_id'] ?? ''}',
+        key: 'simkl_${simklId ?? ''}',
         source: 'simkl',
         anilistId: anilistId,
         title: (show['title'] as String?) ?? '',
@@ -116,11 +137,16 @@ class Trackers {
                 : status == 'plantowatch'
                     ? 'PLANNING'
                     : 'CURRENT',
-        progress: _n(m['watched_episodes']),
-        total: _optInt(show['total_episodes']),
+        progress: _simklProgress(m),
+        total: _optInt(show['total_episodes_count']) ??
+            _optInt(show['total_episodes']) ??
+            _optInt(m['total_episodes_count']),
         score: _optDouble(m['rating']),
         updatedAt: _ts(m['last_watched_at']) ~/ 1000,
       ));
+    }
+    if (trackerDirty) {
+      await Store.saveTracker(trackerStore);
     }
     return out;
   }
@@ -177,7 +203,8 @@ class Trackers {
                 : status == 'plan_to_watch'
                     ? 'PLANNING'
                     : 'CURRENT',
-        progress: _n(ls['num_watched_episodes']),
+        // MAL API v2 returns 'num_episodes_watched', not 'num_watched_episodes'
+        progress: _n(ls['num_episodes_watched'] ?? ls['num_watched_episodes']),
         total: _optInt(anime['num_episodes']),
         score: _optDouble(ls['score']),
         updatedAt: _ts(ls['updated_at']) ~/ 1000,

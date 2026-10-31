@@ -18,17 +18,20 @@ import '../services/trackers.dart';
 import 'streams.dart';
 import '../store.dart';
 import '../widgets/skeletons.dart';
+import 'settings/tracking_screen.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Anime anime;
   final String profileId;
   final AppSettings settings;
+  final int initialProgress;
   final Future<void> Function(Anime anime, int episode)? onMarkWatched;
   const DetailsScreen({
     super.key,
     required this.anime,
     required this.profileId,
     required this.settings,
+    this.initialProgress = 0,
     this.onMarkWatched,
   });
 
@@ -127,15 +130,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if ((_anime.anilistId != null && _anime.anilistId != _anime.id) ||
           _anime.banner.isEmpty ||
           _anime.description.isEmpty) {
-        try {
-          final fresh = await AniList.details(_anime.anilistId!);
-          // Keep the airing info the calendar already knew.
-          _anime = fresh.copyWith(
-            anilistId: _anime.anilistId,
-            nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
-            airingAt: _anime.airingAt ?? fresh.airingAt,
-          );
-        } catch (_) {}
+        final targetId = _anime.anilistId ?? _anime.id;
+        if (targetId > 0) {
+          try {
+            final fresh = await AniList.details(targetId);
+            // Keep the airing info the calendar already knew.
+            _anime = fresh.copyWith(
+              anilistId: targetId,
+              nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
+              airingAt: _anime.airingAt ?? fresh.airingAt,
+            );
+          } catch (_) {}
+        }
       }
       final a = _anime;
       final alId = a.anilistId;
@@ -160,6 +166,21 @@ class _DetailsScreenState extends State<DetailsScreen> {
       final saved = results[2] as Set<int>;
       final lib = results[3] as List<LibraryEntry>;
       final studio = results[4] as String;
+      // Sync tracker progress: if local watched is empty, populate from
+      // the tracker's progress (e.g. opened from MAL/Simkl/AniList tab).
+      // Falls back to widget.initialProgress passed from the library card.
+      if (w.isEmpty) {
+        final existing = lib
+            .where((e) => e.key == 'local_${a.id}' || e.anilistId == a.id)
+            .firstOrNull;
+        final prog = (existing?.progress ?? 0) > 0
+            ? existing!.progress
+            : widget.initialProgress;
+        if (prog > 0) {
+          w = List.generate(prog, (i) => i + 1).toSet();
+          await Store.setWatched(widget.profileId, a.id, w);
+        }
+      }
 
       // Best-effort migration: watched state written under a differing
       // id key (legacy installs) is copied to the current id once,
@@ -366,147 +387,357 @@ class _DetailsScreenState extends State<DetailsScreen> {
     return '${int.tryParse(m.group(3)!)} ${months[(mo - 1).clamp(0, 11)]} ${m.group(1)}';
   }
 
-  // ---------- tracking sheet ----------
-  Future<void> _showTrackingSheet() async {
+  // ---------- tracker tool dialog (website parity) ----------
+  Future<void> _showTrackingDialog() async {
     final t = await Store.tracker();
     if (!mounted) return;
+
     final alToken = (t['anilistToken'] as String?) ?? '';
     final alName = (t['anilistUsername'] as String?) ?? '';
     final skClient = (t['simklClientId'] as String?) ?? '';
     final skToken = (t['simklToken'] as String?) ?? '';
     final skName = (t['simklUsername'] as String?) ?? '';
-    final skId =
-        (t['simklIdFor_${_anime.id}'] as num?)?.toInt();
+    final skId = (t['simklIdFor_${_anime.id}'] as num?)?.toInt();
     final malUser = (t['malUsername'] as String?) ?? '';
-    final total = _total;
-    final count = _watchedCount;
-    final maxEp =
-        _watched.isEmpty ? 0 : _watched.reduce((x, y) => x > y ? x : y);
 
-    Future<void> pushAniList() async {
-      Navigator.of(context).pop();
-      if (maxEp <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nothing watched yet to push.')),
-        );
-        return;
-      }
-      try {
-        final al = _anime.anilistId ?? _anime.id;
-        await Trackers.anilistSave(alToken, al, maxEp);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Pushed $maxEp / $total to AniList.')),
-          );
-        }
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('AniList push failed.')),
-          );
-        }
-      }
-    }
+    final total = _total > 0 ? _total : (_anime.episodes ?? 0);
+    final currentMax = _watched.isEmpty ? 0 : _watched.reduce((x, y) => x > y ? x : y);
+    int editProgress = currentMax;
 
-    Future<void> pushSimkl() async {
-      Navigator.of(context).pop();
-      if (skId == null) return;
-      try {
-        await Trackers.simklSave(skClient, skToken, skId, maxEp);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Pushed $maxEp / $total to Simkl.')),
-          );
-        }
-      } catch (_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Simkl push failed.')),
-          );
-        }
-      }
-    }
-
-    await showModalBottomSheet(
+    await showDialog<void>(
       context: context,
-      backgroundColor: GaColors.of(context).card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Tracking',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Text(_anime.title,
-                  style: TextStyle(color: Colors.grey.shade400)),
-              const SizedBox(height: 12),
-              Text('This device: $count / $total episodes watched'),
-              const SizedBox(height: 12),
-              _trackerRow(
-                'AniList',
-                alToken.isNotEmpty
-                    ? (alName.isNotEmpty ? '@$alName' : 'Connected')
-                    : 'Not connected',
-                alToken.isNotEmpty && maxEp > 0
-                    ? TextButton(
-                        onPressed: pushAniList,
-                        child: Text('Push $maxEp / $total'))
-                    : null,
+      barrierDismissible: true,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setDialogState) {
+          final maxAllowed = total > 0 ? total : 9999;
+
+          Future<void> openTrackerUrl(String provider) async {
+            Uri? uri;
+            if (provider == 'anilist') {
+              final id = _anime.anilistId ?? _anime.id;
+              uri = Uri.parse('https://anilist.co/anime/$id');
+            } else if (provider == 'mal') {
+              if (_anime.malId != null && _anime.malId! > 0) {
+                uri = Uri.parse('https://myanimelist.net/anime/${_anime.malId}');
+              } else {
+                uri = Uri.parse('https://myanimelist.net/anime.php?q=${Uri.encodeComponent(_anime.title)}');
+              }
+            } else if (provider == 'simkl') {
+              if (skId != null) {
+                uri = Uri.parse('https://simkl.com/anime/$skId');
+              } else {
+                uri = Uri.parse('https://simkl.com/search?q=${Uri.encodeComponent(_anime.title)}');
+              }
+            }
+            if (uri != null) {
+              try {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              } catch (_) {}
+            }
+          }
+
+          Future<void> goToConnect() async {
+            Navigator.of(dCtx).pop();
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => TrackingSettingsScreen(
+                  settings: widget.settings,
+                  onSettings: (_) {},
+                ),
               ),
-              _trackerRow(
-                'Simkl',
-                skClient.isNotEmpty && skToken.isNotEmpty
-                    ? (skName.isNotEmpty ? '@$skName' : 'Connected')
-                    : 'Not connected',
-                skClient.isNotEmpty && skToken.isNotEmpty && skId != null
-                    ? TextButton(
-                        onPressed: pushSimkl,
-                        child: Text('Push $maxEp / $total'))
-                    : null,
-                note: skClient.isNotEmpty &&
-                        skToken.isNotEmpty &&
-                        skId == null
-                    ? 'Not linked to this title'
-                    : null,
+            );
+            _load();
+          }
+
+          Future<void> saveProgress() async {
+            Navigator.of(dCtx).pop();
+            final newWatched = List.generate(editProgress, (i) => i + 1).toSet();
+            await Store.setWatched(widget.profileId, _anime.id, newWatched);
+            if (mounted) setState(() => _watched = newWatched);
+            final pushTasks = <String>[];
+            if (alToken.isNotEmpty && editProgress > 0) {
+              try {
+                final al = _anime.anilistId ?? _anime.id;
+                await Trackers.anilistSave(alToken, al, editProgress);
+                pushTasks.add('AniList');
+              } catch (_) {}
+            }
+            if (skClient.isNotEmpty && skToken.isNotEmpty && skId != null && editProgress > 0) {
+              try {
+                await Trackers.simklSave(skClient, skToken, skId, editProgress);
+                pushTasks.add('Simkl');
+              } catch (_) {}
+            }
+            if (editProgress > 0) {
+              await widget.onMarkWatched?.call(_anime, editProgress);
+            }
+            if (mounted) {
+              final pushedStr = pushTasks.isNotEmpty ? ' & synced to ${pushTasks.join(", ")}' : '';
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Saved: Ep $editProgress / $total$pushedStr'),
+                  backgroundColor: const Color(0xFF1E1F24),
+                ),
+              );
+            }
+          }
+
+          return Dialog(
+            backgroundColor: const Color(0xFF18191E),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: _anime.cover.isNotEmpty
+                            ? GaImage(
+                                url: _anime.cover,
+                                width: 56,
+                                height: 76,
+                                fit: BoxFit.cover,
+                                errorFallback: Container(
+                                  width: 56,
+                                  height: 76,
+                                  color: const Color(0xFF25262C),
+                                  child: const Icon(Icons.image, size: 24, color: Colors.white24),
+                                ),
+                              )
+                            : Container(width: 56, height: 76, color: const Color(0xFF25262C)),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF22C55E).withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(color: const Color(0xFF22C55E), width: 1),
+                                  ),
+                                  child: const Text('Tracker Tool',
+                                      style: TextStyle(color: Color(0xFF22C55E), fontSize: 11, fontWeight: FontWeight.w700)),
+                                ),
+                                if (_anime.score != null) ...[
+                                  const SizedBox(width: 8),
+                                  Text('\u2605 ${(_anime.score! / 10).toStringAsFixed(1)}',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w700)),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(_anime.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800, height: 1.25)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22242B),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Episode Progress',
+                                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
+                            Text('$editProgress / ${total > 0 ? total : '\u2014'} eps',
+                                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.remove_circle_outline, color: Colors.white70),
+                              onPressed: editProgress > 0 ? () => setDialogState(() => editProgress--) : null,
+                            ),
+                            Expanded(
+                              child: SliderTheme(
+                                data: SliderTheme.of(dCtx).copyWith(
+                                  activeTrackColor: Theme.of(dCtx).colorScheme.primary,
+                                  inactiveTrackColor: Colors.white12,
+                                  thumbColor: Colors.white,
+                                  trackHeight: 4,
+                                ),
+                                child: Slider(
+                                  value: editProgress.toDouble().clamp(0.0, maxAllowed.toDouble()),
+                                  min: 0,
+                                  max: maxAllowed.toDouble(),
+                                  divisions: maxAllowed > 0 ? maxAllowed : 1,
+                                  onChanged: (v) => setDialogState(() => editProgress = v.toInt()),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.white70),
+                              onPressed: editProgress < maxAllowed ? () => setDialogState(() => editProgress++) : null,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _trackerDialogCard(
+                    badgeLabel: 'AL',
+                    badgeColor: const Color(0xFF00ADFF),
+                    name: 'AniList',
+                    status: alToken.isNotEmpty ? (alName.isNotEmpty ? '@$alName' : 'Connected') : 'Not Connected',
+                    isConnected: alToken.isNotEmpty,
+                    onOpen: () => openTrackerUrl('anilist'),
+                    onConnect: goToConnect,
+                  ),
+                  const SizedBox(height: 10),
+                  _trackerDialogCard(
+                    badgeLabel: 'MAL',
+                    badgeColor: const Color(0xFF2E51A2),
+                    name: 'MyAnimeList',
+                    status: malUser.isNotEmpty ? '@$malUser' : 'Not Connected',
+                    isConnected: malUser.isNotEmpty,
+                    onOpen: () => openTrackerUrl('mal'),
+                    onConnect: goToConnect,
+                  ),
+                  const SizedBox(height: 10),
+                  _trackerDialogCard(
+                    badgeLabel: 'SK',
+                    badgeColor: const Color(0xFFFF334B),
+                    name: 'Simkl',
+                    status: skToken.isNotEmpty ? (skName.isNotEmpty ? '@$skName' : 'Connected') : 'Not Connected',
+                    isConnected: skToken.isNotEmpty,
+                    onOpen: () => openTrackerUrl('simkl'),
+                    onConnect: goToConnect,
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(dCtx).pop(),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Close', style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: saveProgress,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF22C55E),
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Save Progress', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              _trackerRow(
-                'MyAnimeList',
-                malUser.isNotEmpty ? '@$malUser' : 'Not connected',
-                null,
-                note: 'Read-only in this app',
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _trackerRow(String name, String state, Widget? action,
-      {String? note}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
+  Widget _trackerDialogCard({
+    required String badgeLabel,
+    required Color badgeColor,
+    required String name,
+    required String status,
+    required bool isConnected,
+    required VoidCallback onOpen,
+    required VoidCallback onConnect,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF22242B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(note ?? state,
-                    style: TextStyle(
-                        color: Colors.grey.shade400, fontSize: 13)),
-              ],
-            ),
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(8)),
+                alignment: Alignment.center,
+                child: Text(badgeLabel,
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900)),
+              ),
+              const SizedBox(width: 10),
+              Text(name, style: const TextStyle(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Text(status, style: TextStyle(color: isConnected ? Colors.white70 : Colors.grey.shade500, fontSize: 12.5)),
+            ],
           ),
-          // ignore: use_null_aware_elements
-          if (action != null) action,
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onOpen,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: const Color(0xFF2A2C34),
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('Open \u2197', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onConnect,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: const Color(0xFF2A2C34),
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: Text(isConnected ? 'Manage' : 'Connect',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1258,7 +1489,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                               BorderRadius.circular(
                                                   12)),
                                     ),
-                                    onPressed: _showTrackingSheet,
+                                    onPressed: _showTrackingDialog,
                                     icon: const Icon(Icons.settings,
                                         size: 16),
                                     label: const Text('Tracking'),

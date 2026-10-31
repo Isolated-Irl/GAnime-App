@@ -27,6 +27,7 @@ Future<void> openDetails(
   required Anime anime,
   required String profileId,
   required AppSettings settings,
+  int initialProgress = 0,
   Future<void> Function(Anime, int)? onMarkWatched,
 }) {
   return Navigator.of(context).push(
@@ -35,6 +36,7 @@ Future<void> openDetails(
         anime: anime,
         profileId: profileId,
         settings: settings,
+        initialProgress: initialProgress,
         onMarkWatched: onMarkWatched,
       ),
     ),
@@ -2408,13 +2410,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// Opens the details screen for a library entry. Tracker entries
   /// carry AniList ids; the catalogue is AniList-based so details
   /// load straight from AniList. Entries without an id can't open.
+  // In-memory cache for fast MAL/Simkl -> AniList ID resolution
+  static final Map<String, int> _resolvedIdCache = {};
+
   Future<void> _openLibraryEntry(LibraryEntry e) async {
-    var alId = e.anilistId;
-    if (alId == null || alId <= 0) {
-      // MAL entries have no AniList ID: title-search fallback.
+    var alId = e.anilistId ?? _resolvedIdCache[e.key];
+    // If ID is missing, resolve it once via title search and cache it.
+    // (Navigation happens immediately below; this only fills the cache.)
+    if ((alId == null || alId <= 0) && !_resolvedIdCache.containsKey(e.key)) {
       try {
         final res = await AniList.search(e.title);
-        if (!mounted) return;
         final q = e.title.toLowerCase();
         Anime? best;
         for (final a in res) {
@@ -2426,18 +2431,26 @@ class _LibraryScreenState extends State<LibraryScreen> {
           if (best == null && t.contains(q)) best = a;
         }
         best ??= res.isNotEmpty ? res.first : null;
-        if (best == null) return;
-        alId = best.id;
-      } catch (_) {
-        return;
-      }
+        if (best != null) {
+          alId = best.id;
+          _resolvedIdCache[e.key] = alId;
+        }
+      } catch (_) {}
     }
-    // Catalogue is AniList-based: go straight to AniList details.
-    final a = await AniList.details(alId);
     if (!mounted) return;
+    // Open immediately with a shell — DetailsScreen loads everything
+    // (banner, episodes, etc.) in the background with its skeleton UI.
+    final shell = Anime(
+      id: alId ?? 0,
+      anilistId: (alId != null && alId > 0) ? alId : null,
+      title: e.title,
+      cover: e.cover,
+      episodes: e.total,
+    );
     await openDetails(context,
-        anime: a,
+        anime: shell,
         profileId: widget.profileId,
+        initialProgress: e.progress,
         settings: widget.settings,
         onMarkWatched: widget.onMarkWatched);
   }
@@ -2576,7 +2589,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final t = await Store.tracker();
         if (tab == 1) {
           final token = (t['anilistToken'] as String?) ?? '';
-          final userId = (t['anilistUserId'] as num?)?.toInt();
+          // Safe ID parsing: handles String or num without crashing
+          final rawId = t['anilistUserId'];
+          final userId = rawId is num
+              ? rawId.toInt()
+              : int.tryParse(rawId?.toString() ?? '');
           if (token.isEmpty || userId == null) {
             throw Exception(
                 'AniList not connected. Go to Settings > Trackers and paste your AniList token.');
