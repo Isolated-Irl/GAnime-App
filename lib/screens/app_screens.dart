@@ -5,11 +5,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../services/anilist.dart';
 import '../services/trackers.dart';
 import '../services/tracker_oauth.dart';
+import '../services/app_logger.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
 import '../widgets/ga_image.dart';
@@ -2984,6 +2986,267 @@ class _LibraryScreenState extends State<LibraryScreen> {
 // group's controls — nothing is expanded inline anymore.
 
 /// One tappable row in the top-level Settings menu card.
+
+/// Debug log viewer (Settings > bottom). Shows the crash/error log file
+/// size + a tail preview, with View / Share / Clear actions.
+/// Share copies the file path (no share plugin) so Isolated can pull it
+/// via a file manager or adb.
+class _DebugLogSection extends StatefulWidget {
+  const _DebugLogSection();
+
+  @override
+  State<_DebugLogSection> createState() => _DebugLogSectionState();
+}
+
+class _DebugLogSectionState extends State<_DebugLogSection> {
+  String _size = '—';
+  List<String> _tail = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final size = await AppLogger().sizeLabel();
+    final tail = await AppLogger().tail(4);
+    if (!mounted) return;
+    setState(() {
+      _size = size;
+      _tail = tail;
+      _loading = false;
+    });
+  }
+
+  Future<void> _viewLog() async {
+    final text = await AppLogger().readAll();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (c) => Dialog(
+        backgroundColor: const Color(0xFF1E1F24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        insetPadding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 8, 8),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('Debug Log',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () => Navigator.of(c).pop(),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    text,
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        height: 1.4),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareLog() async {
+    final path = AppLogger().getLogPath();
+    if (path == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Log file is not ready yet'),
+          backgroundColor: Color(0xFF1E1F24)));
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: path));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Log path copied:\n$path',
+            style: const TextStyle(fontSize: 12)),
+        backgroundColor: const Color(0xFF1E1F24),
+        duration: const Duration(seconds: 4)));
+  }
+
+  Future<void> _clearLog() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1F24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Clear debug log?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+        content: const Text(
+            'This wipes ganime_debug.log. Useful before reproducing a crash.',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(c).pop(false),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Colors.white70))),
+          TextButton(
+              onPressed: () => Navigator.of(c).pop(true),
+              child: const Text('Clear',
+                  style: TextStyle(
+                      color: Color(0xFFE5484D), fontWeight: FontWeight.w800))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await AppLogger().clear();
+    await _refresh();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Debug log cleared'),
+        backgroundColor: Color(0xFF1E1F24)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: GaColors.of(context).card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF333333)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: GaColors.of(context).field,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child:
+                      const Icon(Icons.bug_report, color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Debug Log',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700)),
+                      SizedBox(height: 2),
+                      Text('Crash & error log (tokens redacted)',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+                ),
+                Text(_size,
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              ],
+            ),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text('Loading…',
+                    style: TextStyle(color: Colors.grey, fontSize: 12)),
+              )
+            else if (_tail.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text('Log is empty.',
+                    style: TextStyle(color: Colors.grey, fontSize: 12)),
+              )
+            else
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  _tail.join('\n'),
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      height: 1.4),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.visibility_outlined, size: 16),
+                    label: const Text('View'),
+                    onPressed: _viewLog,
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('Copy path'),
+                    onPressed: _shareLog,
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.delete_outline, size: 16),
+                    label: const Text('Clear'),
+                    onPressed: _clearLog,
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFE5484D)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SettingsMenuRow extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -3132,6 +3395,7 @@ class SettingsScreen extends StatelessWidget {
             ],
           ),
         ),
+        const _DebugLogSection(),
         const SizedBox(height: 30),
         const Center(
           child: Text('Made with ♥ by Isolated\nGAnime 0.1.0',

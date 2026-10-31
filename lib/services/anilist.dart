@@ -4,6 +4,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models.dart';
+import 'app_logger.dart';
 
 const _endpoint = 'https://graphql.anilist.co';
 const _fields = '''
@@ -44,11 +45,13 @@ class AniList {
       await Future.delayed(Duration(seconds: ra ?? 2));
     }
     if (r!.statusCode != 200) {
+      AppLogger().log('TRACKER', 'API failure: anilist/graphql -> HTTP ${r.statusCode}');
       throw Exception('AniList ${r.statusCode}: ${r.body}');
     }
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     if (j['errors'] != null) {
       final errs = j['errors'] as List;
+      AppLogger().log('TRACKER', 'API failure: anilist/graphql -> GraphQL errors');
       throw Exception('AniList: ${errs.isNotEmpty ? errs.first['message'] : 'query error'}');
     }
     return (j['data'] as Map<String, dynamic>?) ?? {};

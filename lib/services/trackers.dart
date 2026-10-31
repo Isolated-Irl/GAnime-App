@@ -10,9 +10,15 @@ import 'package:http/http.dart' as http;
 import '../models.dart';
 import '../store.dart';
 import 'anilist.dart';
+import 'app_logger.dart';
 import 'oauth.dart';
 
 class Trackers {
+  /// Log an API failure (endpoint + HTTP code only — never tokens/bodies).
+  static void _logFail(String endpoint, int code) {
+    AppLogger().log('TRACKER', 'API failure: $endpoint -> HTTP $code');
+  }
+
   // ---- AniList ----
   static Future<Map<String, dynamic>> anilistViewer(String token) =>
       AniList.viewer(token);
@@ -53,7 +59,7 @@ class Trackers {
     final r = await http.post(
       Uri.parse('https://api.simkl.com/oauth/pin?client_id=$clientId'),
     );
-    if (r.statusCode != 200) throw Exception('Simkl PIN failed: ${r.body}');
+    if (r.statusCode != 200) { _logFail('simkl/oauth/pin', r.statusCode); throw Exception('Simkl PIN failed: ${r.body}'); }
     return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
@@ -61,7 +67,7 @@ class Trackers {
       String clientId, String userCode) async {
     final r = await http.get(Uri.parse(
         'https://api.simkl.com/oauth/pin/$userCode?client_id=$clientId'));
-    if (r.statusCode != 200) throw Exception('Simkl PIN not ready');
+    if (r.statusCode != 200) { _logFail('simkl/oauth/pin', r.statusCode); throw Exception('Simkl PIN not ready'); }
     return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
@@ -127,7 +133,7 @@ class Trackers {
         'simkl-api-key': clientId,
       },
     );
-    if (r.statusCode != 200) throw Exception('Simkl lists failed');
+    if (r.statusCode != 200) { _logFail('simkl/sync/all-items', r.statusCode); throw Exception('Simkl lists failed'); }
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <LibraryEntry>[];
     final trackerStore = await Store.tracker();
@@ -197,7 +203,7 @@ class Trackers {
       }),
     );
     if (r.statusCode != 200 && r.statusCode != 201) {
-      throw Exception('Simkl save failed: ${r.body}');
+      _logFail('simkl/sync/history', r.statusCode); throw Exception('Simkl save failed: ${r.body}');
     }
   }
 
@@ -255,7 +261,7 @@ class Trackers {
       }),
     );
     if (r.statusCode != 200 && r.statusCode != 201) {
-      throw Exception('Simkl save failed: ${r.body}');
+      _logFail('simkl/sync/history', r.statusCode); throw Exception('Simkl save failed: ${r.body}');
     }
   }
 
@@ -274,7 +280,7 @@ class Trackers {
       }),
     );
     if (r.statusCode != 200 && r.statusCode != 201 && r.statusCode != 404) {
-      throw Exception('Simkl delete failed: ${r.body}');
+      _logFail('simkl/sync/history/remove', r.statusCode); throw Exception('Simkl delete failed: ${r.body}');
     }
   }
 
@@ -286,7 +292,7 @@ class Trackers {
           'https://api.myanimelist.net/v2/users/$username/animelist?limit=1000&fields=list_status,num_episodes,mean'),
       headers: {'X-MAL-CLIENT-ID': clientId},
     );
-    if (r.statusCode != 200) throw Exception('MAL list failed: ${r.body}');
+    if (r.statusCode != 200) { _logFail('mal/animelist', r.statusCode); throw Exception('MAL list failed: ${r.body}'); }
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final out = <LibraryEntry>[];
     for (final node in (j['data'] as List?) ?? []) {
@@ -348,7 +354,7 @@ class Trackers {
       body: jsonEncode(body),
     );
     if (r.statusCode != 200) {
-      throw Exception('MAL save failed: ${r.body}');
+      _logFail('mal/update', r.statusCode); throw Exception('MAL save failed: ${r.body}');
     }
   }
 
@@ -377,7 +383,7 @@ class Trackers {
           .join('&'),
     );
     if (r.statusCode != 200) {
-      throw Exception('MAL dates failed: ${r.body}');
+      _logFail('mal/my_list_status(dates)', r.statusCode); throw Exception('MAL dates failed: ${r.body}');
     }
   }
 
@@ -387,7 +393,7 @@ class Trackers {
       headers: {'Authorization': 'Bearer $accessToken'},
     );
     if (r.statusCode != 200 && r.statusCode != 404) {
-      throw Exception('MAL delete failed: ${r.body}');
+      _logFail('mal/my_list_status(delete)', r.statusCode); throw Exception('MAL delete failed: ${r.body}');
     }
   }
 }

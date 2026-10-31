@@ -15,6 +15,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import '../models.dart';
 import '../services/aniskip.dart';
+import '../services/app_logger.dart';
 import '../services/addons.dart';
 import '../services/addon_ids.dart';
 import '../store.dart';
@@ -133,6 +134,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
     await _applyHwDecProperty(nextHw);
     final src = _cur;
+    AppLogger().log('PLAYER',
+        'HW toggle -> ${nextHw ? 'HW' : 'SW'}, reopening at $currentPos');
     await _player.open(Media(src.url, start: currentPos), play: isPlaying);
     if (mounted) {
       setState(() {
@@ -154,6 +157,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _isHw = widget.settings.hardwareDecoding;
+    AppLogger().log('PLAYER',
+        'init: "${widget.anime.title}" ep ${widget.episode}, stream #${widget.initialIndex}, decoder=${_isHw ? 'HW' : 'SW'}');
     _player = Player(
       configuration: const PlayerConfiguration(
         bufferSize: 32 * 1024 * 1024, // 32MB stream buffer
@@ -168,6 +173,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _player.stream.tracks.listen(_autoSelectTracks);
     // Catch stream failures gracefully instead of crashing.
     _player.stream.error.listen((err) {
+      AppLogger().log('PLAYER', 'stream error: $err');
       if (mounted) setState(() => _status = 'Stream error: $err');
     });
     // Defer the video open until the Android surface is mounted (post-frame),
@@ -253,6 +259,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     final src = _cur;
     _autoSelected = false;
+    AppLogger().log('PLAYER',
+        'opening stream: ${AppLogger.urlLabel(src.url, src.quality)} (${src.name})');
     setState(() => _status = 'Opening ${src.name} …');
     await _player.open(Media(src.url));
     await _player.play();

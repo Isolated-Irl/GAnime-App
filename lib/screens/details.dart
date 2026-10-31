@@ -16,6 +16,7 @@ import '../services/anilist.dart';
 import '../widgets/ga_image.dart';
 import '../services/trackers.dart';
 import '../services/tracker_oauth.dart';
+import '../services/app_logger.dart';
 import 'streams.dart';
 import '../store.dart';
 import '../widgets/skeletons.dart';
@@ -526,12 +527,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
       if (ok != true) return;
       try {
         await action();
+        AppLogger().log('TRACKER', 'deleted entry from $trackerName');
         if (!dCtx.mounted) return;
         ScaffoldMessenger.of(dCtx).showSnackBar(SnackBar(
             content: Text('Deleted from $trackerName'),
             backgroundColor: const Color(0xFF1E1F24)));
         Navigator.of(dCtx).pop();
       } catch (e) {
+        AppLogger().log('TRACKER', 'delete from $trackerName failed: $e');
         if (!dCtx.mounted) return;
         ScaffoldMessenger.of(dCtx).showSnackBar(SnackBar(
             content: Text('Delete failed: $e'),
@@ -561,7 +564,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
               startDate: alEdit.startDate,
               endDate: alEdit.endDate);
           pushed.add('AniList');
-        } catch (_) {}
+          AppLogger().log('TRACKER', 'saveAll: pushed to AniList (ep ${alEdit.progress}, ${alEdit.status})');
+        } catch (e) {
+          AppLogger().log('TRACKER', 'saveAll: AniList push failed: $e');
+        }
       }
       if (skConnected && skId != null) {
         try {
@@ -573,7 +579,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
               status: skEdit.status,
               memo: skEdit.memo);
           pushed.add('Simkl');
-        } catch (_) {}
+          AppLogger().log('TRACKER', 'saveAll: pushed to Simkl (ep ${skEdit.progress}, ${skEdit.status})');
+        } catch (e) {
+          AppLogger().log('TRACKER', 'saveAll: Simkl push failed: $e');
+        }
       }
       if (malConnected && mId != null && mId > 0) {
         try {
@@ -586,7 +595,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 startDate: malEdit.startDate, finishDate: malEdit.endDate);
           }
           pushed.add('MAL');
-        } catch (_) {}
+          AppLogger().log('TRACKER', 'saveAll: pushed to MAL (ep ${malEdit.progress}, ${malEdit.status})');
+        } catch (e) {
+          AppLogger().log('TRACKER', 'saveAll: MAL push failed: $e');
+        }
       }
       await widget.onMarkWatched?.call(_anime, prog);
       if (mounted) {
