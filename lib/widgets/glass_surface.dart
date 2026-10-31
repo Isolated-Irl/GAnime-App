@@ -101,43 +101,31 @@ class _GlassPainter extends CustomPainter {
     final rrect = RRect.fromRectAndRadius(rect, Radius.circular(r));
     canvas.drawRRect(rrect, Paint()..color = fill);
 
-    // Cheaper-than-blur glass edge: gradient strokes. At sigma ~2.5 the
-    // difference vs ImageFilter.blur is invisible on a phone, but this
-    // costs ~zero GPU per frame — important when 12+ glass widgets fade
-    // in over a playing 4K video.
+    // Smooth glass edge: stroke the FULL rounded rect so the highlight
+    // flows continuously around corners with no seams or chips.
+    // Still cheaper than blur — flat gradient strokes, ~zero GPU per frame.
     canvas.save();
     canvas.clipRRect(rrect);
-    final glow = (blur + 6).clamp(6.0, 14.0);
-    // Top + left: white highlight bleeding inward.
+    // Highlight: bright at top-left, fading toward center.
     final hiPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
       ..shader = LinearGradient(
         begin: Alignment.topLeft,
-        end: Alignment(0, glow / s.height * 2),
+        end: Alignment.center,
         colors: [hi, hi.withValues(alpha: 0.0)],
       ).createShader(rect);
-    final topLeft = Path()
-      ..moveTo(r, 0)
-      ..lineTo(s.width - r, 0)
-      ..moveTo(0, r)
-      ..lineTo(0, s.height - r);
-    canvas.drawPath(topLeft, hiPaint);
-    // Bottom + right: dark shadow bleeding inward.
+    canvas.drawRRect(rrect, hiPaint);
+    // Shadow: dark at bottom-right, fading toward center.
     final shPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
       ..shader = LinearGradient(
         begin: Alignment.bottomRight,
-        end: Alignment(0, 1 - glow / s.height * 2),
+        end: Alignment.center,
         colors: [sh, sh.withValues(alpha: 0.0)],
       ).createShader(rect);
-    final bottomRight = Path()
-      ..moveTo(r, s.height)
-      ..lineTo(s.width - r, s.height)
-      ..moveTo(s.width, r)
-      ..lineTo(s.width, s.height - r);
-    canvas.drawPath(bottomRight, shPaint);
+    canvas.drawRRect(rrect, shPaint);
     canvas.restore();
   }
 

@@ -417,9 +417,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _cycleFit() {
     setState(() {
+      // mpvKt-style: Fit Screen -> Stretch -> Crop
       _fit = switch (_fit) {
-        BoxFit.contain => BoxFit.cover,
-        BoxFit.cover => BoxFit.fitWidth,
+        BoxFit.contain => BoxFit.fill,
+        BoxFit.fill => BoxFit.cover,
         _ => BoxFit.contain,
       };
     });
