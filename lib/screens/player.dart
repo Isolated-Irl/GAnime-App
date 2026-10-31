@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models.dart';
 import '../services/aniskip.dart';
 import '../services/app_logger.dart';
@@ -87,6 +88,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _episode = 0;
   String _status = '';
   late bool _isHw; // active decoder: true = HW (MediaCodec), false = SW (CPU)
+
+  /// Serializes every mpv open/reopen. Two overlapping Player.open() calls
+  /// (toggle / source switch / next-ep while the previous demuxer is still
+  /// tearing down) are a known native SIGSEGV trigger in mpv — queue instead.
+  Future<void> _openChain = Future.value();
+  bool _skipSeeking = false; // re-entrancy guard for AniSkip auto-seek
   BoxFit _fit = BoxFit.contain;
 
   StreamSource get _cur => widget.streams[_streamIndex];
@@ -107,8 +114,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final dynamic platform = _player.platform;
     try {
       await platform.setProperty('hwdec', _isHw ? 'mediacodec' : 'no');
-      await platform.setProperty('demuxer-max-bytes', '32MiB');
-      await platform.setProperty('demuxer-max-back-bytes', '16MiB');
+      // Tighter bounds: 32MB+16MB on top of the 32MB Player buffer was
+      // enough to get low-RAM devices OOM-killed (SIGKILL looks exactly
+      // like a "silent crash" in the app log).
+      await platform.setProperty('demuxer-max-bytes', '16MiB');
+      await platform.setProperty('demuxer-max-back-bytes', '8MiB');
+      // Torrent-backed streams drop the connection mid-playback; make
+      // libavformat reconnect instead of driving mpv into a bad state.
+      await platform.setProperty(
+          'stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
+      await platform.setProperty('network-timeout', '60');
+    } catch (_) {}
+    // Capture mpv's OWN log so the next native-side error is on disk
+    // before the process dies (Dart handlers can't see native crashes).
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      await platform.setProperty('log-file', '${dir.path}/mpv.log');
+      await platform.setProperty('msg-level', 'all=info');
+      AppLogger().log('PLAYER', 'mpv log -> ${dir.path}/mpv.log');
     } catch (_) {}
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -116,6 +139,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _loadSkips();
       }
     });
+  }
+
+  /// Queues [task] behind any in-flight open so mpv never sees two
+  /// concurrent opens. Errors don't break the chain.
+  Future<void> _enqueueOpen(Future<void> Function() task) {
+    final next = _openChain.then((_) => task());
+    _openChain = next.then((_) {}, onError: (_) {});
+    return next;
   }
 
   /// Toggles HW/SW decoding mid-playback. MediaCodec cannot hot-swap, so the
@@ -134,7 +165,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final src = _cur;
     AppLogger().log('PLAYER',
         'HW toggle -> ${nextHw ? 'HW' : 'SW'}, reopening at $currentPos');
-    await _player.open(Media(src.url, start: currentPos), play: isPlaying);
+    await _enqueueOpen(
+        () => _player.open(Media(src.url, start: currentPos), play: isPlaying));
     if (mounted) {
       setState(() {
         _status = nextHw
@@ -159,7 +191,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         'init: "${widget.anime.title}" ep ${widget.episode}, stream #${widget.initialIndex}, decoder=${_isHw ? 'HW' : 'SW'}');
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 32 * 1024 * 1024, // 32MB stream buffer
+        bufferSize: 16 * 1024 * 1024, // 16MB stream buffer (32MB + big demuxer bounds got low-RAM phones OOM-killed)
       ),
     );
     _controller = VideoController(
@@ -191,14 +223,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
           setState(() => _status = '85% reached — episode marked watched.');
         }
       }
-      if (widget.settings.aniskipEnabled) {
+      if (widget.settings.aniskipEnabled && !_skipSeeking) {
         for (final s in _skips) {
           final auto = (s.kind == 'op' && widget.settings.aniskipAutoOp) ||
               (s.kind == 'ed' && widget.settings.aniskipAutoEd);
           if (!auto) continue;
           final t = pos.inMilliseconds / 1000;
           if (t >= s.start && t < s.end) {
-            await _player.seek(Duration(milliseconds: (s.end * 1000).toInt()));
+            _skipSeeking = true;
+            try {
+              await _player
+                  .seek(Duration(milliseconds: (s.end * 1000).toInt()));
+            } catch (_) {}
+            if (mounted) setState(() => _skipSeeking = false);
             break;
           }
         }
@@ -260,8 +297,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     AppLogger().log('PLAYER',
         'opening stream: ${AppLogger.urlLabel(src.url, src.quality)} (${src.name})');
     setState(() => _status = 'Opening ${src.name} …');
-    await _player.open(Media(src.url));
-    await _player.play();
+    await _enqueueOpen(() async {
+      await _player.open(Media(src.url));
+      await _player.play();
+    });
     if (mounted) setState(() => _status = 'Playing ${src.name}');
   }
 
@@ -345,8 +384,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _autoSelected = false;
       _loadSkips();
       setState(() => _status = 'Episode $target · ${hit.$1.name}');
-      await _player.open(Media(hit.$2.url));
-      await _player.play();
+      await _enqueueOpen(() async {
+        await _player.open(Media(hit.$2.url));
+        await _player.play();
+      });
     } finally {
       _jumping = false;
     }
