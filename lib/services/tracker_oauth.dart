@@ -4,6 +4,7 @@
 // via App Links. Returns true on success, false on cancel/failure.
 // No UI of its own — callers refresh their own state afterwards.
 // (Logic mirrors TrackingSettingsScreen's _connect* handlers.)
+import 'dart:async';
 import 'dart:convert';
 import 'package:app_links/app_links.dart';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,9 @@ import 'trackers.dart';
 
 class TrackerOAuth {
   static const _appOAuthRedirect = 'https://ganime.pages.dev/app-oauth';
+  /// Shared AppLinks instance — avoids leaking a new broadcast subscription
+  /// on every connect attempt.
+  static final AppLinks _links = AppLinks();
   static const _relayUrl = 'https://ganime-relay.gp237372.workers.dev';
 
   /// AniList client for the APP (redirect:
@@ -34,7 +38,7 @@ class TrackerOAuth {
   /// Handles cold start (app killed while the browser held the flow).
   static Future<Uri?> _waitLink(String provider, String state,
       {bool fragment = false}) async {
-    final links = AppLinks();
+    final links = _links;
     bool matches(Uri? u) {
       if (u == null ||
           u.host != 'ganime.pages.dev' ||
@@ -50,8 +54,12 @@ class TrackerOAuth {
     final initial = await links.getInitialLink();
     if (matches(initial)) return initial;
     try {
-      return await links.uriLinkStream.firstWhere(matches);
+      return await links.uriLinkStream
+          .firstWhere(matches)
+          .timeout(const Duration(minutes: 2));
     } on StateError {
+      return null;
+    } on TimeoutException {
       return null;
     }
   }
