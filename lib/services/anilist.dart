@@ -285,6 +285,21 @@ query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort], \$sea
     return Anime.fromJson(data['Media'] as Map<String, dynamic>);
   }
 
+  /// Direct lookup by MyAnimeList ID. Returns null if AniList hasn't
+  /// linked this MAL ID yet. Prefer this over title search whenever
+  /// a MAL ID is available — it's exact, not a guess.
+  static Future<Anime?> byMalId(int malId) async {
+    const q = 'query (\$malId: Int) { Media(idMal: \$malId, type: ANIME) { $_fields } }';
+    try {
+      final data = await _post(q, {'malId': malId});
+      final media = data['Media'];
+      if (media == null) return null;
+      return Anime.fromJson(media as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Airing schedule for the next 7 days, as (weekday, anime) pairs.
   /// Pass [from]/[to] (seconds since epoch) for any other week, e.g.
   /// the Calendar week selector.

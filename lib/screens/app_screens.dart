@@ -2471,11 +2471,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
       });
     }
     if (!mounted) return;
+    // Extract MAL ID from key (mal_12345) so details can do a direct
+    // idMal lookup instead of fuzzy title matching.
+    int? malId;
+    if (e.key.startsWith('mal_')) {
+      malId = int.tryParse(e.key.substring(4));
+    }
     // Open immediately with a shell — DetailsScreen loads everything
     // (banner, episodes, etc.) in the background with its skeleton UI.
     final shell = Anime(
       id: alId ?? 0,
       anilistId: (alId != null && alId > 0) ? alId : null,
+      malId: malId,
       title: e.title,
       cover: e.cover,
       episodes: e.total,

@@ -213,28 +213,57 @@ class _DetailsScreenState extends State<DetailsScreen> {
             );
           } catch (_) {}
         } else if (_anime.title.isNotEmpty) {
-          // MAL (or any tracker) entries arrive without an AniList id —
-          // resolve via title search or the screen would show the
-          // skeleton forever.
-          try {
-            final res = await AniList.search(_anime.title);
-            final q = _anime.title.toLowerCase();
-            Anime? best;
-            for (final a in res) {
-              final t = a.title.toLowerCase();
-              if (t == q) { best = a; break; }
-              if (best == null && t.contains(q)) best = a;
-            }
-            best ??= res.isNotEmpty ? res.first : null;
-            if (best != null && best.id > 0) {
-              final fresh = await AniList.details(best.id);
-              _anime = fresh.copyWith(
-                anilistId: best.id,
-                nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
-                airingAt: _anime.airingAt ?? fresh.airingAt,
-              );
-            }
-          } catch (_) {}
+          // MAL (or any tracker) entries arrive without an AniList id.
+          // 1. Direct idMal lookup — exact, not a guess.
+          // 2. Fall back to title search only if idMal is missing/unlinked.
+          Anime? resolved;
+          final malId = _anime.malId;
+          if (malId != null && malId > 0) {
+            try {
+              resolved = await AniList.byMalId(malId);
+            } catch (_) {}
+          }
+          if (resolved == null) {
+            try {
+              final res = await AniList.search(_anime.title);
+              final q = _anime.title.toLowerCase();
+              Anime? best;
+              double bestScore = 0;
+              for (final a in res) {
+                // Score against all title fields; require 65+ confidence.
+                // Never blindly take res.first — a wrong bind corrupts tracking.
+                final titles = <String>[a.title];
+                for (final t in titles) {
+                  final tl = t.toLowerCase();
+                  double score = 0;
+                  if (tl == q) {
+                    score = 100;
+                  } else if (tl.contains(q) || q.contains(tl)) {
+                    // Jaccard-like: prefer high word overlap
+                    final qw = q.split(' ').toSet();
+                    final tw = tl.split(' ').toSet();
+                    final inter = qw.intersection(tw).length;
+                    final union = qw.union(tw).length;
+                    score = union == 0 ? 0 : (inter / union) * 85;
+                  }
+                  if (score > bestScore) {
+                    bestScore = score;
+                    best = a;
+                  }
+                }
+              }
+              if (bestScore >= 65) resolved = best;
+            } catch (_) {}
+          }
+          if (resolved != null && resolved.id > 0) {
+            final fresh = await AniList.details(resolved.id);
+            _anime = fresh.copyWith(
+              anilistId: resolved.id,
+              malId: malId,
+              nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
+              airingAt: _anime.airingAt ?? fresh.airingAt,
+            );
+          }
         }
       }
       final a = _anime;
