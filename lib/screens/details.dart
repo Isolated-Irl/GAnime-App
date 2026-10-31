@@ -1899,44 +1899,115 @@ class _DetailsScreenState extends State<DetailsScreen> {
   @override
   Widget build(BuildContext context) {
     // Never render thin data — show skeleton while waiting for full data.
-    if (!_hasFullData) {
+    // Show skeleton only while _load() is still fetching.
+    // Gate on _loading too: anime without a bannerImage on AniList would
+    // otherwise stick on skeleton forever (_hasFullData never flips).
+    if (!_hasFullData && _loading) {
+      Widget block(double w, double h, double r) => Container(
+            height: h,
+            width: w,
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(r),
+            ),
+          );
       return Scaffold(
         backgroundColor: Colors.black,
         body: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              skeletonHero(),
-              const SizedBox(height: 16),
+              // 1. Banner (matches _AspectHero: 200px, full-bleed).
+              block(double.infinity, 200, 0),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      height: 28,
-                      width: 200,
-                      decoration: BoxDecoration(
-                        color: Colors.white12,
-                        borderRadius: BorderRadius.circular(6),
+                    // 2. Metadata chips (score, format, status, year, studio).
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        block(54, 26, 12),
+                        block(48, 26, 12),
+                        block(86, 26, 12),
+                        block(52, 26, 12),
+                        block(48, 26, 12),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    // 3. Title.
+                    block(double.infinity, 28, 6),
+                    const SizedBox(height: 6),
+                    block(220, 28, 6),
+                    // 4. Romaji subtitle.
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: block(220, 14, 4),
+                    ),
+                    // 5. Genre chips.
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          block(68, 28, 16),
+                          block(88, 28, 16),
+                          block(74, 28, 16),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Container(
-                      height: 16,
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: Colors.white10,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Divider(height: 1, color: Colors.white12),
                     ),
+                    // 6. About + description.
+                    block(140, 18, 4),
                     const SizedBox(height: 8),
+                    block(double.infinity, 14, 4),
+                    const SizedBox(height: 7),
+                    block(double.infinity, 14, 4),
+                    const SizedBox(height: 7),
+                    block(double.infinity, 14, 4),
+                    const SizedBox(height: 7),
+                    block(240, 14, 4),
+                    const SizedBox(height: 12),
+                    // 7. Play button.
+                    block(double.infinity, 52, 26),
+                    const SizedBox(height: 10),
+                    // 8. Action row (bookmark + check).
+                    Row(
+                      children: [
+                        Expanded(child: block(double.infinity, 56, 16)),
+                        const SizedBox(width: 10),
+                        Expanded(child: block(double.infinity, 56, 16)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    // 9. Watching Progress card.
                     Container(
-                      height: 16,
-                      width: 250,
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white10,
-                        borderRadius: BorderRadius.circular(6),
+                        color: const Color(0xFF1E1F24),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(child: block(120, 14, 4)),
+                              block(96, 34, 12),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          block(80, 22, 4),
+                          const SizedBox(height: 10),
+                          block(double.infinity, 6, 3),
+                        ],
                       ),
                     ),
                   ],
