@@ -9,11 +9,14 @@
 //     6s ID-bridge cap, 12s fetch cap), auto-advance on playback end
 //  - 85% auto-mark, AniSkip (buttons + auto), audio/subtitle language
 //    auto-select via track events, buffering spinner, orientation restore
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import '../services/aniskip.dart';
 import '../services/addons.dart';
@@ -28,6 +31,35 @@ String fmtDuration(Duration d) {
   final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
   final h = d.inHours;
   return h > 0 ? '$h:$m:$s' : '$m:$s';
+}
+
+/// Local-only player preferences (SharedPreferences, never cloud-synced).
+/// Holds the subtitle style map and the subtitle/audio delays, each gated
+/// by its own opt-in "Remember across sessions" toggle.
+class PlayerPrefs {
+  static const _k = 'ganime_player_prefs';
+  static SharedPreferences? _instance;
+
+  static Future<SharedPreferences> get _p async =>
+      _instance ??= await SharedPreferences.getInstance();
+
+  static Future<Map<String, dynamic>> _all() async {
+    final raw = (await _p).getString(_k);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<dynamic> get(String key) async => (await _all())[key];
+
+  static Future<void> set(String key, dynamic value) async {
+    final m = await _all();
+    m[key] = value;
+    await (await _p).setString(_k, jsonEncode(m));
+  }
 }
 
 class PlayerScreen extends StatefulWidget {
@@ -130,6 +162,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await platform.setProperty(
           'stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       await platform.setProperty('network-timeout', '60');
+      // ASS/SSA subs (i.e. every anime torrent) ignore sub-font-size
+      // unless overridden — without 'force' the font-size slider can
+      // never affect them.
+      await platform.setProperty('sub-ass-override', 'force');
+      // Apply remembered subtitle style / delays, but only for the
+      // features whose "Remember across sessions" toggle was left on.
+      try {
+        if (await PlayerPrefs.get('remember_sub_style') == true) {
+          final style = (await PlayerPrefs.get('sub_style')) as Map?;
+          style?.forEach((k, v) => platform.setProperty('$k', '$v'));
+        }
+        if (await PlayerPrefs.get('remember_sub_delay') == true) {
+          final ms = await PlayerPrefs.get('sub_delay_ms');
+          if (ms is num) {
+            await platform.setProperty('sub-delay', (ms / 1000.0).toString());
+          }
+        }
+        if (await PlayerPrefs.get('remember_audio_delay') == true) {
+          final ms = await PlayerPrefs.get('audio_delay_ms');
+          if (ms is num) {
+            await platform.setProperty('audio-delay', (ms / 1000.0).toString());
+          }
+        }
+      } catch (_) {}
     } catch (_) {}
     // Capture mpv's OWN log so the next native-side error is on disk
     // before the process dies (Dart handlers can't see native crashes).
@@ -597,7 +653,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _setMpvProp(String key, dynamic value) async {
     try {
       final dynamic platform = _player.platform;
-      await platform.setProperty(key, value);
+      // media_kit's setProperty takes a String; a raw double never reaches
+      // mpv (type/cast error, silently swallowed). Also strip trailing ".0"
+      // — mpv's integer options (sub-font-size, sub-pos) reject "55.0".
+      final String s;
+      if (value is double) {
+        s = value.truncateToDouble() == value
+            ? value.toInt().toString()
+            : value.toString();
+      } else {
+        s = value.toString();
+      }
+      await platform.setProperty(key, s);
     } catch (_) {}
   }
 
@@ -610,21 +677,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
         insetPadding: const EdgeInsets.all(16),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        child: GlassSurface(
-          radius: 18,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 520),
-            child: _SubtitleSettingsPanel(
-              onSet: _setMpvProp,
-            ),
-          ),
+        child: FutureBuilder<Map<String, dynamic>>(
+          future: _rememberedSubStyle(),
+          builder: (context, snap) {
+            final initial = snap.data ?? const <String, dynamic>{};
+            return GlassSurface(
+              radius: 18,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 560),
+                child: _SubtitleSettingsPanel(
+                  onSet: _setMpvProp,
+                  initial: initial,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
+  /// Persisted subtitle style ('sub-*' keys) — only when its toggle was on.
+  Future<Map<String, dynamic>> _rememberedSubStyle() async {
+    if (await PlayerPrefs.get('remember_sub_style') != true) return {};
+    final m = await PlayerPrefs.get('sub_style');
+    return (m as Map?)?.cast<String, dynamic>() ?? {};
+  }
+
   /// Subtitle delay with Voice heard / Text seen auto-sync.
-  void _showSubtitleDelay() {
+  Future<void> _showSubtitleDelay() async {
+    double initial = 0;
+    if (await PlayerPrefs.get('remember_sub_delay') == true) {
+      final ms = await PlayerPrefs.get('sub_delay_ms');
+      if (ms is num) initial = ms.toDouble();
+    }
+    if (!mounted) return;
     showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
@@ -640,6 +727,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             getPosition: () => _player.state.position.inMilliseconds / 1000.0,
             heardLabel: 'Voice heard',
             seenLabel: 'Text seen',
+            persistKey: 'sub_delay_ms',
+            rememberKey: 'remember_sub_delay',
+            initialDelayMs: initial,
           ),
         ),
       ),
@@ -647,7 +737,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   /// Audio delay with Sound heard / Sound spotted auto-sync.
-  void _showAudioDelay() {
+  Future<void> _showAudioDelay() async {
+    double initial = 0;
+    if (await PlayerPrefs.get('remember_audio_delay') == true) {
+      final ms = await PlayerPrefs.get('audio_delay_ms');
+      if (ms is num) initial = ms.toDouble();
+    }
+    if (!mounted) return;
     showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
@@ -663,6 +759,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             getPosition: () => _player.state.position.inMilliseconds / 1000.0,
             heardLabel: 'Sound heard',
             seenLabel: 'Sound spotted',
+            persistKey: 'audio_delay_ms',
+            rememberKey: 'remember_audio_delay',
+            initialDelayMs: initial,
           ),
         ),
       ),
@@ -747,9 +846,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 /// Subtitle style settings panel (mpvKt-style).
 /// Sections: Typography, Colors, Miscellaneous.
+/// Values shown on open come from [initial] (the remembered style, if any);
+/// the "Remember across sessions" switch opts into persisting changes.
 class _SubtitleSettingsPanel extends StatefulWidget {
   final Future<void> Function(String key, dynamic value) onSet;
-  const _SubtitleSettingsPanel({required this.onSet});
+  final Map<String, dynamic> initial;
+  const _SubtitleSettingsPanel({
+    required this.onSet,
+    this.initial = const <String, dynamic>{},
+  });
 
   @override
   State<_SubtitleSettingsPanel> createState() => _SubtitleSettingsPanelState();
@@ -761,21 +866,84 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
   bool _miscOpen = false;
 
   // Typography state
-  bool _bold = false;
-  bool _italic = false;
-  String _align = 'center'; // left/center/right
-  double _fontSize = 55;
-  double _borderSize = 3;
-  double _shadowOffset = 0;
-  int _borderStyle = 1; // 0=none, 1=outline+shadow, 2=opaque box
+  late bool _bold;
+  late bool _italic;
+  late String _align; // left/center/right
+  late double _fontSize;
+  late double _borderSize;
+  late double _shadowOffset;
+  late int _borderStyle; // 0=none, 1=outline+shadow, 2=opaque box
 
   // Colors state (0-255)
-  int _r = 255, _g = 255, _b = 255, _a = 255;
+  late int _r, _g, _b, _a;
 
   // Misc state
-  bool _assOverride = false;
-  double _scale = 1.0;
-  double _position = 100;
+  late bool _assOverride;
+  late double _scale;
+  late double _position;
+
+  // Persistence toggle
+  late bool _remember;
+
+  static double _d(dynamic v, double fallback) {
+    if (v is num) return v.toDouble();
+    return double.tryParse('$v') ?? fallback;
+  }
+
+  static String _fmt(double v) =>
+      v.truncateToDouble() == v ? v.toInt().toString() : v.toString();
+
+  @override
+  void initState() {
+    super.initState();
+    final i = widget.initial;
+    _bold = i['sub-bold'] == 'yes';
+    _italic = i['sub-italic'] == 'yes';
+    _align = (i['sub-align-x'] as String?) ?? 'center';
+    _fontSize = _d(i['sub-font-size'], 55);
+    _borderSize = _d(i['sub-border-size'], 3);
+    _shadowOffset = _d(i['sub-shadow-offset'], 0);
+    _borderStyle = int.tryParse('${i['sub-border-style'] ?? 1}') ?? 1;
+    _r = _g = _b = _a = 255;
+    final c = '${i['sub-color'] ?? ''}';
+    if (c.length >= 9 && c.startsWith('#')) {
+      _r = int.tryParse(c.substring(1, 3), radix: 16) ?? 255;
+      _g = int.tryParse(c.substring(3, 5), radix: 16) ?? 255;
+      _b = int.tryParse(c.substring(5, 7), radix: 16) ?? 255;
+      _a = int.tryParse(c.substring(7, 9), radix: 16) ?? 255;
+    }
+    // Player boots with 'force' so the size slider works on ASS subs.
+    _assOverride = i['sub-ass-override'] != 'no';
+    _scale = _d(i['sub-scale'], 1.0);
+    _position = _d(i['sub-pos'], 100);
+    _remember = false;
+    PlayerPrefs.get('remember_sub_style').then((v) {
+      if (mounted) setState(() => _remember = v == true);
+    });
+  }
+
+  /// Current style as mpv-ready strings (also what gets persisted).
+  Map<String, String> get _style => {
+        'sub-bold': _bold ? 'yes' : 'no',
+        'sub-italic': _italic ? 'yes' : 'no',
+        'sub-align-x': _align,
+        'sub-font-size': _fontSize.round().toString(),
+        'sub-border-size': _fmt(_borderSize),
+        'sub-shadow-offset': _fmt(_shadowOffset),
+        'sub-border-style': '$_borderStyle',
+        'sub-color': _colorHex,
+        'sub-ass-override': _assOverride ? 'force' : 'no',
+        'sub-scale': _fmt(_scale),
+        'sub-pos': _position.round().toString(),
+      };
+
+  Future<void> _save() => PlayerPrefs.set('sub_style', _style);
+
+  /// Apply to the player now; persist only when remember is on.
+  void _set(String key, dynamic value) {
+    widget.onSet(key, value);
+    if (_remember) _save();
+  }
 
   Widget _sectionHeader(String title, bool open, VoidCallback onTap) {
     return InkWell(
@@ -886,40 +1054,40 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
                 children: [
                   _styleBtn(Icons.format_bold, _bold, () {
                     setState(() => _bold = !_bold);
-                    widget.onSet('sub-bold', _bold ? 'yes' : 'no');
+                    _set('sub-bold', _bold ? 'yes' : 'no');
                   }),
                   const SizedBox(width: 8),
                   _styleBtn(Icons.format_italic, _italic, () {
                     setState(() => _italic = !_italic);
-                    widget.onSet('sub-italic', _italic ? 'yes' : 'no');
+                    _set('sub-italic', _italic ? 'yes' : 'no');
                   }),
                   const SizedBox(width: 16),
                   _alignBtn(Icons.format_align_left, _align == 'left', () {
                     setState(() => _align = 'left');
-                    widget.onSet('sub-align-x', 'left');
+                    _set('sub-align-x', 'left');
                   }),
                   _alignBtn(Icons.format_align_center, _align == 'center', () {
                     setState(() => _align = 'center');
-                    widget.onSet('sub-align-x', 'center');
+                    _set('sub-align-x', 'center');
                   }),
                   _alignBtn(Icons.format_align_right, _align == 'right', () {
                     setState(() => _align = 'right');
-                    widget.onSet('sub-align-x', 'right');
+                    _set('sub-align-x', 'right');
                   }),
                 ],
               ),
             ),
             _sliderRow('Font size', _fontSize, 10, 100, (v) {
               setState(() => _fontSize = v);
-              widget.onSet('sub-font-size', v);
+              _set('sub-font-size', v);
             }),
             _sliderRow('Border size', _borderSize, 0, 10, (v) {
               setState(() => _borderSize = v);
-              widget.onSet('sub-border-size', v);
+              _set('sub-border-size', v);
             }),
             _sliderRow('Shadow offset', _shadowOffset, 0, 10, (v) {
               setState(() => _shadowOffset = v);
-              widget.onSet('sub-shadow-offset', v);
+              _set('sub-shadow-offset', v);
             }),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -940,7 +1108,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
                     onChanged: (v) {
                       if (v != null) {
                         setState(() => _borderStyle = v);
-                        widget.onSet('sub-border-style', v.toString());
+                        _set('sub-border-style', v.toString());
                       }
                     },
                   ),
@@ -955,19 +1123,19 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
           if (_colorsOpen) ...[
             _colorSlider('Red', _r, Colors.red, (v) {
               setState(() => _r = v.toInt());
-              widget.onSet('sub-color', _colorHex);
+              _set('sub-color', _colorHex);
             }),
             _colorSlider('Green', _g, Colors.green, (v) {
               setState(() => _g = v.toInt());
-              widget.onSet('sub-color', _colorHex);
+              _set('sub-color', _colorHex);
             }),
             _colorSlider('Blue', _b, Colors.blue, (v) {
               setState(() => _b = v.toInt());
-              widget.onSet('sub-color', _colorHex);
+              _set('sub-color', _colorHex);
             }),
             _colorSlider('Alpha', _a, Colors.white, (v) {
               setState(() => _a = v.toInt());
-              widget.onSet('sub-color', _colorHex);
+              _set('sub-color', _colorHex);
             }),
           ],
           const Divider(color: Colors.white12, height: 1),
@@ -981,18 +1149,33 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
               value: _assOverride,
               onChanged: (v) {
                 setState(() => _assOverride = v);
-                widget.onSet('sub-ass-override', v ? 'force' : 'no');
+                _set('sub-ass-override', v ? 'force' : 'no');
               },
             ),
             _sliderRow('Scale', _scale, 0.1, 3.0, (v) {
               setState(() => _scale = v);
-              widget.onSet('sub-scale', v);
+              _set('sub-scale', v);
             }),
             _sliderRow('Position', _position, 0, 100, (v) {
               setState(() => _position = v);
-              widget.onSet('sub-pos', v);
+              _set('sub-pos', v);
             }),
           ],
+          // ---------- Persistence ----------
+          SwitchListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            title: const Text('Remember across sessions',
+                style: TextStyle(color: Colors.white, fontSize: 13)),
+            subtitle: const Text('Save these subtitle settings for every video',
+                style: TextStyle(color: Colors.white38, fontSize: 11)),
+            value: _remember,
+            onChanged: (v) {
+              setState(() => _remember = v);
+              PlayerPrefs.set('remember_sub_style', v);
+              if (v) _save(); // capture the current style immediately
+            },
+          ),
           const SizedBox(height: 16),
         ],
       ),
@@ -1039,12 +1222,20 @@ class _DelayPanel extends StatefulWidget {
   final double Function() getPosition;
   final String heardLabel;
   final String seenLabel;
+  /// SharedPreferences keys for the opt-in "Remember across sessions"
+  /// toggle: [persistKey] holds the delay in ms, [rememberKey] the bool.
+  final String persistKey;
+  final String rememberKey;
+  final double initialDelayMs;
   const _DelayPanel({
     required this.title,
     required this.onSet,
     required this.getPosition,
     required this.heardLabel,
     required this.seenLabel,
+    required this.persistKey,
+    required this.rememberKey,
+    this.initialDelayMs = 0,
   });
 
   @override
@@ -1052,13 +1243,24 @@ class _DelayPanel extends StatefulWidget {
 }
 
 class _DelayPanelState extends State<_DelayPanel> {
-  double _delayMs = 0;
+  late double _delayMs;
   double? _heardAt;
   double? _seenAt;
+  bool _remember = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _delayMs = widget.initialDelayMs;
+    PlayerPrefs.get(widget.rememberKey).then((v) {
+      if (mounted) setState(() => _remember = v == true);
+    });
+  }
 
   void _apply(double ms) {
     setState(() => _delayMs = ms);
     widget.onSet(ms / 1000.0); // mpv uses seconds
+    if (_remember) PlayerPrefs.set(widget.persistKey, ms);
   }
 
   void _tryAutoSync() {
@@ -1166,7 +1368,20 @@ class _DelayPanelState extends State<_DelayPanel> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Remember across sessions',
+                style: TextStyle(color: Colors.white, fontSize: 13)),
+            subtitle: Text('Save this delay for every video',
+                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            value: _remember,
+            onChanged: (v) {
+              setState(() => _remember = v);
+              PlayerPrefs.set(widget.rememberKey, v);
+              if (v) PlayerPrefs.set(widget.persistKey, _delayMs);
+            },
+          ),
           TextButton(
             onPressed: () => _apply(0),
             child: const Text('Reset to 0'),
