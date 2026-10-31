@@ -32,7 +32,8 @@ class GlassPlayerControls extends StatefulWidget {
   final VoidCallback? onEpisodes;      // episode list panel
   final VoidCallback? onExternal;      // open in external player
   final VoidCallback? onNextEpisode;   // jump to next episode
-  final bool hwDecoding;               // HW decoder badge (display only)
+  final bool isHw;                     // active decoder state (tappable badge)
+  final VoidCallback? onToggleHw;        // toggles HW/SW decoding mid-playback
 
   const GlassPlayerControls({
     super.key,
@@ -50,7 +51,8 @@ class GlassPlayerControls extends StatefulWidget {
     this.onEpisodes,
     this.onExternal,
     this.onNextEpisode,
-    this.hwDecoding = true,
+    this.isHw = true,
+    this.onToggleHw,
   });
 
   @override
@@ -263,18 +265,29 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
               onTap: widget.onExternal!),
           const SizedBox(width: 8),
         ],
-        if (widget.hwDecoding)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: GestureDetector(
+            onTap: widget.onToggleHw,
             child: GlassSurface(
               radius: 12,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                child: Text('HW+',
-                    style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                child: Text(
+                  widget.isHw ? 'HW' : 'SW',
+                  style: TextStyle(
+                    color: widget.isHw
+                        ? const Color(0xFF22C55E)
+                        : Colors.orangeAccent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                  ),
+                ),
               ),
             ),
           ),
+        ),
         GlassButton(icon: Icons.music_note, size: 40, iconSize: 20, circle: true, onTap: widget.onAudio),
         const SizedBox(width: 8),
         GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSubs),

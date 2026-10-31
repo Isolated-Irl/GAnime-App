@@ -83,9 +83,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _streamIndex = 0;
   int _episode = 0;
   String _status = '';
+  late bool _isHw; // active decoder: true = HW (MediaCodec), false = SW (CPU)
   BoxFit _fit = BoxFit.contain;
 
   StreamSource get _cur => widget.streams[_streamIndex];
+
+  /// Sets mpv's native hwdec property ('auto-safe' = MediaCodec HW, 'no' = CPU SW).
+  Future<void> _applyHwDecProperty(bool hw) async {
+    final dynamic platform = _player.platform;
+    try {
+      await platform.setProperty('hwdec', hw ? 'auto-safe' : 'no');
+      await platform.setProperty('vo', 'gpu');
+    } catch (_) {}
+  }
+
+  /// Toggles HW/SW decoding mid-playback. MediaCodec cannot hot-swap, so the
+  /// stream is re-opened at the exact current position.
+  Future<void> _toggleHwDec() async {
+    if (widget.streams.isEmpty) return;
+    final nextHw = !_isHw;
+    final currentPos = _player.state.position;
+    final isPlaying = _player.state.playing;
+    setState(() {
+      _isHw = nextHw;
+      _status =
+          nextHw ? 'Switching to Hardware (HW)...' : 'Switching to Software (SW)...';
+    });
+    await _applyHwDecProperty(nextHw);
+    final src = _cur;
+    await _player.open(Media(src.url, start: currentPos), play: isPlaying);
+    if (mounted) {
+      setState(() {
+        _status = nextHw
+            ? 'Decoder: HW (MediaCodec)'
+            : 'Decoder: SW (Software CPU)';
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -96,8 +130,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
       DeviceOrientation.landscapeRight,
     ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _player = Player();
-    _controller = VideoController(_player);
+    _isHw = widget.settings.hardwareDecoding;
+    _player = Player(
+      configuration: const PlayerConfiguration(
+        bufferSize: 32 * 1024 * 1024, // 32MB stream buffer
+      ),
+    );
+    _controller = VideoController(
+      _player,
+      configuration: const VideoControllerConfiguration(
+        enableHardwareAcceleration: true,
+      ),
+    );
+    _applyHwDecProperty(_isHw);
     _player.stream.tracks.listen(_autoSelectTracks);
     _openCurrent();
     _loadSkips();
@@ -464,6 +509,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           GlassPlayerControls(
             player: _player,
+            isHw: _isHw,
+            onToggleHw: _toggleHwDec,
             title: '${widget.anime.title} — EP $_episode',
             status: _status,
             skips: _skips,

@@ -615,16 +615,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
             required int divisions,
             required ValueChanged<double> onChanged,
           }) {
+            final accent = Theme.of(dCtx).colorScheme.primary;
             return SliderTheme(
               data: SliderTheme.of(dCtx).copyWith(
                 trackHeight: 18,
-                activeTrackColor: green,
+                activeTrackColor: accent,
                 inactiveTrackColor:
                     Colors.white.withValues(alpha: 0.12),
                 thumbShape:
                     const RoundSliderThumbShape(enabledThumbRadius: 12),
                 thumbColor: Colors.white,
-                overlayColor: green.withValues(alpha: 0.25),
+                overlayColor: accent.withValues(alpha: 0.25),
                 overlayShape:
                     const RoundSliderOverlayShape(overlayRadius: 20),
               ),
@@ -662,11 +663,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                color: green,
+                color: Theme.of(dCtx).colorScheme.primary,
                 borderRadius: BorderRadius.circular(999),
                 boxShadow: [
                   BoxShadow(
-                      color: green.withValues(alpha: 0.35), blurRadius: 12)
+                      color: Theme.of(dCtx)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.35),
+                      blurRadius: 12)
                 ],
               ),
               child: DropdownButtonHideUnderline(
@@ -908,7 +913,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           }) {
             return GlassSurface(
               radius: 22,
-              fill: const Color(0x40FFFFFF),
+              fill: const Color(0x40000000),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -1062,7 +1067,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 borderRadius: BorderRadius.circular(28)),
             child: GlassSurface(
               radius: 28,
-              fill: const Color(0x4DFFFFFF),
+              fill: const Color(0x4D000000),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(18),
                 child: Column(
