@@ -165,6 +165,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       // ASS/SSA subs (i.e. every anime torrent) ignore sub-font-size
       // unless overridden — without 'force' the font-size slider can
       // never affect them.
+      // Re-enable mpv's native libass renderer (media_kit sets this to 'no'
+      // on init to avoid duplicates with Flutter's SubtitleView).
+      await platform.setProperty('sub-visibility', 'yes');
       await platform.setProperty('sub-ass-override', 'force');
       // Apply remembered subtitle style / delays, but only for the
       // features whose "Remember across sessions" toggle was left on.
@@ -809,6 +812,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             controls: NoVideoControls,
             fit: _fit,
             fill: Colors.black,
+            subtitleViewConfiguration: const SubtitleViewConfiguration(
+              visible: false,
+            ),
           ),
           GlassPlayerControls(
             player: _player,
@@ -1079,7 +1085,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
             ),
             _sliderRow('Font size', _fontSize, 10, 100, (v) {
               setState(() => _fontSize = v);
-              _set('sub-font-size', v);
+              _set('sub-font-size', v.round());
             }),
             _sliderRow('Border size', _borderSize, 0, 10, (v) {
               setState(() => _borderSize = v);
@@ -1158,7 +1164,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
             }),
             _sliderRow('Position', _position, 0, 100, (v) {
               setState(() => _position = v);
-              _set('sub-pos', v);
+              _set('sub-pos', v.round());
             }),
           ],
           // ---------- Persistence ----------
