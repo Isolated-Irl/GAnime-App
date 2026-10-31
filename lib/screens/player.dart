@@ -91,24 +91,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   StreamSource get _cur => widget.streams[_streamIndex];
 
-  /// Sets mpv's native hwdec property ('auto-safe' = MediaCodec HW, 'no' = CPU SW).
+  /// Sets mpv's native hwdec property ('mediacodec' = Android HW, 'no' = CPU SW).
   Future<void> _applyHwDecProperty(bool hw) async {
     final dynamic platform = _player.platform;
     try {
-      await platform.setProperty('hwdec', hw ? 'auto-safe' : 'no');
-      await platform.setProperty('vo', 'gpu');
+      // NEVER set 'vo' or 'framedrop' manually on Android.
+      // media_kit_video manages the native SurfaceTexture context.
+      await platform.setProperty('hwdec', hw ? 'mediacodec' : 'no');
     } catch (_) {}
   }
 
-  /// Boot-time mpv setup: applies the boot decoder mode (respects _isHw),
-  /// bounds demuxer memory, then opens the stream on the next frame so the
-  /// Android SurfaceTexture is attached before the codec starts decoding.
+  /// Boot-time mpv setup: applies the decoder mode, bounds demuxer memory,
+  /// and defers video open until the Android SurfaceTexture is attached.
   Future<void> _initMpvAndOpen() async {
     final dynamic platform = _player.platform;
     try {
-      await platform.setProperty('hwdec', _isHw ? 'auto-safe' : 'no');
-      await platform.setProperty('vo', 'gpu');
-      await platform.setProperty('framedrop', 'vo');
+      await platform.setProperty('hwdec', _isHw ? 'mediacodec' : 'no');
       await platform.setProperty('demuxer-max-bytes', '32MiB');
       await platform.setProperty('demuxer-max-back-bytes', '16MiB');
     } catch (_) {}
