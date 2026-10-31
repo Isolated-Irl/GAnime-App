@@ -114,11 +114,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final dynamic platform = _player.platform;
     try {
       await platform.setProperty('hwdec', _isHw ? 'mediacodec' : 'no');
-      // Tighter bounds: 32MB+16MB on top of the 32MB Player buffer was
-      // enough to get low-RAM devices OOM-killed (SIGKILL looks exactly
-      // like a "silent crash" in the app log).
-      await platform.setProperty('demuxer-max-bytes', '16MiB');
-      await platform.setProperty('demuxer-max-back-bytes', '8MiB');
+      // Generous forward cache: torrent swarms are slow and bursty; small
+      // buffers = constant underrun = "heavy" stutter. mpvKt-class players
+      // cache far more than this. (OOM was only ever a hypothesis — the
+      // crash turned out to be the open-race, not memory.)
+      await platform.setProperty('demuxer-max-bytes', '64MiB');
+      await platform.setProperty('demuxer-max-back-bytes', '32MiB');
+      await platform.setProperty('demuxer-readahead-secs', '10');
+      // If the GPU/compositor falls behind, DROP late frames instead of
+      // letting latency pile up — this is what makes VLC feel "light".
+      await platform.setProperty('framedrop', 'vo');
+      await platform.setProperty('vd-lavc-framedrop', 'nonkey');
       // Torrent-backed streams drop the connection mid-playback; make
       // libavformat reconnect instead of driving mpv into a bad state.
       await platform.setProperty(
@@ -191,7 +197,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         'init: "${widget.anime.title}" ep ${widget.episode}, stream #${widget.initialIndex}, decoder=${_isHw ? 'HW' : 'SW'}');
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 16 * 1024 * 1024, // 16MB stream buffer (32MB + big demuxer bounds got low-RAM phones OOM-killed)
+        bufferSize: 64 * 1024 * 1024, // 64MB stream buffer — absorbs torrent swarm bursts
       ),
     );
     _controller = VideoController(
