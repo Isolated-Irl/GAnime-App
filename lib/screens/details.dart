@@ -167,13 +167,16 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   Future<void> _load() async {
     try {
+      // Capture the key BEFORE any title-resolution replaces _anime,
+      // so the cache is saved and looked up under the same key.
+      final initialKey = _cacheKey;
       // Instant restore from cache; the network refresh below still runs
       // silently to keep data fresh.
-      final cached = _detailsCache[_cacheKey];
+      final cached = _detailsCache[initialKey];
       if (cached != null && mounted) {
         setState(() {
           _anime = cached;
-          _episodes = _episodeCache[_cacheKey] ?? _episodes;
+          _episodes = _episodeCache[initialKey] ?? _episodes;
           _loading = false;
         });
       }
@@ -291,8 +294,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
           // Website default: jump to the first range when the list is long.
           if (_rangeFrom == null && _total > 48) _rangeFrom = 1;
         });
-        _detailsCache[_cacheKey] = _anime;
-        _episodeCache[_cacheKey] = eps;
+        _detailsCache[initialKey] = _anime;
+        _episodeCache[initialKey] = eps;
+        // Also save under the resolved key so both lookups hit.
+        final resolvedKey = _cacheKey;
+        if (resolvedKey != initialKey) {
+          _detailsCache[resolvedKey] = _anime;
+          _episodeCache[resolvedKey] = eps;
+        }
       }
     } catch (e) {
       if (mounted) {
