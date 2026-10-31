@@ -14,9 +14,12 @@ const kPosterArtRatio = 2 / 3;
 const kPosterTextReserve = 64.0;
 
 /// Grid cell aspect ratio for a poster card of the given cell [width]:
-/// fixed 2:3 art plus the reserved text block.
-double posterGridChildAspectRatio(double width) =>
-    width / (width / kPosterArtRatio + kPosterTextReserve);
+/// fixed 2:3 art plus the reserved text block. [textScale] is the system
+/// font scale — the reserve grows with it so large-text settings never
+/// push the title/meta under the next row (same bug class as the library
+/// grid's hardcoded 0.54).
+double posterGridChildAspectRatio(double width, [double textScale = 1.0]) =>
+    width / (width / kPosterArtRatio + 15 + 50 * textScale);
 
 class AnimeCard extends StatelessWidget {
   final Anime anime;

@@ -76,7 +76,8 @@ class AnimeGrid extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            childAspectRatio: posterGridChildAspectRatio(cellWidth),
+            childAspectRatio: posterGridChildAspectRatio(
+                cellWidth, MediaQuery.textScalerOf(context).scale(1.0)),
             crossAxisSpacing: spacing,
             mainAxisSpacing: 8,
           ),
@@ -1315,35 +1316,24 @@ class _SearchScreenState extends State<SearchScreen> {
             ),
           ),
           const Spacer(),
+          // Sort dropdown removed: those AniList MediaSort options only work
+          // through the filter sheet, not plain search — and search already
+          // sorts by relevance.
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            height: 38,
             decoration: BoxDecoration(
               color: GaColors.of(context).card,
               borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white10),
             ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String?>(
-                value: _sort,
-                dropdownColor: GaColors.of(context).card,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-                items: [
-                  const DropdownMenuItem<String?>(
-                      value: null, child: Text('Relevance')),
-                  ..._anilistSortLabels.entries.map((e) =>
-                      DropdownMenuItem<String?>(
-                          value: e.key, child: Text(e.value))),
-                ],
-                onChanged: (v) {
-                  setState(() => _sort = v);
-                  _search();
-                },
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _viewToggle('grid', Icons.grid_view_rounded, 'Grid view'),
+                _viewToggle('list', Icons.view_list_rounded, 'List view'),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          _viewToggle('grid', Icons.grid_view_rounded, 'Grid view'),
-          const SizedBox(width: 8),
-          _viewToggle('list', Icons.view_list_rounded, 'List view'),
         ],
       ),
     );
@@ -2194,6 +2184,21 @@ class LibraryScreen extends StatefulWidget {
 /// Website-parity library poster card: 2:3 cover art, title (2 lines),
 /// "★ score" meta, progress bar + "x / y eps" (mirrors .lib-item +
 /// .lib-prog from the website).
+/// Library grid cell aspect ratio: cell width / (poster height + the
+/// tallest possible text block). Scales with the system font size so
+/// large-text settings can never overflow the cell.
+double _libraryCellAspectRatio(BuildContext context) {
+  final w = (MediaQuery.of(context).size.width - 32 - 12) / 2; // page padding + spacing
+  final scale = MediaQuery.textScalerOf(context).scale(1.0);
+  final textBudget = 7.0 + // gap under poster
+      2 * 17 * scale + // title, two lines
+      2 +
+      16 * scale + // score line
+      6 +
+      5 + 2 + 16 * scale + 6; // progress bar, eps line, bottom slack
+  return w / (w * 1.5 + textBudget);
+}
+
 class _LibraryCard extends StatelessWidget {
   final LibraryEntry entry;
   final VoidCallback onTap;
@@ -2959,9 +2964,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
             sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              // Cell must cover poster + the FULL text block (title,
+              // score, progress bar, eps count). Ratio is computed from
+              // the actual font scale — hardcoded values let large-text
+              // settings push the progress bar under the next posters.
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
-                childAspectRatio: 0.54,
+                childAspectRatio: _libraryCellAspectRatio(context),
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 16,
               ),

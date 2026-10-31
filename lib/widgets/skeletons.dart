@@ -270,7 +270,8 @@ Widget skeletonPosterGrid({int count = 9}) {
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: columns,
-            childAspectRatio: posterGridChildAspectRatio(cellWidth),
+            childAspectRatio: posterGridChildAspectRatio(
+              cellWidth, MediaQuery.textScalerOf(context).scale(1.0)),
             crossAxisSpacing: spacing,
             mainAxisSpacing: 8,
           ),
