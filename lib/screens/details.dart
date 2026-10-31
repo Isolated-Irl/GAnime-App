@@ -15,11 +15,11 @@ import '../services/episodes.dart';
 import '../services/anilist.dart';
 import '../widgets/ga_image.dart';
 import '../services/trackers.dart';
+import '../services/tracker_oauth.dart';
 import 'streams.dart';
 import '../store.dart';
 import '../widgets/skeletons.dart';
 import '../widgets/glass_surface.dart';
-import 'settings/tracking_screen.dart';
 
 class DetailsScreen extends StatefulWidget {
   final Anime anime;
@@ -423,24 +423,34 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   // ---------- tracker tool dialog (redesign: per-tracker glass bubbles) ----------
   Future<void> _showTrackingDialog() async {
-    final t = await Store.tracker();
+    Map<String, dynamic> t = await Store.tracker();
     if (!mounted) return;
 
-    final alToken = (t['anilistToken'] as String?) ?? '';
-    final alName = (t['anilistUsername'] as String?) ?? '';
     final alMediaId = _anime.anilistId ?? _anime.id;
-    final skClient = (t['simklClientId'] as String?) ?? '';
-    final skToken = (t['simklToken'] as String?) ?? '';
-    final skName = (t['simklUsername'] as String?) ?? '';
-    final skId =
-        (t['simklIdFor_${_anime.anilistId ?? _anime.id}'] as num?)?.toInt();
-    final malToken = (t['malToken'] as String?) ?? '';
-    final malUser = (t['malUsername'] as String?) ?? '';
-    final malId = _anime.malId;
+    String alToken = '', alName = '', skClient = '', skToken = '', skName = '';
+    String malToken = '', malUser = '';
+    int? skId, malId;
+    bool alConnected = false, skConnected = false, malConnected = false;
 
-    final alConnected = alToken.isNotEmpty;
-    final skConnected = skToken.isNotEmpty && skClient.isNotEmpty;
-    final malConnected = malToken.isNotEmpty;
+    // Re-derived from [t] on every dialog rebuild, so a mid-dialog
+    // OAuth connect refreshes the bubbles without closing the dialog.
+    void derive() {
+      alToken = (t['anilistToken'] as String?) ?? '';
+      alName = (t['anilistUsername'] as String?) ?? '';
+      skClient = (t['simklClientId'] as String?) ?? '';
+      skToken = (t['simklToken'] as String?) ?? '';
+      skName = (t['simklUsername'] as String?) ?? '';
+      skId =
+          (t['simklIdFor_${_anime.anilistId ?? _anime.id}'] as num?)?.toInt();
+      malToken = (t['malToken'] as String?) ?? '';
+      malUser = (t['malUsername'] as String?) ?? '';
+      malId = _anime.malId;
+      alConnected = alToken.isNotEmpty;
+      skConnected = skToken.isNotEmpty && skClient.isNotEmpty;
+      malConnected = malToken.isNotEmpty;
+    }
+
+    derive();
 
     final total = _total > 0 ? _total : (_anime.episodes ?? 0);
     final currentMax =
@@ -463,16 +473,25 @@ class _DetailsScreenState extends State<DetailsScreen> {
     String fmtDate(DateTime? d) =>
         d == null ? '—' : '${d.day} ${months[d.month - 1]} ${d.year}';
 
-    Future<void> goToConnect(BuildContext dCtx) async {
-      Navigator.of(dCtx).pop();
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => TrackingSettingsScreen(
-            settings: widget.settings,
-            onSettings: (_) {},
-          ),
-        ),
-      );
+    // Direct OAuth for the given tracker ('anilist' | 'mal' | 'simkl').
+    // No settings-screen detour: on return the dialog refreshes in place.
+    Future<void> connectTracker(StateSetter setD, String which) async {
+      bool ok = false;
+      switch (which) {
+        case 'anilist':
+          ok = await TrackerOAuth.connectAnilist();
+          break;
+        case 'mal':
+          ok = await TrackerOAuth.connectMal();
+          break;
+        case 'simkl':
+          ok = await TrackerOAuth.connectSimkl();
+          break;
+      }
+      if (!ok) return;
+      t = await Store.tracker();
+      derive();
+      setD(() {});
       _load();
     }
 
@@ -522,6 +541,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
     Future<void> saveAll(BuildContext dCtx) async {
       Navigator.of(dCtx).pop();
+      final mId = malId; // local copy: null-promotion inside this closure
       var prog = 0;
       if (alConnected && alEdit.progress > prog) prog = alEdit.progress;
       if (skConnected && skEdit.progress > prog) prog = skEdit.progress;
@@ -555,14 +575,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
           pushed.add('Simkl');
         } catch (_) {}
       }
-      if (malConnected && malId != null && malId > 0) {
+      if (malConnected && mId != null && mId > 0) {
         try {
-          await Trackers.malSave(malToken, malId,
+          await Trackers.malSave(malToken, mId,
               status: malEdit.status,
               episodes: malEdit.progress,
               score: malEdit.score > 0 ? malEdit.score : null);
           if (malEdit.startDate != null || malEdit.endDate != null) {
-            await Trackers.malUpdateDates(malToken, malId,
+            await Trackers.malUpdateDates(malToken, mId,
                 startDate: malEdit.startDate, finishDate: malEdit.endDate);
           }
           pushed.add('MAL');
@@ -585,6 +605,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
       builder: (dCtx) => StatefulBuilder(
         builder: (dCtx, setD) {
           final maxAllowed = total > 0 ? total : 9999;
+          // Local final copies so closures below get null-promotion.
+          final sId = skId;
+          final mId = malId;
 
           Widget thickSlider({
             required double value,
@@ -885,7 +908,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           }) {
             return GlassSurface(
               radius: 22,
-              fill: const Color(0x14FFFFFF),
+              fill: const Color(0x40FFFFFF),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -961,41 +984,37 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   color: Colors.white,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600)),
-                          const SizedBox(width: 8),
+                          const Spacer(),
                           stepBtn(
                               Icons.remove,
                               edit.progress > 0
                                   ? () => setD(() => edit.progress--)
-                                  : null),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6),
-                              child: thickSlider(
-                                value: edit.progress.toDouble(),
-                                max: maxAllowed.toDouble(),
-                                divisions: maxAllowed,
-                                onChanged: (v) =>
-                                    setD(() => edit.progress = v.round()),
-                              ),
-                            ),
-                          ),
-                          stepBtn(
-                              Icons.add,
-                              edit.progress < maxAllowed
-                                  ? () => setD(() => edit.progress++)
                                   : null),
                           const SizedBox(width: 8),
                           SizedBox(
                             width: 56,
                             child: Text(
                                 '${edit.progress}/${total > 0 ? total : '—'}',
-                                textAlign: TextAlign.end,
+                                textAlign: TextAlign.center,
                                 style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.w800)),
                           ),
+                          const SizedBox(width: 8),
+                          stepBtn(
+                              Icons.add,
+                              edit.progress < maxAllowed
+                                  ? () => setD(() => edit.progress++)
+                                  : null),
                         ],
+                      ),
+                      const SizedBox(height: 6),
+                      thickSlider(
+                        value: edit.progress.toDouble(),
+                        max: maxAllowed.toDouble(),
+                        divisions: maxAllowed,
+                        onChanged: (v) =>
+                            setD(() => edit.progress = v.round()),
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -1003,30 +1022,22 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           const Text('Score',
                               style: TextStyle(
                                   color: Colors.white54, fontSize: 13)),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12),
-                              child: thickSlider(
-                                value: edit.score,
-                                max: 10,
-                                divisions: 20,
-                                onChanged: (v) => setD(() =>
-                                    edit.score =
-                                        (v * 2).round() / 2),
-                              ),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 64,
-                            child: Text(
-                                '${edit.score.toStringAsFixed(1)}/10',
-                                textAlign: TextAlign.end,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800)),
-                          ),
+                          const Spacer(),
+                          Text(
+                              '${edit.score.toStringAsFixed(1)}/10',
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800)),
                         ],
+                      ),
+                      const SizedBox(height: 6),
+                      thickSlider(
+                        value: edit.score,
+                        max: 10,
+                        divisions: 20,
+                        onChanged: (v) => setD(() =>
+                            edit.score = (v * 2).round() / 2),
                       ),
                       const SizedBox(height: 4),
                       advancedSection(
@@ -1051,7 +1062,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 borderRadius: BorderRadius.circular(28)),
             child: GlassSurface(
               radius: 28,
-              fill: const Color(0x1AFFFFFF),
+              fill: const Color(0x4DFFFFFF),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(18),
                 child: Column(
@@ -1176,7 +1187,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       edit: alEdit,
                       showDates: true,
                       showMemo: false,
-                      onConnect: () => goToConnect(dCtx),
+                      onConnect: () => connectTracker(setD, 'anilist'),
                       deleteButton:
                           (alConnected && alMediaId > 0)
                               ? deleteBtn('AniList',
@@ -1195,12 +1206,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       edit: skEdit,
                       showDates: false,
                       showMemo: true,
-                      onConnect: () => goToConnect(dCtx),
-                      deleteButton: (skConnected && skId != null)
+                      onConnect: () => connectTracker(setD, 'simkl'),
+                      deleteButton: (skConnected && sId != null)
                           ? deleteBtn(
                               'Simkl',
                               () => Trackers.simklDeleteEntry(
-                                  skClient, skToken, skId))
+                                  skClient, skToken, sId))
                           : null,
                     ),
                     const SizedBox(height: 12),
@@ -1214,14 +1225,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       edit: malEdit,
                       showDates: true,
                       showMemo: false,
-                      onConnect: () => goToConnect(dCtx),
+                      onConnect: () => connectTracker(setD, 'mal'),
                       deleteButton: (malConnected &&
-                              malId != null &&
-                              malId > 0)
+                              mId != null &&
+                              mId > 0)
                           ? deleteBtn(
                               'MyAnimeList',
                               () => Trackers.malDeleteEntry(
-                                  malToken, malId))
+                                  malToken, mId))
                           : null,
                     ),
                     const SizedBox(height: 18),

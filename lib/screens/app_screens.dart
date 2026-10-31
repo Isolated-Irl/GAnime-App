@@ -9,6 +9,7 @@ import '../theme.dart';
 import '../models.dart';
 import '../services/anilist.dart';
 import '../services/trackers.dart';
+import '../services/tracker_oauth.dart';
 import '../services/firebase_sync.dart';
 import '../store.dart';
 import '../widgets/ga_image.dart';
@@ -2290,6 +2291,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<LibraryEntry> _entries = [];
   bool _loading = false;
   String? _error;
+  bool _connecting = false;
   // Website parity: 8-option library sort (LIBRARY_SORTS), default
   // UPDATED_DESC, persisted per device.
   String _sort = 'UPDATED_DESC';
@@ -2558,6 +2560,64 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.dispose();
   }
 
+  /// Which tracker the current tab needs a login for, when the tab shows
+  /// a "not connected" error. Null when the error is something else.
+  String? get _connectProvider {
+    if (_error == null || !_error!.contains('not connected')) return null;
+    switch (_tab) {
+      case 1:
+        return 'anilist';
+      case 2:
+        return 'mal';
+      case 3:
+        return 'simkl';
+      default:
+        return null;
+    }
+  }
+
+  String get _connectProviderLabel {
+    switch (_connectProvider) {
+      case 'anilist':
+        return 'AniList';
+      case 'mal':
+        return 'MyAnimeList';
+      case 'simkl':
+        return 'Simkl';
+      default:
+        return '';
+    }
+  }
+
+  /// Direct OAuth for the tracker's library tab (no settings detour).
+  /// On success the tab reloads with the fresh token.
+  Future<void> _connectFromLibrary(String which) async {
+    if (_connecting) return;
+    setState(() => _connecting = true);
+    bool ok = false;
+    try {
+      switch (which) {
+        case 'anilist':
+          ok = await TrackerOAuth.connectAnilist();
+          break;
+        case 'mal':
+          ok = await TrackerOAuth.connectMal();
+          break;
+        case 'simkl':
+          ok = await TrackerOAuth.connectSimkl();
+          break;
+      }
+    } catch (_) {
+      ok = false;
+    }
+    if (!mounted) return;
+    setState(() => _connecting = false);
+    if (!ok) return;
+    _cache.remove(_tab);
+    _refreshProviderUser(_tab);
+    await _loadTab(force: true);
+  }
+
   Future<void> _loadTab({bool force = false}) async {
     final tab = _tab;
     final profile = widget.profileId;
@@ -2595,7 +2655,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               : int.tryParse(rawId?.toString() ?? '');
           if (token.isEmpty || userId == null) {
             throw Exception(
-                'AniList not connected. Go to Settings > Trackers and paste your AniList token.');
+                'AniList is not connected.');
           }
           fetched = await Trackers.anilistLists(token, userId);
         } else if (tab == 2) {
@@ -2603,7 +2663,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           final client = (t['malClientId'] as String?) ?? '';
           if (user.isEmpty || client.isEmpty) {
             throw Exception(
-                'MAL not connected. Go to Settings > Trackers and enter your MAL username + client id. MAL is read-only here.');
+                'MAL is not connected.');
           }
           fetched = await Trackers.malLists(user, client);
         } else {
@@ -2611,7 +2671,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           final token = (t['simklToken'] as String?) ?? '';
           if (client.isEmpty || token.isEmpty) {
             throw Exception(
-                'Simkl not connected. Go to Settings > Trackers and complete the Simkl PIN flow.');
+                'Simkl is not connected.');
           }
           fetched = await Trackers.simklLists(client, token);
         }
@@ -2803,7 +2863,41 @@ class _LibraryScreenState extends State<LibraryScreen> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(_error!),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(_error!,
+                      style:
+                          const TextStyle(fontSize: 15, color: Colors.grey)),
+                  if (_connectProvider != null) ...[
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _connecting
+                            ? null
+                            : () =>
+                                _connectFromLibrary(_connectProvider!),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF22C55E),
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(999)),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 15),
+                        ),
+                        child: Text(
+                            _connecting
+                                ? 'Connecting…'
+                                : 'Connect $_connectProviderLabel',
+                            style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           )
         else if (filtered.isEmpty)
