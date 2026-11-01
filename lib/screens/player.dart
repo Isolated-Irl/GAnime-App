@@ -16,7 +16,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -707,10 +706,14 @@ class _PlayerScreenState extends State<PlayerScreen>
           .where((t) => _trackMatchesLang(t.language, t.title, subLang))
           .toList();
       if (matches.isNotEmpty) {
-        final fullDialogue = matches.where((t) {
+        SubtitleTrack? fullDialogue;
+        for (final t in matches) {
           final title = (t.title ?? '').toLowerCase();
-          return !title.contains('sign') && !title.contains('song');
-        }).firstOrNull;
+          if (!title.contains('sign') && !title.contains('song')) {
+            fullDialogue = t;
+            break;
+          }
+        }
         _player.setSubtitleTrack(fullDialogue ?? matches.first);
       }
     }
