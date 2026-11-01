@@ -343,7 +343,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             // Fix 7: Full-screen gesture layer
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _locked ? () => _setVisible(true) : _toggleVisible,
+              onTap: _locked ? null : _toggleVisible,
               onDoubleTapDown: (d) => _handleDoubleTap(d, w),
               onDoubleTap: () {},
               onLongPressStart: _onLongPressStart,
@@ -638,7 +638,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
   // + positional _MarqueeText(widget.title, style: ...)
   Widget _buildTopBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       child: Row(
         children: [
           _TapScaleButton(
@@ -658,7 +658,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             child: GlassSurface(
               radius: 14,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -667,7 +667,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                     widget.title,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 15,
+                      fontSize: 14,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -677,7 +677,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                       widget.status,
                       style: const TextStyle(
                         color: Colors.white70,
-                        fontSize: 11.5,
+                        fontSize: 10.5,
                       ),
                     ),
                   ],
@@ -846,7 +846,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     ];
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1329,9 +1329,7 @@ class _SeekSpinButtonState extends State<_SeekSpinButton>
   }
 
   void _trigger() {
-    _ctrl.forward(from: 0).then((_) {
-      if (mounted) _ctrl.reverse();
-    });
+    _ctrl.forward(from: 0);
     widget.onTap();
   }
 
