@@ -237,7 +237,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   List<SkipInterval> _skips = [];
   List<double> _chapters = []; // 0..1 ratios from mpv chapter-list
   List<Map<String, dynamic>> _chapterMeta = []; // {timeMs, title} for chapter UI
-  StreamSubscription<List<Chapter>>? _chapterSub;
+  Timer? _chapterPollTimer;
   bool _marked85 = false;
   bool _autoSelected = false;
   bool _jumping = false;
@@ -733,35 +733,26 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   void _listenChapters() {
-    _chapterSub?.cancel();
-    _chapterSub = _player.stream.chapters.listen((chapters) {
-      if (!mounted || chapters.isEmpty) return;
-      final dur = _player.state.duration.inMilliseconds;
-      if (dur <= 0) return;
-      final ratios = <double>[];
-      final meta = <Map<String, dynamic>>[];
-      for (final c in chapters) {
-        final ms = c.start.inMilliseconds;
-        if (ms > 0) {
-          ratios.add((ms / dur).clamp(0.0, 1.0));
-          meta.add({'timeMs': ms, 'title': c.title});
-        }
+    // Poll for chapters: media_kit 1.3.1 has no stream.chapters,
+    // so retry the mpv property until it populates (max ~30s).
+    _chapterPollTimer?.cancel();
+    int attempts = 0;
+    _chapterPollTimer =
+        Timer.periodic(const Duration(seconds: 2), (timer) async {
+      attempts++;
+      if (!mounted || _chapters.isNotEmpty || attempts > 15) {
+        timer.cancel();
+        return;
       }
-      if (ratios.isNotEmpty && mounted) {
-        setState(() {
-          _chapters = ratios;
-          _chapterMeta = meta;
-        });
-      }
+      await _loadChapters();
     });
   }
 
   Future<void> _loadChapters() async {
-    // Fallback one-shot for older streams; the stream listener is primary.
     try {
       final dynamic platform = _player.platform;
       final list = await platform.getProperty('chapter-list');
-      if (list is List && mounted && _chapters.isEmpty) {
+      if (list is List && mounted) {
         final dur = _player.state.duration.inMilliseconds;
         if (dur > 0) {
           final ratios = <double>[];
@@ -973,7 +964,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _chapterSub?.cancel();
+    _chapterPollTimer?.cancel();
     _resumeTimer?.cancel();
     _nextEpTimer?.cancel();
     _saveResume(force: true).whenComplete(() {
