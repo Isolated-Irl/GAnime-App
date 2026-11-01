@@ -70,7 +70,8 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
   Offset _lastTap = Offset.zero;
   // Which seek button to pulse after a double-tap (-1 = rewind, 1 = forward, 0 = none).
   int _pulse = 0;
-  // Timer display mode: 0 = remaining (-23:27), 1 = elapsed (00:22), 2 = total (23:49).
+  // Timer display mode: 0 = remaining (-23:27), 1 = total (23:49).
+  // (Elapsed is already on the left, so it's not in the cycle.)
   int _timeMode = 0;
   // Rotation turns for the pulse (0 → 0.5 → 0 = half rotate and back).
   double _pulseTurns = 0;
@@ -479,10 +480,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
             builder: (_, durSnap) {
               final pos = posSnap.data ?? Duration.zero;
               final dur = durSnap.data ?? Duration.zero;
-              // Right timer cycles on tap: remaining → elapsed → total (VLC-style).
+              // Right timer cycles on tap: remaining → total (VLC-style).
+              // Elapsed is already shown on the left, so it's skipped.
               final rightLabel = switch (_timeMode) {
-                1 => fmtPlayerTime(pos),
-                2 => fmtPlayerTime(dur),
+                1 => fmtPlayerTime(dur),
                 _ => '-${fmtPlayerTime(dur - pos)}',
               };
               return Row(
@@ -511,7 +512,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                   const SizedBox(width: 8),
                   GestureDetector(
                     onTap: () {
-                      setState(() => _timeMode = (_timeMode + 1) % 3);
+                      setState(() => _timeMode = (_timeMode + 1) % 2);
                       _scheduleHide();
                     },
                     child: SizedBox(
