@@ -121,6 +121,8 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
       } else {
         _addons = [..._addons, rec];
         await _persist();
+        // Clear any tombstone — user re-added it on purpose.
+        await Store.clearAddonTombstone(widget.profileId, rec.manifestUrl);
         _addonCtrl.clear();
         _msg = 'Installed: ${rec.name}';
         _checkStatus();
@@ -192,8 +194,13 @@ class _AddonSettingsScreenState extends State<AddonSettingsScreen> {
             style: TextButton.styleFrom(
                 foregroundColor: Colors.redAccent),
             onPressed: () async {
+              final removedUrl = a.manifestUrl;
               _addons = List.of(_addons)..removeAt(i);
               await _persist();
+              // Tombstone so the cloud union doesn't resurrect it.
+              if (removedUrl.isNotEmpty) {
+                await Store.addAddonTombstone(widget.profileId, removedUrl);
+              }
               if (ctx.mounted) Navigator.of(ctx).pop();
               if (!mounted) return;
               setState(() => _msg = 'Removed: ${a.name}');

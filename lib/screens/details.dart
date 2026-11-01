@@ -381,8 +381,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
     final next = Set<int>.from(_watched);
     if (next.contains(ep)) {
       next.remove(ep); // hole-preserving unmark, never clears neighbours
+      // Tombstone so the cloud union doesn't resurrect it.
+      await Store.addWatchedTombstone(widget.profileId, _anime.id, ep);
     } else {
       next.add(ep);
+      // Clear tombstone — user re-marked it on purpose.
+      await Store.clearWatchedTombstone(widget.profileId, _anime.id, ep);
     }
     await Store.setWatched(widget.profileId, _anime.id, next);
     if (mounted) setState(() => _watched = next);

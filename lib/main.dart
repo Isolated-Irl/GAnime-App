@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'models.dart';
 import 'services/firebase_sync.dart';
+import 'services/resume_store.dart';
 import 'services/trackers.dart';
 import 'store.dart';
 import 'theme.dart';
@@ -75,6 +76,10 @@ class _GAnimeAppState extends State<GAnimeApp> {
   void initState() {
     super.initState();
     Store.onDirty = () => _schedulePush();
+    // Resume spots trigger a cloud sync when the player leaves/pauses.
+    ResumeStore.cloudPush = () async {
+      if (_firebase.signedIn) await _bootSync();
+    };
     _init();
   }
 

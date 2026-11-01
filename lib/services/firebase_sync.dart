@@ -17,6 +17,7 @@ import 'package:http/http.dart' as http;
 import '../firebase_config.dart';
 import '../models.dart';
 import '../store.dart';
+import 'resume_store.dart';
 
 class FirebaseSync {
   String? _apiKey;
@@ -237,6 +238,22 @@ class FirebaseSync {
       await _applyNative(merged, account);
     }
 
+    // 6. Pull remote resume spots into the local store so other devices'
+    // spots become available for resume. Newer timestamp wins per episode.
+    try {
+      final mergedBy =
+          Map<String, dynamic>.from((merged['byProfile'] as Map?) ?? {});
+      for (final e in mergedBy.entries) {
+        final pid = e.key;
+        final s = Map<String, dynamic>.from(e.value as Map? ?? {});
+        final remoteResume =
+            Map<String, dynamic>.from((s['resume'] as Map?) ?? {});
+        if (remoteResume.isNotEmpty) {
+          await ResumeStore.mergeRemote(pid, remoteResume);
+        }
+      }
+    } catch (_) {}
+
     final at = DateTime.now().toIso8601String();
     await Store.setLastSync(at);
     await Store.setSyncRecord(
@@ -264,6 +281,9 @@ class FirebaseSync {
       final addons = await Store.addons(pid);
       final watched = await Store.allWatched(pid);
       final lib = await Store.localLibrary(pid);
+      final resume = await ResumeStore.all(pid);
+      final addonTombstones = await Store.addonTombstones(pid);
+      final watchedTombstones = await Store.watchedTombstones(pid);
       byProfile[pid] = {
         'settings': settings.toJson(),
         'addons': [for (final a in addons) a.toJson()],
@@ -289,12 +309,16 @@ class FirebaseSync {
             },
         },
         'mylist': <dynamic>[],
+        'resume': resume,
+        '_addonTombstones': addonTombstones,
+        '_watchedTombstones': watchedTombstones,
         '_ts': {
           'settings': now,
           'addons': now,
           'watched': now,
           'locallib': now,
           'mylist': now,
+          'resume': now,
         },
       };
     }
@@ -413,33 +437,83 @@ class FirebaseSync {
         : {...cSet, ...lSet};
 
     // Addons: union by manifestUrl (or id), local wins on content.
+    // Tombstones prevent deleted addons from resurrecting.
+    // Order: if local is newer, keep local's exact order.
     final addonByKey = <String, Map<String, dynamic>>{};
+    // Collect tombstones from both sides (newer wins per addon).
+    final lAT = Map<String, dynamic>.from((ls['_addonTombstones'] as Map?) ?? {});
+    final cAT = Map<String, dynamic>.from((cs['_addonTombstones'] as Map?) ?? {});
+    final addonTomb = <String, int>{};
+    for (final k in {...lAT.keys, ...cAT.keys}) {
+      final lt = (lAT[k] as num?)?.toInt() ?? 0;
+      final ct = (cAT[k] as num?)?.toInt() ?? 0;
+      addonTomb[k] = lt > ct ? lt : ct;
+    }
     for (final a in (cs['addons'] as List? ?? [])) {
       final j = Map<String, dynamic>.from(a as Map);
       final k = '${j['manifestUrl'] ?? j['id'] ?? ''}';
-      if (k.isNotEmpty) addonByKey.putIfAbsent(k, () => j);
+      if (k.isNotEmpty && !(addonTomb.containsKey(k))) {
+        addonByKey.putIfAbsent(k, () => j);
+      }
     }
     for (final a in (ls['addons'] as List? ?? [])) {
       final j = Map<String, dynamic>.from(a as Map);
       final k = '${j['manifestUrl'] ?? j['id'] ?? ''}';
-      if (k.isNotEmpty) addonByKey[k] = j; // local wins
+      if (k.isNotEmpty && !(addonTomb.containsKey(k))) {
+        addonByKey[k] = j; // local wins
+      }
     }
-    out['addons'] = addonByKey.values.toList();
+    // Order: local list order wins if local addons are newer.
+    final useLocalOrder = ((lTs['addons'] as num?)?.toInt() ?? 0) >=
+        ((cTs['addons'] as num?)?.toInt() ?? 0);
+    final mergedAddons = <Map<String, dynamic>>[];
+    if (useLocalOrder) {
+      for (final a in (ls['addons'] as List? ?? [])) {
+        final j = Map<String, dynamic>.from(a as Map);
+        final k = '${j['manifestUrl'] ?? j['id'] ?? ''}';
+        if (k.isNotEmpty && addonByKey.containsKey(k)) {
+          mergedAddons.add(addonByKey[k]!);
+          addonByKey.remove(k);
+        }
+      }
+      mergedAddons.addAll(addonByKey.values);
+    } else {
+      mergedAddons.addAll(addonByKey.values);
+    }
+    out['addons'] = mergedAddons;
+    out['_addonTombstones'] =
+        addonTomb.map((k, v) => MapEntry(k, v));
 
     // Watched: union episode lists per anime.
+    // Unmark tombstones prevent unmarked episodes from resurrecting.
     final watched = <String, dynamic>{};
     final lW = Map<String, dynamic>.from((ls['watched'] as Map?) ?? {});
     final cW = Map<String, dynamic>.from((cs['watched'] as Map?) ?? {});
+    final lWT = Map<String, dynamic>.from((ls['_watchedTombstones'] as Map?) ?? {});
+    final cWT = Map<String, dynamic>.from((cs['_watchedTombstones'] as Map?) ?? {});
+    final watchedTomb = <String, int>{};
+    for (final k in {...lWT.keys, ...cWT.keys}) {
+      final lt = (lWT[k] as num?)?.toInt() ?? 0;
+      final ct = (cWT[k] as num?)?.toInt() ?? 0;
+      watchedTomb[k] = lt > ct ? lt : ct;
+    }
     for (final id in {...lW.keys, ...cW.keys}) {
       final le = (lW[id] as Map?) ?? {};
       final ce = (cW[id] as Map?) ?? {};
       final eps = <int>{
         for (final e in (le['eps'] as List? ?? [])) (e as num).toInt(),
         for (final e in (ce['eps'] as List? ?? [])) (e as num).toInt(),
-      }.toList()
-        ..sort();
+      };
+      // Remove episodes with a tombstone newer than the entry's updatedAt.
+      final leAt = (le['updatedAt'] as num?)?.toInt() ?? 0;
+      final ceAt = (ce['updatedAt'] as num?)?.toInt() ?? 0;
+      final entryAt = leAt > ceAt ? leAt : ceAt;
+      eps.removeWhere((ep) {
+        final tombAt = watchedTomb['$id:$ep'] ?? 0;
+        return tombAt > entryAt;
+      });
       watched[id] = {
-        'eps': eps,
+        'eps': eps.toList()..sort(),
         'updatedAt': [
           (le['updatedAt'] as num?)?.toInt() ?? 0,
           (ce['updatedAt'] as num?)?.toInt() ?? 0,
@@ -448,6 +522,8 @@ class FirebaseSync {
       };
     }
     out['watched'] = watched;
+    out['_watchedTombstones'] =
+        watchedTomb.map((k, v) => MapEntry(k, v));
 
     // Local library: union by key, newer updatedAt wins.
     final lib = <String, dynamic>{};
@@ -471,6 +547,20 @@ class FirebaseSync {
     }.toList();
     out['mylist'] = mylist;
 
+    // Resume: newest timestamp wins per episode key.
+    // Tombstone (x:1) means finished — an old cloud copy can't bring it back.
+    final lR = Map<String, dynamic>.from((ls['resume'] as Map?) ?? {});
+    final cR = Map<String, dynamic>.from((cs['resume'] as Map?) ?? {});
+    final resume = <String, dynamic>{};
+    for (final k in {...lR.keys, ...cR.keys}) {
+      final lv = lR[k] as Map? ?? {};
+      final cv = cR[k] as Map? ?? {};
+      final lt = (lv['t'] as num?)?.toInt() ?? 0;
+      final ct = (cv['t'] as num?)?.toInt() ?? 0;
+      resume[k] = lt >= ct ? Map<String, dynamic>.from(lv) : Map<String, dynamic>.from(cv);
+    }
+    out['resume'] = resume;
+
     // Tracking is PER-DEVICE (2026-10-30): never merged, never read
     // from the cloud. Each device keeps its own tracker logins.
     // Strip any tracking field so stale cloud tokens never ride
@@ -479,7 +569,7 @@ class FirebaseSync {
 
     out['_ts'] = {
       for (final k in ['settings', 'addons', 'watched', 'locallib',
-          'mylist'])
+          'mylist', 'resume'])
         k: [
           (lTs[k] as num?)?.toInt() ?? 0,
           (cTs[k] as num?)?.toInt() ?? 0,

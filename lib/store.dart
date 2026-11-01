@@ -224,6 +224,62 @@ class Store {
     await _write(_kTombstones, {'ids': ids.toList()});
   }
 
+  // Addon tombstones: {profileId: {manifestUrl: deletedAtMs}}.
+  // Prevents a removed addon from being resurrected by the cloud union.
+  static const _kAddonTombstones = 'ganime_addon_tombstones';
+
+  static Future<Map<String, int>> addonTombstones(String profileId) async {
+    final m = await _read(_kAddonTombstones);
+    final pm = m[profileId] as Map? ?? {};
+    return pm.map((k, v) => MapEntry('$k', (v as num?)?.toInt() ?? 0));
+  }
+
+  static Future<void> addAddonTombstone(
+      String profileId, String manifestUrl) async {
+    final m = await _read(_kAddonTombstones);
+    final pm = Map<String, dynamic>.from(m[profileId] as Map? ?? {});
+    pm[manifestUrl] = DateTime.now().millisecondsSinceEpoch;
+    m[profileId] = pm;
+    await _write(_kAddonTombstones, m);
+  }
+
+  static Future<void> clearAddonTombstone(
+      String profileId, String manifestUrl) async {
+    final m = await _read(_kAddonTombstones);
+    final pm = Map<String, dynamic>.from(m[profileId] as Map? ?? {});
+    pm.remove(manifestUrl);
+    m[profileId] = pm;
+    await _write(_kAddonTombstones, m);
+  }
+
+  // Watched tombstones: {profileId: {"animeId:ep": unmarkedAtMs}}.
+  // Prevents an unmarked episode from being resurrected by the cloud union.
+  static const _kWatchedTombstones = 'ganime_watched_tombstones';
+
+  static Future<Map<String, int>> watchedTombstones(String profileId) async {
+    final m = await _read(_kWatchedTombstones);
+    final pm = m[profileId] as Map? ?? {};
+    return pm.map((k, v) => MapEntry('$k', (v as num?)?.toInt() ?? 0));
+  }
+
+  static Future<void> addWatchedTombstone(
+      String profileId, int animeId, int ep) async {
+    final m = await _read(_kWatchedTombstones);
+    final pm = Map<String, dynamic>.from(m[profileId] as Map? ?? {});
+    pm['$animeId:$ep'] = DateTime.now().millisecondsSinceEpoch;
+    m[profileId] = pm;
+    await _write(_kWatchedTombstones, m);
+  }
+
+  static Future<void> clearWatchedTombstone(
+      String profileId, int animeId, int ep) async {
+    final m = await _read(_kWatchedTombstones);
+    final pm = Map<String, dynamic>.from(m[profileId] as Map? ?? {});
+    pm.remove('$animeId:$ep');
+    m[profileId] = pm;
+    await _write(_kWatchedTombstones, m);
+  }
+
   static Future<Map<String, dynamic>> tracker() async => _read(_kTracker);
   static Future<void> saveTracker(Map<String, dynamic> v) async =>
       _write(_kTracker, v);

@@ -21,6 +21,7 @@ import '../models.dart';
 import '../services/aniskip.dart';
 import '../services/addons.dart';
 import '../services/addon_ids.dart';
+import '../services/resume_store.dart';
 import '../store.dart';
 import '../widgets/glass_player_controls.dart';
 import '../widgets/glass_surface.dart';
@@ -108,7 +109,8 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> {
+class _PlayerScreenState extends State<PlayerScreen>
+    with WidgetsBindingObserver {
   static final _reRes =
       RegExp(r'2160p|4k|1440p|1080p|720p|480p', caseSensitive: false);
   static final _reGroup = RegExp(
@@ -346,6 +348,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadSubStyle();
     _episode = widget.episode;
     _streamIndex = widget.initialIndex; // open the stream the user tapped
@@ -374,7 +377,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // Defer the video open until the Android surface is mounted (post-frame),
     // so the codec never starts before the SurfaceTexture exists.
     _initMpvAndOpen();
+    // Save the resume spot: every ~5s while playing, and on every pause.
+    _player.stream.playing.listen((playing) {
+      if (!playing) _saveResume(force: true);
+    });
     _player.stream.position.listen((pos) async {
+      _saveResume(); // throttled inside
       final dur = _player.state.duration;
       if (dur.inMilliseconds <= 0 || _marked85) return;
       if (pos.inMilliseconds / dur.inMilliseconds >= 0.85) {
@@ -479,19 +487,87 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  Future<void> _openCurrent() async {
+  // ---------- Resume position (device + cloud) ----------
+  int _lastResumeSaveMs = 0;
+  bool _opening = false; // true while a new media is being opened
+
+  /// Saves where you are. Safe to call often (throttled to every 5s unless
+  /// [force]). Reads the player state BEFORE any await, so it is also safe
+  /// to call from dispose().
+  Future<void> _saveResume({bool force = false}) async {
+    final pid = widget.profileId;
+    if (pid == null || _opening) return;
+    final animeId = widget.anime.id;
+    final ep = _episode;
+    final pos = _player.state.position;
+    final dur = _player.state.duration;
+    if (dur.inMilliseconds <= 0) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && now - _lastResumeSaveMs < 5000) return;
+    _lastResumeSaveMs = now;
+    if (pos.inSeconds < 10) return; // never overwrite a real spot with ~0
+    final remaining = dur.inMilliseconds - pos.inMilliseconds;
+    if (pos.inMilliseconds / dur.inMilliseconds >= 0.95 || remaining < 90000) {
+      await ResumeStore.clear(pid, animeId, ep); // finished
+    } else {
+      await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds, dur.inMilliseconds);
+    }
+    ResumeStore.requestCloudPush(); // throttled: max once a minute
+  }
+
+  /// Saved spot for the CURRENT episode (3s rewind for context), or null.
+  Future<Duration?> _resumeStart() async {
+    final pid = widget.profileId;
+    if (pid == null) return null;
+    final e = await ResumeStore.get(pid, widget.anime.id, _episode);
+    if (e == null || e.posMs < 10000) return null;
+    return Duration(milliseconds: e.posMs) - const Duration(seconds: 3);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveResume(force: true)
+          .whenComplete(() => ResumeStore.requestCloudPush(force: true));
+    }
+  }
+
+  Future<void> _openCurrent({bool keepPosition = false}) async {
     if (widget.streams.isEmpty) {
       setState(() => _status = 'No streams. Install an addon (Settings > Addons).');
       return;
     }
     final src = _cur;
     _autoSelected = false;
-    setState(() => _status = 'Opening ${src.name} …');
-    await _enqueueOpen(() async {
-      await _player.open(Media(src.url));
-      await _player.play();
-    });
-    if (mounted) setState(() => _status = 'Playing ${src.name}');
+    // Switching source keeps the current time; a fresh episode resumes
+    // from the saved spot (device or cloud).
+    Duration? start;
+    if (keepPosition) {
+      final p = _player.state.position;
+      if (p.inSeconds > 1) start = p;
+    } else {
+      start = await _resumeStart();
+    }
+    if (!mounted) return;
+    setState(() => _status = start != null
+        ? 'Resuming from ${fmtDuration(start)} …'
+        : 'Opening ${src.name} …');
+    _opening = true;
+    try {
+      await _enqueueOpen(() async {
+        await _player.open(Media(src.url, start: start));
+        await _player.play();
+      });
+    } finally {
+      _opening = false;
+    }
+    if (mounted) {
+      setState(() => _status = start != null
+          ? 'Resumed from ${fmtDuration(start)}'
+          : 'Playing ${src.name}');
+    }
   }
 
   /// Website jumpEpisode port: fetch target-episode streams from every
@@ -569,15 +645,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
         return;
       }
       final hit = best; // non-null after the check above
+      await _saveResume(force: true); // save the episode we are leaving
       _episode = target;
+      final jumpStart = await _resumeStart();
       _marked85 = false;
       _autoSelected = false;
       _loadSkips();
       setState(() => _status = 'Episode $target · ${hit.$1.name}');
-      await _enqueueOpen(() async {
-        await _player.open(Media(hit.$2.url));
-        await _player.play();
-      });
+      _opening = true;
+      try {
+        await _enqueueOpen(() async {
+          await _player.open(Media(hit.$2.url, start: jumpStart));
+          await _player.play();
+        });
+      } finally {
+        _opening = false;
+      }
     } finally {
       _jumping = false;
     }
@@ -585,6 +668,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Leaving the player: save the spot (state is read synchronously inside),
+    // then push it to the cloud.
+    _saveResume(force: true)
+        .whenComplete(() => ResumeStore.requestCloudPush(force: true));
     SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _player.dispose();
@@ -873,7 +961,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (s != null && s.url != _cur.url && mounted) {
       final i = list.indexWhere((e) => e.url == s.url);
       setState(() => _streamIndex = i < 0 ? 0 : i);
-      _openCurrent();
+      _openCurrent(keepPosition: true);
     }
   }
 
