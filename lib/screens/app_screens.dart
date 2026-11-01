@@ -681,8 +681,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           final e = cw[i];
                           final total = e.total ?? 0;
                           final done = total > 0 && e.progress >= total;
-                          final pct =
-                              total > 0 ? e.progress / total : 0.0;
                           final anime = Anime(
                             id: e.anilistId ?? 0,
                             title: e.title,
@@ -754,18 +752,56 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     Colors.grey.shade400),
                                           ),
                                           const SizedBox(height: 8),
-                                          // Only show the bar when we know the total.
-                                          // Unknown total = no blank bar (same rule as details skeleton).
-                                          if (total > 0)
-                                            LinearProgressIndicator(
-                                              value: pct,
-                                              backgroundColor:
-                                                  Colors.grey.shade800,
-                                              color:
-                                                  Theme.of(context)
-                                                      .colorScheme
-                                                      .primary,
-                                            ),
+                                          // Dimmed grey bar like the library
+                                          // ("5 / ? eps") when total is
+                                          // unknown — never a blank bar.
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: LinearProgressIndicator(
+                                                  value: total > 0
+                                                      ? e.progress / total
+                                                      // Dimmed estimate: show
+                                                      // some fill, not empty.
+                                                      : (e.progress / 12)
+                                                          .clamp(0.15, 0.85),
+                                                  backgroundColor: const Color(
+                                                      0xFF333333),
+                                                  minHeight: 5,
+                                                  valueColor:
+                                                      AlwaysStoppedAnimation<
+                                                          Color>(
+                                                    total > 0
+                                                        ? Theme.of(context)
+                                                            .colorScheme
+                                                            .primary
+                                                        : Theme.of(context)
+                                                            .colorScheme
+                                                            .primary
+                                                            .withValues(
+                                                                alpha: 0.55),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                total > 0
+                                                    ? '${e.progress} / $total eps'
+                                                    : '${e.progress} / ? eps',
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Color(0xFFAAAAAA),
+                                                    fontWeight:
+                                                        FontWeight.w700),
+                                              ),
+                                            ],
+                                          ),
+                                          // Next episode info: "ready" if
+                                          // released, airing date if known.
+                                          if (!done) ...[
+                                            const SizedBox(height: 4),
+                                            _NextEpInfo(entry: e),
+                                          ],
                                         ],
                                       ),
                                     ),
@@ -3368,5 +3404,95 @@ class _SeeAllScreenState extends State<_SeeAllScreen> {
       );
     }
     return const SizedBox.shrink();
+  }
+}
+
+/// Next-episode info for Continue Watching cards.
+/// Shows "Next EP X airs [date]" if the episode hasn't aired yet,
+/// or "Next EP X ready" (green) if it's already released.
+class _NextEpInfo extends StatefulWidget {
+  final LibraryEntry entry;
+  const _NextEpInfo({required this.entry});
+
+  @override
+  State<_NextEpInfo> createState() => _NextEpInfoState();
+}
+
+class _NextEpInfoState extends State<_NextEpInfo> {
+  int? _airingAt;
+  int? _airingEp;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAiring();
+  }
+
+  Future<void> _fetchAiring() async {
+    final id = widget.entry.anilistId;
+    if (id == null || id <= 0) {
+      if (mounted) setState(() => _loaded = true);
+      return;
+    }
+    try {
+      final anime = await AniList.details(id);
+      if (!mounted) return;
+      setState(() {
+        _airingAt = anime.airingAt;
+        // The airing episode is progress + 1 if it's the next one.
+        _airingEp = widget.entry.progress + 1;
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final e = widget.entry;
+    final nextEp = e.progress + 1;
+    final total = e.total ?? 0;
+
+    // If we know the total and next ep is within it → ready.
+    final isReleased = total > 0 && nextEp <= total;
+
+    if (_loaded && _airingAt != null) {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      // Airing in the future and it's the next episode → show date.
+      if (_airingAt! > now && _airingEp == nextEp) {
+        final date = DateTime.fromMillisecondsSinceEpoch(
+            _airingAt! * 1000);
+        final formatted =
+            '${date.day} ${_monthName(date.month)}';
+        return Text(
+          'Next EP $nextEp airs $formatted',
+          style: TextStyle(
+              fontSize: 11, color: Colors.grey.shade400),
+        );
+      }
+    }
+
+    // Released (or unknown) → "ready" in green.
+    if (isReleased || total == 0) {
+      return Text(
+        'Next EP $nextEp ready',
+        style: const TextStyle(
+            fontSize: 11,
+            color: Color(0xFF4CAF50),
+            fontWeight: FontWeight.w600),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  String _monthName(int m) {
+    const names = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return names[m - 1];
   }
 }
