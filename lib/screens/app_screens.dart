@@ -11,6 +11,7 @@ import '../services/anilist.dart';
 import '../services/trackers.dart';
 import '../services/tracker_oauth.dart';
 import '../services/firebase_sync.dart';
+import '../services/resume_store.dart';
 import '../store.dart';
 import '../widgets/ga_image.dart';
 import '../widgets/anime_card.dart';
@@ -30,6 +31,7 @@ Future<void> openDetails(
   required AppSettings settings,
   int initialProgress = 0,
   Future<void> Function(Anime, int)? onMarkWatched,
+  int? autoPlayEpisode,
 }) {
   return Navigator.of(context).push(
     MaterialPageRoute(
@@ -39,6 +41,7 @@ Future<void> openDetails(
         settings: settings,
         initialProgress: initialProgress,
         onMarkWatched: onMarkWatched,
+        autoPlayEpisode: autoPlayEpisode,
       ),
     ),
   );
@@ -132,10 +135,58 @@ class _HomeScreenState extends State<HomeScreen> {
   // FutureBuilder blanked the whole screen to a spinner.
   late Future<List<dynamic>> _homeFuture;
 
+  // Half-watched episodes (resume spots) for the Continue Watching row.
+  List<ResumeItem> _resume = [];
+
+  Future<void> _loadResume() async {
+    final items =
+        await ResumeStore.recent(widget.profileId ?? 'guest');
+    if (mounted) setState(() => _resume = items);
+  }
+
+  /// Finds the resume spot for an anime (most recent episode), or null.
+  ResumeItem? _resumeFor(int animeId) {
+    for (final r in _resume) {
+      if (r.animeId == animeId) return r;
+    }
+    return null;
+  }
+
+  /// Resume info line: "EP 5 · 12 min left" with progress bar of how far
+  /// into this episode you are.
+  Widget _resumeInfo(ResumeItem r) {
+    final leftMs = (r.durMs - r.posMs).clamp(0, r.durMs).toInt();
+    final mins = Duration(milliseconds: leftMs).inMinutes;
+    final leftTxt = mins < 1 ? 'less than 1 min left' : '$mins min left';
+    final ratio = (r.posMs / r.durMs).clamp(0.0, 1.0).toDouble();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'EP ${r.ep} · $leftTxt',
+          style: const TextStyle(
+              fontSize: 11,
+              color: Color(0xFF4CAF50),
+              fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 4),
+        LinearProgressIndicator(
+          value: ratio,
+          backgroundColor: const Color(0xFF333333),
+          minHeight: 5,
+          valueColor: const AlwaysStoppedAnimation<Color>(
+              Color(0xFF4CAF50)),
+        ),
+      ],
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _homeFuture = _loadHomeCached();
+    _loadResume();
+    ResumeStore.changed.addListener(_loadResume);
   }
 
   @override
@@ -143,6 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.profileId != widget.profileId) {
       _homeFuture = _loadHomeCached();
+      _loadResume();
     }
   }
 
@@ -248,9 +300,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    ResumeStore.changed.removeListener(_loadResume);
     _heroPage.dispose();
     super.dispose();
   }
+
+  /// Continue-watching card for a half-watched episode: cover, "EP 5 ·
+  /// 12 min left" and a progress bar of how far into THIS episode you are.
+  /// Tap -> opens the anime and jumps straight to that episode's streams.
 
   void _openSeeAll(String title, List<Anime> items) {
     Navigator.of(context).push(
@@ -381,7 +438,11 @@ class _HomeScreenState extends State<HomeScreen> {
           final t = e.total ?? 0;
           if (t > 0 && e.progress >= t) return false; // completed
           return true;
-        }).toList();
+        })
+            // An anime with a half-watched episode is shown by its resume
+            // card instead (no duplicate card for the same show).
+            .where((e) => !_resume.any((r) => r.animeId == e.anilistId))
+            .toList();
         final heroItems = trending.take(4).toList();
         // Layout settings (Settings > Layout) gate every Home section.
         final ls = widget.settings;
@@ -400,7 +461,8 @@ class _HomeScreenState extends State<HomeScreen> {
             _rail('Top 100 Movies', topMovies),
         ];
         final showHero = ls.showHero && heroItems.isNotEmpty;
-        final showCw = ls.showContinueWatching && cw.isNotEmpty;
+        final showCw =
+            ls.showContinueWatching && (cw.isNotEmpty || _resume.isNotEmpty);
         return ListView(
           children: [
             // Hero carousel, like the web home: rounded card (margin 14,
@@ -671,7 +733,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             letterSpacing: 1.2)),
                     const SizedBox(height: 10),
                     SizedBox(
-                      height: 120,
+                      height: 144,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: cw.length,
@@ -687,6 +749,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             cover: e.cover,
                             episodes: total,
                           );
+                          // Look up resume spot for this anime (if any).
+                          final resume = _resumeFor(e.anilistId ?? 0);
                           return SizedBox(
                             width: 280,
                             child: InkWell(
@@ -798,6 +862,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                           ),
                                           // Next episode info: "ready" if
                                           // released, airing date if known.
+                                          // If there's a resume spot, show it
+                                          // instead with a resume button.
+                                          if (resume != null) ...[
+                                            const SizedBox(height: 4),
+                                            _resumeInfo(resume),
+                                          ],
                                           if (!done) ...[
                                             const SizedBox(height: 4),
                                             _NextEpInfo(entry: e),
@@ -805,6 +875,52 @@ class _HomeScreenState extends State<HomeScreen> {
                                         ],
                                       ),
                                     ),
+                                    // Resume button: jumps to the saved spot.
+                                    // Tap card = details, tap this = resume.
+                                    if (resume != null)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(left: 8),
+                                        child: InkWell(
+                                          onTap: () async {
+                                            final ra = Anime(
+                                              id: resume.animeId,
+                                              title: resume.title,
+                                              cover: resume.cover,
+                                            );
+                                            await openDetails(
+                                              context,
+                                              anime: ra,
+                                              profileId: widget.profileId ?? '',
+                                              settings: widget.settings,
+                                              onMarkWatched:
+                                                  widget.onMarkWatched,
+                                              autoPlayEpisode: resume.ep,
+                                            );
+                                            _loadResume();
+                                          },
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                          child: Container(
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary
+                                                  .withValues(alpha: 0.2),
+                                            ),
+                                            child: Icon(
+                                              Icons.play_arrow,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              size: 22,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),

@@ -28,6 +28,9 @@ class DetailsScreen extends StatefulWidget {
   final AppSettings settings;
   final int initialProgress;
   final Future<void> Function(Anime anime, int episode)? onMarkWatched;
+  /// When set (Continue watching), the streams screen for this episode opens
+  /// as soon as the details finish loading.
+  final int? autoPlayEpisode;
   const DetailsScreen({
     super.key,
     required this.anime,
@@ -35,6 +38,7 @@ class DetailsScreen extends StatefulWidget {
     required this.settings,
     this.initialProgress = 0,
     this.onMarkWatched,
+    this.autoPlayEpisode,
   });
 
   @override
@@ -133,7 +137,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _slowTimer = Timer(const Duration(milliseconds: 450), () {
       if (mounted && _loading) setState(() => _slowLoading = true);
     });
-    _load();
+    _load().whenComplete(() {
+      final ep = widget.autoPlayEpisode;
+      if (ep != null && mounted) _playEpisode(ep);
+    });
   }
 
   @override

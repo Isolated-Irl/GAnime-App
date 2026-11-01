@@ -5,6 +5,7 @@
 //  - "x":1 means "finished / cleared" (kept as a tombstone so an older cloud
 //    copy can't bring the spot back after you finished the episode).
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ResumeEntry {
@@ -12,7 +13,20 @@ class ResumeEntry {
   const ResumeEntry(this.posMs, this.durMs, this.at);
 }
 
+/// One "resume this episode" card for the Home screen.
+class ResumeItem {
+  final int animeId, ep, posMs, durMs, at;
+  final String title, cover;
+  const ResumeItem(this.animeId, this.ep, this.posMs, this.durMs, this.at,
+      this.title, this.cover);
+}
+
 class ResumeStore {
+  /// Bumps whenever a spot is saved on pause/exit or cleared, so Home can
+  /// refresh its Continue Watching row. (The 5-second periodic saves do NOT
+  /// bump it, to avoid pointless rebuilds while playing.)
+  static final ValueNotifier<int> changed = ValueNotifier<int>(0);
+
   static const _k = 'ganime_resume';
   static const _maxPerProfile = 400;
 
@@ -73,16 +87,28 @@ class ResumeStore {
       });
 
   static Future<void> save(
-          String pid, int animeId, int ep, int posMs, int durMs) =>
-      _put(pid, animeId, ep,
-          {'p': posMs, 'd': durMs, 't': DateTime.now().millisecondsSinceEpoch});
+          String pid, int animeId, int ep, int posMs, int durMs,
+          {String title = '', String cover = '', bool notify = true}) =>
+      _put(
+          pid,
+          animeId,
+          ep,
+          {
+            'p': posMs,
+            'd': durMs,
+            't': DateTime.now().millisecondsSinceEpoch,
+            if (title.isNotEmpty) 'ti': title,
+            if (cover.isNotEmpty) 'cv': cover,
+          },
+          notify);
 
   /// Finished episode: forget the spot (tombstone so the cloud copy dies too).
   static Future<void> clear(String pid, int animeId, int ep) => _put(pid,
       animeId, ep, {'p': 0, 'd': 0, 't': DateTime.now().millisecondsSinceEpoch, 'x': 1});
 
   static Future<void> _put(
-          String pid, int animeId, int ep, Map<String, dynamic> v) =>
+          String pid, int animeId, int ep, Map<String, dynamic> v,
+          [bool notify = true]) =>
       _run(() async {
         final all = await _readAll();
         final prof = _profile(all, pid);
@@ -97,6 +123,38 @@ class ResumeStore {
         }
         all[pid] = prof;
         await _writeAll(all);
+        if (notify) changed.value++;
+      });
+
+  /// Half-watched episodes for the Home "Continue watching" row: newest
+  /// first, one per anime, within the last 60 days. Entries saved before
+  /// titles were stored are skipped (they can't be drawn as a card).
+  static Future<List<ResumeItem>> recent(String pid, {int limit = 12}) =>
+      _run(() async {
+        final prof = _profile(await _readAll(), pid);
+        final cutoff = DateTime.now().millisecondsSinceEpoch -
+            const Duration(days: 60).inMilliseconds;
+        final byAnime = <int, ResumeItem>{};
+        prof.forEach((k, v) {
+          if (v is! Map || v['x'] == 1) return;
+          final parts = k.split(':');
+          if (parts.length != 2) return;
+          final aid = int.tryParse(parts[0]);
+          final ep = int.tryParse(parts[1]);
+          final p = (v['p'] as num?)?.toInt() ?? 0;
+          final d = (v['d'] as num?)?.toInt() ?? 0;
+          final t = (v['t'] as num?)?.toInt() ?? 0;
+          final title = (v['ti'] as String?) ?? '';
+          if (aid == null || ep == null) return;
+          if (p < 10000 || d <= 0 || title.isEmpty || t < cutoff) return;
+          final item = ResumeItem(
+              aid, ep, p, d, t, title, (v['cv'] as String?) ?? '');
+          final cur = byAnime[aid];
+          if (cur == null || item.at > cur.at) byAnime[aid] = item;
+        });
+        final list = byAnime.values.toList()
+          ..sort((a, b) => b.at.compareTo(a.at));
+        return list.take(limit).toList();
       });
 
   /// Everything for this profile (what gets pushed to the cloud).

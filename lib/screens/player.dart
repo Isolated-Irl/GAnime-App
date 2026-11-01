@@ -558,10 +558,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// to call from dispose().
   Future<void> _saveResume({bool force = false}) async {
     // Guest support: use 'guest' ID when not logged in. Saves locally;
-    // cloud sync only happens for logged-in users (see requestCloudPush).
+    // cloud sync only happens for logged-in users.
     final pid = widget.profileId ?? _guestPid;
     if (_opening) return;
     final animeId = widget.anime.id;
+    final title = widget.anime.title;
+    final cover = widget.anime.cover;
     final ep = _episode;
     final pos = _player.state.position;
     final dur = _player.state.duration;
@@ -574,7 +576,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (pos.inMilliseconds / dur.inMilliseconds >= 0.95 || remaining < 90000) {
       await ResumeStore.clear(pid, animeId, ep); // finished
     } else {
-      await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds, dur.inMilliseconds);
+      await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds,
+          dur.inMilliseconds,
+          title: title, cover: cover, notify: force);
     }
     // Only push to cloud for logged-in users; guests stay local.
     if (widget.profileId != null) {
@@ -596,7 +600,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _saveResume(force: true).whenComplete(() {
-        // Cloud push only for logged-in users.
         if (widget.profileId != null) {
           ResumeStore.requestCloudPush(force: true);
         }
