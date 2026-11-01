@@ -458,21 +458,67 @@ class _TrackingSettingsScreenState extends State<TrackingSettingsScreen> {
     );
   }
 
+  bool _srcExpanded = false;
+
   Widget _sourceCard() {
+    final options = [
+      ('GANime Cloud', 'Cross-device sync store', 'cloud'),
+      ('AniList', 'Your AniList watching list', 'anilist'),
+      ('MyAnimeList', 'Your MAL watching list', 'mal'),
+      ('Simkl', 'Your Simkl watching list', 'simkl'),
+    ];
+    final current = options.firstWhere(
+      (o) => o.$3 == _s.continueWatchingSource,
+      orElse: () => options[0],
+    );
     return GACard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('CONTINUE WATCHING DATA SOURCE',
-              style: TextStyle(
-                  color: gaGrey,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1)),
-          const SizedBox(height: 12),
-          _srcTile('GANime Cloud', 'Cross-device sync store', 'cloud'),
-          const SizedBox(height: 8),
-          _srcTile('Tracked Sync', 'AniList / MAL / Simkl', 'tracked'),
+          // Tappable header — expands to show all sources.
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => setState(() => _srcExpanded = !_srcExpanded),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(current.$1,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 3),
+                          Text(current.$2,
+                              style: const TextStyle(
+                                  color: gaGrey, fontSize: 12.5)),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      _srcExpanded
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      color: Colors.white70,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (_srcExpanded) ...[
+            const SizedBox(height: 12),
+            for (int i = 0; i < options.length; i++) ...[
+              if (i > 0) const SizedBox(height: 8),
+              _srcTile(options[i].$1, options[i].$2, options[i].$3),
+            ],
+          ],
         ],
       ),
     );

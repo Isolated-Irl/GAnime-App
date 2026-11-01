@@ -381,7 +381,14 @@ class _HomeScreenState extends State<HomeScreen> {
         final topRated = snap.data![4] as List<Anime>;
         final topMovies = snap.data![5] as List<Anime>;
         final local = snap.data![6] as List<LibraryEntry>;
-        final cw = local.where((e) => e.progress > 0).toList();
+        // Continue Watching: has progress, but NOT completed.
+        // Completed anime (progress >= total) don't belong here.
+        final cw = local.where((e) {
+          if (e.progress <= 0) return false;
+          final t = e.total ?? 0;
+          if (t > 0 && e.progress >= t) return false; // completed
+          return true;
+        }).toList();
         final heroItems = trending.take(4).toList();
         // Layout settings (Settings > Layout) gate every Home section.
         final ls = widget.settings;
@@ -754,15 +761,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     Colors.grey.shade400),
                                           ),
                                           const SizedBox(height: 8),
-                                          LinearProgressIndicator(
-                                            value: pct,
-                                            backgroundColor:
-                                                Colors.grey.shade800,
-                                            color:
-                                                Theme.of(context)
-                                                    .colorScheme
-                                                    .primary,
-                                          ),
+                                          // Only show the bar when we know the total.
+                                          // Unknown total = no blank bar (same rule as details skeleton).
+                                          if (total > 0)
+                                            LinearProgressIndicator(
+                                              value: pct,
+                                              backgroundColor:
+                                                  Colors.grey.shade800,
+                                              color:
+                                                  Theme.of(context)
+                                                      .colorScheme
+                                                      .primary,
+                                            ),
                                         ],
                                       ),
                                     ),
