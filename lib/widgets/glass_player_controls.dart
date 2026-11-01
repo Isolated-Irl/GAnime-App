@@ -5,6 +5,8 @@
 // double-tap sides seek ±10s (with flash), auto-hides after 4s while
 // playing. Lock mode shows only the unlock button and disables gestures.
 import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import '../models.dart';
@@ -65,16 +67,17 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
   bool _dragging = false;
   bool _locked = false;
   Timer? _hideTimer;
-  Timer? _pulseTimer;
   StreamSubscription<bool>? _playSub;
   Offset _lastTap = Offset.zero;
-  // Which seek button to pulse after a double-tap (-1 = rewind, 1 = forward, 0 = none).
-  int _pulse = 0;
+  // Double-tap events go through a notifier so ONLY the tapped side's
+  // button animates. No setState => the other two center buttons (and the
+  // rest of the controls) are not rebuilt at all.
+  final ValueNotifier<_SeekEvent> _seekEvents =
+      ValueNotifier<_SeekEvent>(const _SeekEvent(0, 0));
+  int _seekEventN = 0;
   // Timer display mode: 0 = remaining (-23:27), 1 = total (23:49).
   // (Elapsed is already on the left, so it's not in the cycle.)
   int _timeMode = 0;
-  // Rotation turns for the pulse (0 → 0.5 → 0 = half rotate and back).
-  double _pulseTurns = 0;
 
   Player get _p => widget.player;
 
@@ -96,7 +99,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
   @override
   void dispose() {
     _hideTimer?.cancel();
-    _pulseTimer?.cancel();
+    _seekEvents.dispose();
     _playSub?.cancel();
     super.dispose();
   }
@@ -124,24 +127,12 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     _scheduleHide();
   }
 
-  // Pulse the respective seek button after a double-tap, but only when
-  // the controls are open. When hidden, the seek happens silently.
-  // The button does a half rotate and back, like popular players.
+  // Double-tap feedback: only when the controls are open, and only the
+  // button on the tapped side animates (rewind = left, forward = right).
+  // When the controls are hidden the seek happens silently.
   void _pulseSeekButton(bool left) {
     if (!_visible) return;
-    setState(() {
-      _pulse = left ? -1 : 1;
-      _pulseTurns = 0.5;
-    });
-    _pulseTimer?.cancel();
-    _pulseTimer = Timer(const Duration(milliseconds: 350), () {
-      if (mounted) {
-        setState(() {
-          _pulse = 0;
-          _pulseTurns = 0;
-        });
-      }
-    });
+    _seekEvents.value = _SeekEvent(left ? -1 : 1, ++_seekEventN);
   }
 
   @override
@@ -166,11 +157,16 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     );
   }
 
+  double _sideMargin(BuildContext context) {
+    final pad = MediaQuery.paddingOf(context);
+    return math.max(pad.left, pad.right) + 16;
+  }
+
   Widget _overlay() {
     if (_locked) {
       return Stack(children: [
         Positioned(
-          left: 16,
+          left: _sideMargin(context),
           bottom: 16,
           child: GlassButton(
             icon: Icons.lock_outline,
@@ -211,9 +207,14 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
             ),
           ),
         ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        // Same margin on BOTH sides: the larger of the left/right system
+        // insets (camera cutout) is used for each side, so the controls sit
+        // evenly instead of the right side hugging the edge.
+        Builder(builder: (context) {
+          final pad = MediaQuery.paddingOf(context);
+          final side = _sideMargin(context);
+          return Padding(
+            padding: EdgeInsets.fromLTRB(side, pad.top + 8, side, pad.bottom + 8),
             child: Column(
               children: [
                 _topBar(),
@@ -228,8 +229,8 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                 _bottomBar(),
               ],
             ),
-          ),
-        ),
+          );
+        }),
       ],
     );
   }
@@ -239,10 +240,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
       children: [
         GlassButton(icon: Icons.arrow_back, size: 40, iconSize: 20, circle: true, onTap: widget.onBack),
         const SizedBox(width: 10),
-        // Flexible (not Expanded): pill hugs the title content. Long titles
-        // push buttons right naturally, like popular players.
-        Flexible(
-          fit: FlexFit.loose,
+        // Fixed pill: always fills the space between the back button and
+        // the right-hand buttons, so it never grows or shrinks with the
+        // title. Long titles scroll (marquee) instead of being cut off.
+        Expanded(
           child: GlassSurface(
             radius: 14,
             child: Padding(
@@ -251,17 +252,14 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
+                  _MarqueeText(
                     widget.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   if (widget.status.isNotEmpty)
-                    Text(
+                    _MarqueeText(
                       widget.status,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white70, fontSize: 11),
                     ),
                 ],
@@ -319,10 +317,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedRotation(
-          turns: _pulse == -1 ? _pulseTurns : 0,
-          duration: const Duration(milliseconds: 300),
-          child: GlassButton(icon: Icons.replay_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(-10)),
+        _SeekPulseButton(
+          side: -1,
+          events: _seekEvents,
+          icon: Icons.replay_10,
+          onTap: () => _seekBy(-10),
         ),
         const SizedBox(width: 24),
         // Play/pause button with an in-button buffering spinner:
@@ -381,10 +380,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
           },
         ),
         const SizedBox(width: 24),
-        AnimatedRotation(
-          turns: _pulse == 1 ? _pulseTurns : 0,
-          duration: const Duration(milliseconds: 300),
-          child: GlassButton(icon: Icons.forward_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(10)),
+        _SeekPulseButton(
+          side: 1,
+          events: _seekEvents,
+          icon: Icons.forward_10,
+          onTap: () => _seekBy(10),
         ),
       ],
     );
@@ -490,10 +490,14 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                 children: [
                   // Fixed width so the seekbar doesn't shift as digits change.
                   SizedBox(
-                    width: 48,
-                    child: Text(fmtPlayerTime(pos),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    width: 52,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(fmtPlayerTime(pos),
+                          maxLines: 1,
+                          softWrap: false,
+                          style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -511,15 +515,23 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       setState(() => _timeMode = (_timeMode + 1) % 2);
                       _scheduleHide();
                     },
                     child: SizedBox(
-                      width: 56,
-                      child: Text(rightLabel,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.white, fontSize: 12)),
+                      width: 60,
+                      height: 32,
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(rightLabel,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -711,5 +723,165 @@ class _RatePill extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+
+/// One double-tap event: [side] -1 = rewind, 1 = forward; [n] makes every
+/// tap a distinct value so repeated taps on the same side re-trigger.
+class _SeekEvent {
+  final int side, n;
+  const _SeekEvent(this.side, this.n);
+}
+
+/// A seek button with its OWN animation controller. It only reacts to
+/// events for its side, and only its transform changes — the glass child is
+/// built once and never rebuilt, so the other buttons stay perfectly still.
+class _SeekPulseButton extends StatefulWidget {
+  final int side;
+  final ValueListenable<_SeekEvent> events;
+  final IconData icon;
+  final VoidCallback onTap;
+  const _SeekPulseButton({
+    required this.side,
+    required this.events,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  State<_SeekPulseButton> createState() => _SeekPulseButtonState();
+}
+
+class _SeekPulseButtonState extends State<_SeekPulseButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+  late final Widget _button = GlassButton(
+    icon: widget.icon,
+    size: 48,
+    iconSize: 24,
+    circle: true,
+    onTap: widget.onTap,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.events.addListener(_onEvent);
+  }
+
+  void _onEvent() {
+    if (widget.events.value.side == widget.side) _c.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    widget.events.removeListener(_onEvent);
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      child: _button,
+      builder: (_, child) {
+        // 0 -> 1 -> 0 bump: half turn out and back, with a small scale pop.
+        final bump = math.sin(math.pi * Curves.easeInOut.transform(_c.value));
+        return Transform.scale(
+          scale: 1 + 0.14 * bump,
+          child: Transform.rotate(angle: widget.side * math.pi * bump, child: child),
+        );
+      },
+    );
+  }
+}
+
+/// Single-line text that scrolls sideways (with pauses) only when it does
+/// not fit; short text just sits still.
+class _MarqueeText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+  const _MarqueeText(this.text, {required this.style});
+
+  @override
+  State<_MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<_MarqueeText> {
+  final ScrollController _sc = ScrollController();
+  int _gen = 0; // bumps whenever the text changes -> restarts the loop
+  int _startedFor = -1;
+
+  @override
+  void didUpdateWidget(covariant _MarqueeText old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text) {
+      _gen++;
+      if (_sc.hasClients) _sc.jumpTo(0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _gen++; // stops the loop
+    _sc.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loop(int gen) async {
+    Future<bool> wait(int ms) async {
+      await Future<void>.delayed(Duration(milliseconds: ms));
+      return mounted && gen == _gen && _sc.hasClients;
+    }
+
+    if (!await wait(1500)) return;
+    while (mounted && gen == _gen && _sc.hasClients) {
+      final max = _sc.position.maxScrollExtent;
+      if (max <= 0) return;
+      await _sc.animateTo(
+        max,
+        duration: Duration(milliseconds: (max / 40 * 1000).round()), // 40 px/s
+        curve: Curves.linear,
+      );
+      if (!await wait(1200)) return;
+      _sc.jumpTo(0);
+      if (!await wait(1500)) return;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final tp = TextPainter(
+        text: TextSpan(text: widget.text, style: widget.style),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final overflows = tp.width > c.maxWidth;
+      tp.dispose();
+      if (!overflows) {
+        _startedFor = -1;
+        return Text(widget.text,
+            maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: widget.style);
+      }
+      if (_startedFor != _gen) {
+        _startedFor = _gen;
+        final g = _gen;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && g == _gen) _loop(g);
+        });
+      }
+      return SingleChildScrollView(
+        controller: _sc,
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        child: Text(widget.text, maxLines: 1, softWrap: false, style: widget.style),
+      );
+    });
   }
 }
