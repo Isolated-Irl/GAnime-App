@@ -108,7 +108,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
   bool _synopsisExpanded = false;
   late String _layout; // 'detailed' | 'minimum'
   int? _rangeFrom; // null = All
-  bool _filterOpen = false;
+  // Key for the library PopupMenuButton so the whole pill can open it.
+  final _libMenuKey = GlobalKey<PopupMenuButtonState<String>>();
   String? _libStatus; // app status code, null = not in library
   String _studio = ''; // main studio from AniList, '' = unknown (no chip)
   // Canonical anime for this screen. Calendar/tracker entries arrive
@@ -420,10 +421,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _setLayout(String v) async {
-    setState(() {
-      _layout = v;
-      _filterOpen = false;
-    });
+    // Dismiss the floating filter sheet if it's open.
+    if (_filterSheetOpen) {
+      _filterSheetOpen = false;
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+    }
+    setState(() => _layout = v);
     await Store.saveSettings(widget.settings.copyWith(episodeLayout: v));
   }
 
@@ -1478,9 +1481,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
           ),
           child: Icon(icon,
               size: 15,
+              // Active: dark icon on the colored circle so it's always
+              // visible (white-on-white was invisible). Inactive: soft
+              // white on the dark circle, same as the bookmark.
               color: active
-                  ? Colors.white
-                  : Colors.white.withValues(alpha: 0.55)),
+                  ? const Color(0xFF101014)
+                  : Colors.white.withValues(alpha: 0.85)),
         ),
       ),
     );
@@ -2179,9 +2185,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
                       Row(
                         children: [
                           // Library / My List (website's bookmark pill).
+                          // Whole pill opens the menu, not just the icon.
                           Expanded(
                             child: _actionPill(
+                              onTap: () =>
+                                  _libMenuKey.currentState?.showButtonMenu(),
                               child: PopupMenuButton<String>(
+                                key: _libMenuKey,
                                 color: GaColors.of(context).card,
                                 tooltip: _libStatus == null
                                     ? 'Add to Library'
@@ -2225,8 +2235,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           ),
                           const SizedBox(width: 10),
                           // Mark all watched (website's ✓ pill).
+                          // Whole pill is tappable, not just the icon.
                           Expanded(
                             child: _actionPill(
+                              onTap:
+                                  total > 0 ? _markAllWatched : null,
                               child: IconButton(
                                 tooltip: _allWatched
                                     ? 'All watched — tap to unwatch'
@@ -2329,8 +2342,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         Row(
                           children: [
                             InkWell(
-                              onTap: () => setState(() =>
-                                  _filterOpen = !_filterOpen),
+                              // Opens a floating sheet, not an inline
+                              // expand — content below doesn't move.
+                              onTap: _showFilterSheet,
                               borderRadius:
                                   BorderRadius.circular(20),
                               child: Container(
@@ -2340,9 +2354,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                                   color: GaColors.of(context).card,
                                   borderRadius:
                                       BorderRadius.circular(20),
-                                  border: _filterOpen
-                                      ? Border.all(color: accent)
-                                      : null,
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -2393,36 +2404,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             ),
                           ],
                         ),
-                        if (_filterOpen)
-                          Container(
-                            margin:
-                                const EdgeInsets.only(top: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: GaColors.of(context).card,
-                              borderRadius:
-                                  BorderRadius.circular(14),
-                            ),
-                            child: Column(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-                              children: [
-                                const Text('EPISODE DESIGN',
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 1.1,
-                                        color: Colors.grey)),
-                                const SizedBox(height: 4),
-                                _designRow('minimum', 'Minimum',
-                                    'Compact rows'),
-                                _designRow('compact', 'Compact',
-                                    'Dense rows'),
-                                _designRow('detailed', 'Detailed',
-                                    'Big cards with synopsis'),
-                              ],
-                            ),
-                          ),
                         const SizedBox(height: 10),
                       ],
                       if (_loading && _slowLoading)
@@ -2453,11 +2434,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
                             ),
                           )
                         else if (_layout == 'compact')
+                          // Swapped: "Compact" now shows the minimal cards.
                           ...numbers
-                              .map((n) => _compactRow(_epFor(n)))
+                              .map((n) => _minimumCard(_epFor(n)))
                         else
+                          // Swapped: "Minimum" now shows the dense rows.
                           ...numbers
-                              .map((n) => _minimumCard(_epFor(n))),
+                              .map((n) => _compactRow(_epFor(n))),
                       if (!_loading &&
                           _error == null &&
                           numbers.isEmpty)
@@ -2502,38 +2485,75 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
-  Widget _actionPill({required Widget child}) => Container(
-        height: 56,
-        decoration: BoxDecoration(
-          color: GaColors.of(context).card,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Center(child: child),
-      );
+  Widget _actionPill({required Widget child, VoidCallback? onTap}) {
+    final pill = Container(
+      height: 56,
+      decoration: BoxDecoration(
+        color: GaColors.of(context).card,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Center(child: child),
+    );
+    // Whole pill is tappable, not just the icon inside.
+    if (onTap == null) return pill;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: pill,
+    );
+  }
 
-  Widget _designRow(String value, String name, String hint) {
+  bool _filterSheetOpen = false;
+
+  /// Floating filter sheet (episode design picker). Overlays the
+  /// content instead of pushing it down like the old inline expand.
+  void _showFilterSheet() {
+    _filterSheetOpen = true;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: GaColors.of(ctx).card,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('EPISODE DESIGN',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.1,
+                    color: Colors.grey)),
+            const SizedBox(height: 8),
+            _designRow('minimum', 'Minimum'),
+            _designRow('compact', 'Compact'),
+            _designRow('detailed', 'Detailed'),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    ).then((_) => _filterSheetOpen = false);
+  }
+
+  Widget _designRow(String value, String name) {
     final active = _layout == value;
     final accent = Theme.of(context).colorScheme.primary;
     return InkWell(
       onTap: () => _setLayout(value),
+      // Whole row is tappable, not just the icon.
       borderRadius: BorderRadius.circular(10),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold)),
-                  Text(hint,
-                      style: TextStyle(
-                          color: Colors.grey.shade400,
-                          fontSize: 12)),
-                ],
-              ),
+              child: Text(name,
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
             if (active)
               Icon(Icons.check, color: accent)

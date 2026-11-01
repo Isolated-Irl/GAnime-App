@@ -63,6 +63,7 @@ class AniList {
     bool? isAdult,
     List<String>? genres,
     String? status,
+    int pageNum = 1,
   }) async {
     const q = '''
 query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort], \$season: MediaSeason, \$seasonYear: Int, \$format: MediaFormat, \$isAdult: Boolean, \$genreIn: [String], \$status: MediaStatus) {
@@ -71,7 +72,7 @@ query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort], \$sea
   }
 }''';
     final requestVars = <String, dynamic>{
-      'page': 1,
+      'page': pageNum,
       'perPage': 20,
       'sort': [sort],
     };
@@ -97,6 +98,26 @@ query (\$page: Int, \$perPage: Int, \$search: String, \$sort: [MediaSort], \$sea
 
   static Future<List<Anime>> trending() => _page({}, 'TRENDING_DESC');
   static Future<List<Anime>> popular() => _page({}, 'POPULARITY_DESC');
+
+  /// Paginated versions for the "View All" infinite scroll (website parity).
+  static Future<List<Anime>> trendingPage(int page) =>
+      _page({}, 'TRENDING_DESC', pageNum: page);
+  static Future<List<Anime>> popularPage(int page) =>
+      _page({}, 'POPULARITY_DESC', pageNum: page);
+  static Future<List<Anime>> popularThisSeasonPage(int page) {
+    final s = currentSeason();
+    return _page({}, 'POPULARITY_DESC',
+        season: s.season, seasonYear: s.year, isAdult: false, pageNum: page);
+  }
+  static Future<List<Anime>> upcomingNextSeasonPage(int page) {
+    final s = nextSeason();
+    return _page({}, 'POPULARITY_DESC',
+        season: s.season, seasonYear: s.year, isAdult: false, pageNum: page);
+  }
+  static Future<List<Anime>> topRatedPage(int page) =>
+      _page({}, 'SCORE_DESC', isAdult: false, pageNum: page);
+  static Future<List<Anime>> topMoviesPage(int page) =>
+      _page({}, 'SCORE_DESC', format: 'MOVIE', isAdult: false, pageNum: page);
   /// Website parity: AniList.browse() — search with optional filters.
   /// sort defaults to SEARCH_MATCH with a query, POPULARITY_DESC without
   /// (SEARCH_MATCH is illegal without a search string).

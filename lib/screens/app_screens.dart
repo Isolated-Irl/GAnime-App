@@ -255,19 +255,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openSeeAll(String title, List<Anime> items) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: Text(title)),
-          body: ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              AnimeGrid(
-                items: items,
-                profileId: widget.profileId,
-                settings: widget.settings,
-                onMarkWatched: widget.onMarkWatched,
-              ),
-            ],
-          ),
+        builder: (_) => _SeeAllScreen(
+          title: title,
+          initialItems: items,
+          profileId: widget.profileId,
+          settings: widget.settings,
+          onMarkWatched: widget.onMarkWatched,
         ),
       ),
     );
@@ -3188,3 +3181,192 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
+
+/// Paginated "View All" screen (website parity).
+/// Shows the rail title, a title count, and infinite-scrolls through
+/// AniList pages. Retry button on failure.
+class _SeeAllScreen extends StatefulWidget {
+  final String title;
+  final List<Anime> initialItems;
+  final String profileId;
+  final AppSettings settings;
+  final Future<void> Function(Anime, int)? onMarkWatched;
+
+  const _SeeAllScreen({
+    required this.title,
+    required this.initialItems,
+    required this.profileId,
+    required this.settings,
+    this.onMarkWatched,
+  });
+
+  @override
+  State<_SeeAllScreen> createState() => _SeeAllScreenState();
+}
+
+class _SeeAllScreenState extends State<_SeeAllScreen> {
+  late List<Anime> _items;
+  final ScrollController _scroll = ScrollController();
+  int _page = 1;
+  bool _loadingMore = false;
+  bool _done = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Page 1 is already loaded (the home rail items). Start from page 2.
+    _items = List.of(widget.initialItems);
+    _page = 2;
+    _scroll.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Maps the rail title to its paginated fetcher.
+  Future<List<Anime>> Function(int)? get _fetcher {
+    switch (widget.title) {
+      case 'Trending Now':
+        return AniList.trendingPage;
+      case 'Popular This Season':
+        return AniList.popularThisSeasonPage;
+      case 'Upcoming Next Season':
+        return AniList.upcomingNextSeasonPage;
+      case 'All Time Popular':
+        return AniList.popularPage;
+      case 'Top 100 Anime':
+        return AniList.topRatedPage;
+      case 'Top 100 Movies':
+        return AniList.topMoviesPage;
+      default:
+        return null;
+    }
+  }
+
+  void _onScroll() {
+    if (_scroll.position.pixels >=
+        _scroll.position.maxScrollExtent - 400) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final fetch = _fetcher;
+    if (fetch == null || _loadingMore || _done) return;
+    setState(() {
+      _loadingMore = true;
+      _error = null;
+    });
+    try {
+      final next = await fetch(_page);
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+        if (next.isEmpty) {
+          _done = true;
+        } else {
+          // Dedupe by id (AniList can repeat items across pages).
+          final seen = _items.map((e) => e.id).toSet();
+          _items.addAll(next.where((e) => seen.add(e.id)));
+          _page++;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Website parity: "X TITLES" count label.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text(
+              '${_items.length} TITLES',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.2,
+                color: Colors.grey,
+              ),
+            ),
+          ),
+          Expanded(
+            child: GridView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+              gridDelegate:
+                  const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 10,
+                childAspectRatio: 0.62,
+              ),
+              itemCount: _items.length + 1, // +1 for footer
+              itemBuilder: (ctx, i) {
+                if (i >= _items.length) return _footer();
+                final anime = _items[i];
+                return AnimeCard(
+                  anime: anime,
+                  onTap: () => openDetails(
+                    context,
+                    anime: anime,
+                    profileId: widget.profileId,
+                    settings: widget.settings,
+                    onMarkWatched: widget.onMarkWatched,
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _footer() {
+    // Error → retry button (website parity).
+    if (_error != null) {
+      return Center(
+        child: TextButton.icon(
+          onPressed: _loadMore,
+          icon: const Icon(Icons.refresh, size: 18),
+          label: const Text('Retry'),
+        ),
+      );
+    }
+    // Loading more → spinner.
+    if (_loadingMore) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    // Done → nothing (or a subtle end marker).
+    if (_done && _items.isNotEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('— end —',
+              style: TextStyle(color: Colors.grey, fontSize: 12)),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+}
