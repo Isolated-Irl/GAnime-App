@@ -72,6 +72,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
 
   bool _visible = true;
   bool _locked = false;
+  final GlobalKey<_SeekSpinButtonState> _leftSeekKey =
+      GlobalKey<_SeekSpinButtonState>();
+  final GlobalKey<_SeekSpinButtonState> _rightSeekKey =
+      GlobalKey<_SeekSpinButtonState>();
   Timer? _hideTimer;
 
   // Fix 8: Fit mode state + persistence ('Fit', 'Stretch', 'Fill')
@@ -225,6 +229,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     final rightSide = details.localPosition.dx > width / 2;
     final step = rightSide ? widget.seekInterval : -widget.seekInterval;
     _seekRelative(step);
+    // Spin the matching seek button only when controls are visible
+    if (_visible) {
+      final key = rightSide ? _rightSeekKey : _leftSeekKey;
+      key.currentState?.spin();
+    }
 
     _doubleTapTimer?.cancel();
     setState(() {
@@ -343,7 +352,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             // Fix 7: Full-screen gesture layer
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _locked ? null : _toggleVisible,
+              onTap: _locked ? () => _setVisible(true) : _toggleVisible,
               onDoubleTapDown: (d) => _handleDoubleTap(d, w),
               onDoubleTap: () {},
               onLongPressStart: _onLongPressStart,
@@ -747,6 +756,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
       mainAxisSize: MainAxisSize.min,
       children: [
         _SeekSpinButton(
+          key: _leftSeekKey,
           side: -1,
           seekInterval: widget.seekInterval,
           onTap: () => _seekRelative(-widget.seekInterval),
@@ -805,6 +815,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
         ),
         const SizedBox(width: 28),
         _SeekSpinButton(
+          key: _rightSeekKey,
           side: 1,
           seekInterval: widget.seekInterval,
           onTap: () => _seekRelative(widget.seekInterval),
@@ -1296,6 +1307,7 @@ class _SeekSpinButton extends StatefulWidget {
   final VoidCallback onTap;
 
   const _SeekSpinButton({
+    super.key,
     required this.side,
     required this.seekInterval,
     required this.onTap,
@@ -1329,8 +1341,17 @@ class _SeekSpinButtonState extends State<_SeekSpinButton>
   }
 
   void _trigger() {
-    _ctrl.forward(from: 0);
+    _ctrl.forward(from: 0).then((_) {
+      if (mounted) _ctrl.reverse();
+    });
     widget.onTap();
+  }
+
+  /// Public: play just the spin animation (no seek). Used by double-tap.
+  void spin() {
+    _ctrl.forward(from: 0).then((_) {
+      if (mounted) _ctrl.reverse();
+    });
   }
 
   @override
