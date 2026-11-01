@@ -301,13 +301,18 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // Sync tracker progress: if local watched is empty, populate from
       // the tracker's progress (e.g. opened from MAL/Simkl/AniList tab).
       // Falls back to widget.initialProgress passed from the library card.
+      // NEW: also fetches directly from the tracker API if still empty.
       if (w.isEmpty) {
         final existing = lib
             .where((e) => e.key == 'local_${a.id}' || e.anilistId == a.id)
             .firstOrNull;
-        final prog = (existing?.progress ?? 0) > 0
+        var prog = (existing?.progress ?? 0) > 0
             ? existing!.progress
             : widget.initialProgress;
+        // If still 0, try fetching from the connected tracker API.
+        if (prog <= 0) {
+          prog = await _fetchTrackerProgress(a);
+        }
         if (prog > 0) {
           w = List.generate(prog, (i) => i + 1).toSet();
           await Store.setWatched(widget.profileId, a.id, w);
@@ -406,11 +411,99 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   /// Website's mark-all toggle: all watched -> unwatch all (local only,
   /// tracker progress left alone); otherwise mark all + one tracker push.
+  /// Fetches the watched progress from the connected tracker API
+  /// (AniList/MAL/Simkl). Returns 0 if not found or on error.
+  Future<int> _fetchTrackerProgress(Anime a) async {
+    try {
+      final t = await Store.tracker();
+      final aid = a.anilistId ?? a.id;
+      // Try AniList first.
+      final anilistToken = (t['anilistToken'] as String?) ?? '';
+      final anilistUserId =
+          int.tryParse((t['anilistUserId'] as String?) ?? '');
+      if (anilistToken.isNotEmpty && anilistUserId != null) {
+        try {
+          final prog = await Trackers.anilistGetProgress(
+              anilistToken, anilistUserId, aid);
+          if (prog > 0) return prog;
+        } catch (_) {}
+      }
+      // Try MAL.
+      final malUsername = (t['malUsername'] as String?) ?? '';
+      final malClientId = (t['malClientId'] as String?) ?? '';
+      final malId = a.malId;
+      if (malUsername.isNotEmpty &&
+          malClientId.isNotEmpty &&
+          malId != null &&
+          malId > 0) {
+        try {
+          final prog = await Trackers.malGetProgress(
+              malUsername, malClientId, malId);
+          if (prog > 0) return prog;
+        } catch (_) {}
+      }
+      // Try Simkl.
+      final simklClient = (t['simklClientId'] as String?) ?? '';
+      final simklToken = (t['simklToken'] as String?) ?? '';
+      final simklId = (t['simklIdFor_$aid'] as num?)?.toInt();
+      if (simklClient.isNotEmpty && simklToken.isNotEmpty && simklId != null) {
+        try {
+          final prog = await Trackers.simklGetProgress(
+              simklClient, simklToken, simklId);
+          if (prog > 0) return prog;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return 0;
+  }
+
   Future<void> _markAllWatched() async {
     final total = _total;
     if (total <= 0) return;
     if (_allWatched) {
-      await Store.setWatched(widget.profileId, _anime.id, <int>{});
+      // Unmark: clear from EVERYWHERE (local + all trackers).
+      final aid = _anime.anilistId ?? _anime.id;
+      try {
+        await Store.setWatched(widget.profileId, _anime.id, <int>{});
+      } catch (_) {}
+      // Clear local library progress.
+      try {
+        final lib = await Store.localLibrary(widget.profileId);
+        final idx = lib.indexWhere((e) => e.anilistId == _anime.id);
+        if (idx >= 0) {
+          final old = lib[idx];
+          lib[idx] = LibraryEntry(
+            key: old.key,
+            source: old.source,
+            title: old.title,
+            cover: old.cover,
+            status: old.status,
+            progress: 0,
+            total: old.total,
+            anilistId: old.anilistId,
+          );
+          await Store.saveLocalLibrary(widget.profileId, lib);
+        }
+      } catch (_) {}
+      // Clear tracker progress (best-effort).
+      try {
+        final t = await Store.tracker();
+        final anilistToken = (t['anilistToken'] as String?) ?? '';
+        if (anilistToken.isNotEmpty) {
+          await Trackers.anilistSave(anilistToken, aid, 0);
+        }
+        final simklClient = (t['simklClientId'] as String?) ?? '';
+        final simklToken = (t['simklToken'] as String?) ?? '';
+        final simklId = (t['simklIdFor_$aid'] as num?)?.toInt();
+        if (simklClient.isNotEmpty && simklToken.isNotEmpty && simklId != null) {
+          await Trackers.simklSave(simklClient, simklToken, simklId, 0);
+        }
+        final malToken = (t['malToken'] as String?) ?? '';
+        final malId = _anime.malId;
+        if (malToken.isNotEmpty && malId != null && malId > 0) {
+          await Trackers.malSave(malToken, malId, episodes: 0);
+        }
+      } catch (_) {}
       if (mounted) setState(() => _watched = <int>{});
       return;
     }

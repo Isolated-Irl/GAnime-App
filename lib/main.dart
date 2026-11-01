@@ -356,6 +356,12 @@ class _GAnimeAppState extends State<GAnimeApp> {
           simklId != null) {
         await Trackers.simklSave(simklClient, simklToken, simklId, episode);
       }
+      // MAL was missing — now synced too.
+      final malToken = (t['malToken'] as String?) ?? '';
+      final malId = anime.malId;
+      if (malToken.isNotEmpty && malId != null && malId > 0) {
+        await Trackers.malSave(malToken, malId, episodes: episode);
+      }
     } catch (_) {}
     // Also record in the local library.
     try {
@@ -370,12 +376,15 @@ class _GAnimeAppState extends State<GAnimeApp> {
         lib.removeWhere((e) => e.key == 'local_$anilistId');
       }
       final idx = lib.indexWhere((e) => e.anilistId == anime.id);
+      // If all episodes watched → "Completed", else "Watching" (CURRENT).
+      final isCompleted =
+          anime.episodes != null && anime.episodes! > 0 && progress >= anime.episodes!;
       final entry = LibraryEntry(
         key: 'local_${anime.id}',
         source: 'local',
         title: anime.title,
         cover: anime.cover,
-        status: 'CURRENT',
+        status: isCompleted ? 'COMPLETED' : 'CURRENT',
         progress: progress,
         total: anime.episodes,
         anilistId: anime.id,

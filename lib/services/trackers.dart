@@ -27,6 +27,49 @@ class Trackers {
           String token, int mediaId, int progress) =>
       AniList.saveProgress(token, mediaId, progress);
 
+  /// Gets the watched progress for a single anime from AniList.
+  /// Returns 0 if not found.
+  static Future<int> anilistGetProgress(
+      String token, int userId, int mediaId) async {
+    try {
+      final lists = await anilistLists(token, userId);
+      final entry = lists
+          .where((e) => e.anilistId == mediaId)
+          .firstOrNull;
+      return entry?.progress ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Gets the watched progress for a single anime from MAL.
+  static Future<int> malGetProgress(
+      String username, String clientId, int malId) async {
+    try {
+      final lists = await malLists(username, clientId);
+      final entry = lists
+          .where((e) => e.key == 'mal_$malId')
+          .firstOrNull;
+      return entry?.progress ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Gets the watched progress for a single anime from Simkl.
+  static Future<int> simklGetProgress(
+      String clientId, String token, int simklId) async {
+    try {
+      final lists = await simklLists(clientId, token);
+      final entry = lists
+          .where((e) => e.key == 'simkl_$simklId')
+          .firstOrNull;
+      return entry?.progress ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   static Map<String, int?>? _fuzzy(DateTime? d) =>
       d == null ? null : {'year': d.year, 'month': d.month, 'day': d.day};
 
