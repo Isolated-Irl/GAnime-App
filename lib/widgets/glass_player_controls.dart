@@ -1,887 +1,1162 @@
-// Overlay controls for the media_kit player, styled with GlassSurface.
-// Compact "glass pill" layout matching the glassplayer.png mockup:
-// top-left back + title pill, top-right tracks/sources, small center
-// cluster, lock bottom-left, seekbar with 85% diamond. Tap toggles,
-// double-tap sides seek ±10s (with flash), auto-hides after 4s while
-// playing. Lock mode shows only the unlock button and disables gestures.
 import 'dart:async';
-import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import '../models.dart';
+import '../services/aniskip.dart';
 import 'glass_surface.dart';
 
-String fmtPlayerTime(Duration d) {
-  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-  return d.inHours > 0 ? '${d.inHours}:$m:$s' : '$m:$s';
+String _fmt(Duration d) {
+  final totalSecs = d.inSeconds.abs();
+  final h = totalSecs ~/ 3600;
+  final m = ((totalSecs % 3600) ~/ 60).toString().padLeft(2, '0');
+  final s = (totalSecs % 60).toString().padLeft(2, '0');
+  return h > 0 ? '$h:$m:$s' : '$m:$s';
 }
 
 class GlassPlayerControls extends StatefulWidget {
   final Player player;
+  final bool isHw;
+  final VoidCallback onToggleHw;
   final String title;
   final String status;
   final List<SkipInterval> skips;
-  final List<double> chapters; // 0..1 ratios for seekbar breaks (mpvKt style)
+  final List<double> chapters;
   final bool showSkipButtons;
+  final int seekInterval;
+  final bool swipeToSeek;
   final VoidCallback onBack;
   final VoidCallback onAudio;
   final VoidCallback onSubs;
+  final VoidCallback onCycleSpeed;
+  final VoidCallback onCycleFit;
   final VoidCallback? onSources;
-  final VoidCallback? onCycleSpeed;
-  final VoidCallback? onCycleFit;
-  final VoidCallback? onEpisodes;      // episode list panel
-  final VoidCallback? onExternal;      // open in external player
-  final VoidCallback? onNextEpisode;   // jump to next episode
-  final bool isHw;                     // active decoder state (tappable badge)
-  final VoidCallback? onToggleHw;        // toggles HW/SW decoding mid-playback
+  final VoidCallback? onEpisodes;
+  final VoidCallback onExternal;
+  final VoidCallback? onNextEpisode;
 
   const GlassPlayerControls({
     super.key,
     required this.player,
+    required this.isHw,
+    required this.onToggleHw,
     required this.title,
     required this.status,
     required this.skips,
-    required this.chapters,
+    this.chapters = const [],
     required this.showSkipButtons,
+    this.seekInterval = 10,
+    this.swipeToSeek = true,
     required this.onBack,
     required this.onAudio,
     required this.onSubs,
+    required this.onCycleSpeed,
+    required this.onCycleFit,
     this.onSources,
-    this.onCycleSpeed,
-    this.onCycleFit,
     this.onEpisodes,
-    this.onExternal,
+    required this.onExternal,
     this.onNextEpisode,
-    this.isHw = true,
-    this.onToggleHw,
   });
 
   @override
   State<GlassPlayerControls> createState() => _GlassPlayerControlsState();
 }
 
-class _GlassPlayerControlsState extends State<GlassPlayerControls> {
+class _GlassPlayerControlsState extends State<GlassPlayerControls>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _anim;
+  late final Animation<double> _fade;
+  late final Animation<Offset> _topSlide;
+  late final Animation<Offset> _bottomSlide;
+  late final Animation<double> _centerScale;
+
   bool _visible = true;
-  bool _dragging = false;
   bool _locked = false;
   Timer? _hideTimer;
-  StreamSubscription<bool>? _playSub;
-  Offset _lastTap = Offset.zero;
-  // Double-tap events go through a notifier so ONLY the tapped side's
-  // button animates. No setState => the other two center buttons (and the
-  // rest of the controls) are not rebuilt at all.
-  final ValueNotifier<_SeekEvent> _seekEvents =
-      ValueNotifier<_SeekEvent>(const _SeekEvent(0, 0));
-  int _seekEventN = 0;
-  // Timer display mode: 0 = remaining (-23:27), 1 = total (23:49).
-  // (Elapsed is already on the left, so it's not in the cycle.)
-  int _timeMode = 0;
 
-  Player get _p => widget.player;
+  // Double-tap seek flash state
+  int _doubleTapAccumSecs = 0;
+  bool? _doubleTapRight;
+  Timer? _doubleTapTimer;
+
+  // Horizontal swipe-to-seek state
+  bool _isHorizontalSwiping = false;
+  Duration _swipeStartPos = Duration.zero;
+  Duration _swipeTargetPos = Duration.zero;
+  double _swipeDeltaX = 0;
+
+  // Vertical swipe (left = brightness, right = volume) state
+  bool _isVerticalSwiping = false;
+  bool _verticalIsVolume = true;
+  double _brightness = 1.0; // 0.15 .. 1.0 visual brightness
+  double _hudValue = 1.0;   // 0.0 .. 1.0 shown in HUD
+  Timer? _hudTimer;
+  bool _showVerticalHud = false;
+
+  // Long-press 2x speed state
+  bool _isLongPress2x = false;
+  double _savedRateBefore2x = 1.0;
 
   @override
   void initState() {
     super.initState();
-    _playSub = _p.stream.playing.listen((playing) {
-      // Pausing keeps controls on screen; playing schedules the hide.
-      if (playing) {
-        _scheduleHide();
-      } else {
-        _hideTimer?.cancel();
-        if (mounted) setState(() => _visible = true);
-      }
-    });
+    _anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 210),
+      reverseDuration: const Duration(milliseconds: 170),
+      value: 1.0,
+    );
+    _fade = CurvedAnimation(
+      parent: _anim,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _topSlide = Tween<Offset>(
+      begin: const Offset(0, -0.12),
+      end: Offset.zero,
+    ).animate(_fade);
+    _bottomSlide = Tween<Offset>(
+      begin: const Offset(0, 0.12),
+      end: Offset.zero,
+    ).animate(_fade);
+    _centerScale = Tween<double>(begin: 0.92, end: 1.0).animate(_fade);
+
     _scheduleHide();
   }
 
   @override
   void dispose() {
     _hideTimer?.cancel();
-    _seekEvents.dispose();
-    _playSub?.cancel();
+    _doubleTapTimer?.cancel();
+    _hudTimer?.cancel();
+    _anim.dispose();
     super.dispose();
   }
 
   void _scheduleHide() {
     _hideTimer?.cancel();
-    if (!_p.state.playing || _dragging || _locked) return;
+    if (!_visible) return;
     _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted) setState(() => _visible = false);
+      if (mounted && widget.player.state.playing && !_isHorizontalSwiping) {
+        _setVisible(false);
+      }
     });
   }
 
-  void _show() {
+  void _setVisible(bool v) {
+    _hideTimer?.cancel();
+    if (_visible == v) {
+      if (v) _scheduleHide();
+      return;
+    }
+    setState(() => _visible = v);
+    if (v) {
+      _anim.forward();
+      _scheduleHide();
+    } else {
+      _anim.reverse();
+    }
+  }
+
+  void _toggleVisible() => _setVisible(!_visible);
+
+  void _seekRelative(int deltaSeconds) {
+    final dur = widget.player.state.duration;
+    final pos = widget.player.state.position;
+    final nextMs = (pos.inMilliseconds + deltaSeconds * 1000)
+        .clamp(0, dur.inMilliseconds > 0 ? dur.inMilliseconds : 86400000);
+    widget.player.seek(Duration(milliseconds: nextMs));
+    if (_visible) _scheduleHide();
+  }
+
+  void _handleDoubleTap(TapDownDetails details, double width) {
     if (_locked) return;
-    setState(() => _visible = true);
-    _scheduleHide();
+    final rightSide = details.localPosition.dx > width / 2;
+    final step = rightSide ? widget.seekInterval : -widget.seekInterval;
+    _seekRelative(step);
+
+    _doubleTapTimer?.cancel();
+    setState(() {
+      if (_doubleTapRight == rightSide) {
+        _doubleTapAccumSecs += step;
+      } else {
+        _doubleTapRight = rightSide;
+        _doubleTapAccumSecs = step;
+      }
+    });
+    _doubleTapTimer = Timer(const Duration(milliseconds: 650), () {
+      if (mounted) {
+        setState(() {
+          _doubleTapRight = null;
+          _doubleTapAccumSecs = 0;
+        });
+      }
+    });
   }
 
-  void _seekBy(int seconds) {
-    final dur = _p.state.duration;
-    var t = _p.state.position + Duration(seconds: seconds);
-    if (t < Duration.zero) t = Duration.zero;
-    if (dur > Duration.zero && t > dur) t = dur;
-    _p.seek(t);
-    _scheduleHide();
+  // ---- Long-press 2x speed ----
+  void _onLongPressStart(LongPressStartDetails _) {
+    if (_locked) return;
+    _savedRateBefore2x = widget.player.state.rate;
+    widget.player.setRate(2.0);
+    setState(() => _isLongPress2x = true);
   }
 
-  // Double-tap feedback: only when the controls are open, and only the
-  // button on the tapped side animates (rewind = left, forward = right).
-  // When the controls are hidden the seek happens silently.
-  void _pulseSeekButton(bool left) {
-    if (!_visible) return;
-    _seekEvents.value = _SeekEvent(left ? -1 : 1, ++_seekEventN);
+  void _onLongPressEnd(LongPressEndDetails _) {
+    if (!_isLongPress2x) return;
+    widget.player.setRate(_savedRateBefore2x);
+    setState(() => _isLongPress2x = false);
+  }
+
+  // ---- Horizontal swipe to seek ----
+  void _onHorizontalDragStart(DragStartDetails d) {
+    if (_locked || !widget.swipeToSeek) return;
+    final dur = widget.player.state.duration;
+    if (dur.inMilliseconds <= 0) return;
+    _isHorizontalSwiping = true;
+    _swipeStartPos = widget.player.state.position;
+    _swipeTargetPos = _swipeStartPos;
+    _swipeDeltaX = 0;
+    setState(() {});
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails d, double width) {
+    if (!_isHorizontalSwiping) return;
+    final dur = widget.player.state.duration;
+    if (dur.inMilliseconds <= 0 || width <= 0) return;
+    _swipeDeltaX += d.primaryDelta ?? 0;
+    // Full screen width swipe = ±120 seconds (scaled smoothly)
+    final deltaMs = ((_swipeDeltaX / width) * 120000).round();
+    final targetMs =
+        (_swipeStartPos.inMilliseconds + deltaMs).clamp(0, dur.inMilliseconds);
+    setState(() => _swipeTargetPos = Duration(milliseconds: targetMs));
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails _) {
+    if (!_isHorizontalSwiping) return;
+    final target = _swipeTargetPos;
+    setState(() => _isHorizontalSwiping = false);
+    widget.player.seek(target);
+  }
+
+  // ---- Vertical swipe: left = brightness, right = volume ----
+  void _onVerticalDragStart(DragStartDetails d, double width) {
+    if (_locked) return;
+    _isVerticalSwiping = true;
+    _verticalIsVolume = d.localPosition.dx >= width / 2;
+    _hudTimer?.cancel();
+    if (_verticalIsVolume) {
+      _hudValue = (widget.player.state.volume / 100.0).clamp(0.0, 1.0);
+    } else {
+      _hudValue = _brightness;
+    }
+    setState(() => _showVerticalHud = true);
+  }
+
+  void _onVerticalDragUpdate(DragUpdateDetails d, double height) {
+    if (!_isVerticalSwiping || height <= 0) return;
+    final delta = -(d.primaryDelta ?? 0) / (height * 0.75);
+    if (_verticalIsVolume) {
+      _hudValue = (_hudValue + delta).clamp(0.0, 1.0);
+      widget.player.setVolume(_hudValue * 100.0);
+    } else {
+      _brightness = (_brightness + delta).clamp(0.05, 1.0);
+      _hudValue = _brightness;
+    }
+    setState(() {});
+  }
+
+  void _onVerticalDragEnd(DragEndDetails _) {
+    if (!_isVerticalSwiping) return;
+    _isVerticalSwiping = false;
+    _hudTimer?.cancel();
+    _hudTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _showVerticalHud = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final dimAlpha = ((1.0 - _brightness) * 0.82).clamp(0.0, 0.82);
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // Visual brightness overlay (zero native plugin dependency)
+            if (dimAlpha > 0.005)
+              IgnorePointer(
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: dimAlpha),
+                ),
+              ),
+
+            // Full-screen gesture layer
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _toggleVisible,
+              onDoubleTapDown: (d) => _handleDoubleTap(d, w),
+              onDoubleTap: () {},
+              onLongPressStart: _onLongPressStart,
+              onLongPressEnd: _onLongPressEnd,
+              onHorizontalDragStart:
+                  widget.swipeToSeek ? _onHorizontalDragStart : null,
+              onHorizontalDragUpdate: widget.swipeToSeek
+                  ? (d) => _onHorizontalDragUpdate(d, w)
+                  : null,
+              onHorizontalDragEnd:
+                  widget.swipeToSeek ? _onHorizontalDragEnd : null,
+              onVerticalDragStart: (d) => _onVerticalDragStart(d, w),
+              onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, h),
+              onVerticalDragEnd: _onVerticalDragEnd,
+              child: const SizedBox.expand(),
+            ),
+
+            // Buffering indicator
+            IgnorePointer(
+              child: Center(
+                child: StreamBuilder<bool>(
+                  stream: widget.player.stream.buffering,
+                  initialData: widget.player.state.buffering,
+                  builder: (_, snap) {
+                    if (snap.data != true) return const SizedBox.shrink();
+                    return const SizedBox(
+                      width: 46,
+                      height: 46,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: Colors.white,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+
+            // Double-tap seek feedback pill
+            if (_doubleTapRight != null)
+              IgnorePointer(
+                child: Align(
+                  alignment: _doubleTapRight!
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 48),
+                    child: GlassSurface(
+                      radius: 999,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _doubleTapRight!
+                                  ? Icons.fast_forward_rounded
+                                  : Icons.fast_rewind_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${_doubleTapAccumSecs > 0 ? '+' : ''}${_doubleTapAccumSecs}s',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Swipe-to-seek center time preview
+            if (_isHorizontalSwiping)
+              IgnorePointer(
+                child: Center(
+                  child: GlassSurface(
+                    radius: 16,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 12),
+                      child: Builder(builder: (_) {
+                        final diffSecs = (_swipeTargetPos - _swipeStartPos)
+                            .inSeconds;
+                        final sign = diffSecs >= 0 ? '+' : '-';
+                        return Text(
+                          '${_fmt(_swipeTargetPos)}  ($sign${_fmt(Duration(seconds: diffSecs.abs()))})',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Vertical Brightness / Volume HUD pill
+            if (_showVerticalHud)
+              IgnorePointer(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 28),
+                    child: GlassSurface(
+                      radius: 999,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 18, vertical: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _verticalIsVolume
+                                  ? (_hudValue <= 0.01
+                                      ? Icons.volume_off_rounded
+                                      : _hudValue < 0.5
+                                          ? Icons.volume_down_rounded
+                                          : Icons.volume_up_rounded)
+                                  : Icons.brightness_6_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            SizedBox(
+                              width: 110,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: _hudValue.clamp(0.0, 1.0),
+                                  minHeight: 6,
+                                  backgroundColor: Colors.white24,
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
+                                          Colors.white),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            SizedBox(
+                              width: 38,
+                              child: Text(
+                                '${(_hudValue * 100).round()}%',
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Long-press 2x speed pill
+            if (_isLongPress2x)
+              IgnorePointer(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 28),
+                    child: GlassSurface(
+                      radius: 999,
+                      child: const Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.bolt_rounded,
+                                color: Colors.amberAccent, size: 18),
+                            SizedBox(width: 4),
+                            Text(
+                              '2.0x Speed',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            //AniSkip floating button (visible even when controls are hidden)
+            if (widget.showSkipButtons && widget.skips.isNotEmpty && !_locked)
+              _ActiveSkipButton(
+                player: widget.player,
+                skips: widget.skips,
+              ),
+
+            // Animated Controls Overlay (RepaintBoundary prevents re-blurring jank)
+            IgnorePointer(
+              ignoring: !_visible,
+              child: FadeTransition(
+                opacity: _fade,
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x99000000),
+                        Color(0x22000000),
+                        Color(0x22000000),
+                        Color(0xB3000000),
+                      ],
+                      stops: [0.0, 0.25, 0.72, 1.0],
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: _locked
+                        ? Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 20),
+                              child: _TapScaleButton(
+                                onTap: () {
+                                  setState(() => _locked = false);
+                                  _scheduleHide();
+                                },
+                                child: GlassSurface(
+                                  radius: 999,
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 12),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.lock_rounded,
+                                            color: Colors.white, size: 20),
+                                        SizedBox(width: 8),
+                                        Text('Tap to Unlock',
+                                            style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w700)),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        : Stack(
+                            children: [
+                              // Top bar
+                              Align(
+                                alignment: Alignment.topCenter,
+                                child: SlideTransition(
+                                  position: _topSlide,
+                                  child: RepaintBoundary(
+                                    child: _buildTopBar(),
+                                  ),
+                                ),
+                              ),
+
+                              // Center transport controls
+                              Center(
+                                child: ScaleTransition(
+                                  scale: _centerScale,
+                                  child: RepaintBoundary(
+                                    child: _buildCenterControls(),
+                                  ),
+                                ),
+                              ),
+
+                              // Bottom seekbar + action pills
+                              Align(
+                                alignment: Alignment.bottomCenter,
+                                child: SlideTransition(
+                                  position: _bottomSlide,
+                                  child: RepaintBoundary(
+                                    child: _buildBottomBar(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildTopBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+      child: Row(
+        children: [
+          _TapScaleButton(
+            onTap: widget.onBack,
+            child: GlassSurface(
+              radius: 999,
+              child: const Padding(
+                padding: EdgeInsets.all(10),
+                child: Icon(Icons.arrow_back_rounded,
+                    color: Colors.white, size: 20),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (widget.status.isNotEmpty)
+                  Text(
+                    widget.status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11.5,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _TapScaleButton(
+            onTap: () {
+              widget.onToggleHw();
+              _scheduleHide();
+            },
+            child: GlassSurface(
+              radius: 999,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Text(
+                  widget.isHw ? 'HW' : 'SW',
+                  style: TextStyle(
+                    color: widget.isHw ? const Color(0xFF4ADE80) : Colors.amber,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _topIconBtn(Icons.audiotrack_rounded, 'Audio tracks', widget.onAudio),
+          const SizedBox(width: 8),
+          _topIconBtn(Icons.subtitles_rounded, 'Subtitles', widget.onSubs),
+          const SizedBox(width: 8),
+          _topIconBtn(Icons.open_in_new_rounded, 'External player',
+              widget.onExternal),
+        ],
+      ),
+    );
+  }
+
+  Widget _topIconBtn(IconData icon, String tooltip, VoidCallback onTap) {
+    return _TapScaleButton(
+      onTap: () {
+        _scheduleHide();
+        onTap();
+      },
+      child: GlassSurface(
+        radius: 999,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Icon(icon, color: Colors.white, size: 19),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCenterControls() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _TapScaleButton(
+          onTap: () => _seekRelative(-widget.seekInterval),
+          child: GlassSurface(
+            radius: 999,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.replay_rounded,
+                      color: Colors.white, size: 22),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${widget.seekInterval}s',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 24),
+        StreamBuilder<bool>(
+          stream: widget.player.stream.playing,
+          initialData: widget.player.state.playing,
+          builder: (_, snap) {
+            final playing = snap.data ?? false;
+            return _TapScaleButton(
+              onTap: () {
+                widget.player.playOrPause();
+                _scheduleHide();
+              },
+              child: GlassSurface(
+                radius: 999,
+                child: Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    transitionBuilder: (child, anim) =>
+                        ScaleTransition(scale: anim, child: child),
+                    child: Icon(
+                      playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      key: ValueKey<bool>(playing),
+                      color: Colors.white,
+                      size: 36,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 24),
+        _TapScaleButton(
+          onTap: () => _seekRelative(widget.seekInterval),
+          child: GlassSurface(
+            radius: 999,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${widget.seekInterval}s',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.forward_rounded,
+                      color: Colors.white, size: 22),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SeekbarSection(
+            player: widget.player,
+            chapters: widget.chapters,
+            onInteraction: _scheduleHide,
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _bottomPill(
+                  icon: Icons.lock_open_rounded,
+                  label: 'Lock',
+                  onTap: () => setState(() => _locked = true),
+                ),
+                const SizedBox(width: 8),
+                StreamBuilder<double>(
+                  stream: widget.player.stream.rate,
+                  initialData: widget.player.state.rate,
+                  builder: (_, snap) {
+                    final r = snap.data ?? 1.0;
+                    return _bottomPill(
+                      icon: Icons.speed_rounded,
+                      label: '${r}x',
+                      onTap: () {
+                        widget.onCycleSpeed();
+                        _scheduleHide();
+                      },
+                    );
+                  },
+                ),
+                const SizedBox(width: 8),
+                _bottomPill(
+                  icon: Icons.aspect_ratio_rounded,
+                  label: 'Fit',
+                  onTap: () {
+                    widget.onCycleFit();
+                    _scheduleHide();
+                  },
+                ),
+                if (widget.onSources != null) ...[
+                  const SizedBox(width: 8),
+                  _bottomPill(
+                    icon: Icons.dns_rounded,
+                    label: 'Sources',
+                    onTap: () {
+                      _scheduleHide();
+                      widget.onSources!();
+                    },
+                  ),
+                ],
+                if (widget.onEpisodes != null) ...[
+                  const SizedBox(width: 8),
+                  _bottomPill(
+                    icon: Icons.video_library_rounded,
+                    label: 'Episodes',
+                    onTap: () {
+                      _scheduleHide();
+                      widget.onEpisodes!();
+                    },
+                  ),
+                ],
+                if (widget.onNextEpisode != null) ...[
+                  const SizedBox(width: 8),
+                  _bottomPill(
+                    icon: Icons.skip_next_rounded,
+                    label: 'Next Ep',
+                    onTap: () {
+                      _scheduleHide();
+                      widget.onNextEpisode!();
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomPill({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return _TapScaleButton(
+      onTap: onTap,
+      child: GlassSurface(
+        radius: 999,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Isolated seekbar widget so high-frequency position ticks never rebuild
+/// the glass buttons or interrupt open/close animations.
+class _SeekbarSection extends StatefulWidget {
+  final Player player;
+  final List<double> chapters;
+  final VoidCallback onInteraction;
+
+  const _SeekbarSection({
+    required this.player,
+    required this.chapters,
+    required this.onInteraction,
+  });
+
+  @override
+  State<_SeekbarSection> createState() => _SeekbarSectionState();
+}
+
+class _SeekbarSectionState extends State<_SeekbarSection> {
+  double? _dragMs;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Duration>(
+      stream: widget.player.stream.position,
+      initialData: widget.player.state.position,
+      builder: (context, posSnap) {
+        final pos = posSnap.data ?? Duration.zero;
+        final dur = widget.player.state.duration;
+        final maxMs =
+            dur.inMilliseconds > 0 ? dur.inMilliseconds.toDouble() : 1.0;
+        final curMs =
+            (_dragMs ?? pos.inMilliseconds.toDouble()).clamp(0.0, maxMs);
+        final shownPos = Duration(milliseconds: curMs.round());
+
+        return Row(
+          children: [
+            SizedBox(
+              width: 52,
+              child: Text(
+                _fmt(shownPos),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 4,
+                      thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 7),
+                      overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 14),
+                      activeTrackColor: Colors.white,
+                      inactiveTrackColor: Colors.white24,
+                      thumbColor: Colors.white,
+                    ),
+                    child: Slider(
+                      value: curMs,
+                      min: 0.0,
+                      max: maxMs,
+                      onChangeStart: (v) {
+                        widget.onInteraction();
+                        setState(() => _dragMs = v);
+                      },
+                      onChanged: (v) {
+                        widget.onInteraction();
+                        setState(() => _dragMs = v);
+                      },
+                      onChangeEnd: (v) {
+                        widget.onInteraction();
+                        setState(() => _dragMs = null);
+                        widget.player.seek(Duration(milliseconds: v.round()));
+                      },
+                    ),
+                  ),
+                  if (widget.chapters.isNotEmpty)
+                    IgnorePointer(
+                      child: LayoutBuilder(
+                        builder: (_, c) {
+                          final trackW = (c.maxWidth - 28).clamp(0.0, c.maxWidth);
+                          return SizedBox(
+                            width: trackW,
+                            height: 6,
+                            child: Stack(
+                              children: [
+                                for (final ratio in widget.chapters)
+                                  Positioned(
+                                    left: (ratio.clamp(0.0, 1.0) * trackW) - 1,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      width: 2,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            SizedBox(
+              width: 52,
+              child: Text(
+                _fmt(dur),
+                textAlign: TextAlign.end,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Floating AniSkip button that only rebuilds when entering/leaving a skip interval.
+class _ActiveSkipButton extends StatelessWidget {
+  final Player player;
+  final List<SkipInterval> skips;
+
+  const _ActiveSkipButton({
+    required this.player,
+    required this.skips,
+  });
+
+  String _labelFor(String kind) {
+    switch (kind.toLowerCase()) {
+      case 'op':
+      case 'mixed-op':
+        return 'Skip Opening';
+      case 'ed':
+      case 'mixed-ed':
+        return 'Skip Ending';
+      case 'recap':
+        return 'Skip Recap';
+      default:
+        return 'Skip ${kind.toUpperCase()}';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Duration>(
+      stream: player.stream.position,
+      initialData: player.state.position,
+      builder: (_, snap) {
+        final t = (snap.data ?? Duration.zero).inMilliseconds / 1000.0;
+        SkipInterval? active;
+        for (final s in skips) {
+          if (t >= s.start && t < s.end - 0.5) {
+            active = s;
+            break;
+          }
+        }
+        if (active == null) return const SizedBox.shrink();
+        final targetMs = (active.end * 1000).round();
+        return Positioned(
+          right: 20,
+          bottom: 88,
+          child: _TapScaleButton(
+            onTap: () => player.seek(Duration(milliseconds: targetMs)),
+            child: GlassSurface(
+              radius: 999,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.fast_forward_rounded,
+                        color: Colors.white, size: 18),
+                    const SizedBox(width: 6),
+                    Text(
+                      _labelFor(active.kind),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Tactile press-scale wrapper so every player button feels responsive.
+class _TapScaleButton extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+
+  const _TapScaleButton({
+    required this.child,
+    required this.onTap,
+  });
+
+  @override
+  State<_TapScaleButton> createState() => _TapScaleButtonState();
+}
+
+class _TapScaleButtonState extends State<_TapScaleButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 95),
+    reverseDuration: const Duration(milliseconds: 130),
+    lowerBound: 0.91,
+    upperBound: 1.0,
+    value: 1.0,
+  );
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _locked ? null : () => _visible ? setState(() => _visible = false) : _show(),
-      onDoubleTapDown: _locked ? null : (d) => _lastTap = d.localPosition,
-      onDoubleTap: _locked
-          ? null
-          : () {
-              final w = context.size?.width ?? 0;
-              final left = _lastTap.dx < w / 2;
-              _seekBy(left ? -10 : 10);
-              _pulseSeekButton(left);
-            },
-      child: AnimatedOpacity(
-        opacity: _visible || _locked ? 1 : 0,
-        duration: const Duration(milliseconds: 200),
-        child: IgnorePointer(ignoring: !_visible && !_locked, child: _overlay()),
+      onTapDown: (_) => _ctrl.reverse(),
+      onTapUp: (_) {
+        _ctrl.forward();
+        widget.onTap();
+      },
+      onTapCancel: () => _ctrl.forward(),
+      child: ScaleTransition(
+        scale: _ctrl,
+        child: widget.child,
       ),
     );
-  }
-
-  double _sideMargin(BuildContext context) {
-    final pad = MediaQuery.paddingOf(context);
-    return math.max(pad.left, pad.right) + 16;
-  }
-
-  Widget _overlay() {
-    if (_locked) {
-      return Stack(children: [
-        Positioned(
-          left: _sideMargin(context),
-          bottom: 16,
-          child: GlassButton(
-            icon: Icons.lock_outline,
-            circle: true,
-            size: 40,
-            iconSize: 20,
-            onTap: () {
-              setState(() => _locked = false);
-              _show();
-            },
-          ),
-        ),
-      ]);
-    }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // Scrims so white glass stays legible on bright frames.
-        const Positioned(
-          top: 0, left: 0, right: 0, height: 130,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter, end: Alignment.bottomCenter,
-                colors: [Color(0x99000000), Color(0x00000000)],
-              ),
-            ),
-          ),
-        ),
-        const Positioned(
-          bottom: 0, left: 0, right: 0, height: 200,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter, end: Alignment.topCenter,
-                colors: [Color(0xB3000000), Color(0x00000000)],
-              ),
-            ),
-          ),
-        ),
-        // Same margin on BOTH sides: the larger of the left/right system
-        // insets (camera cutout) is used for each side, so the controls sit
-        // evenly instead of the right side hugging the edge.
-        Builder(builder: (context) {
-          final pad = MediaQuery.paddingOf(context);
-          final side = _sideMargin(context);
-          return Padding(
-            padding: EdgeInsets.fromLTRB(side, pad.top + 8, side, pad.bottom + 8),
-            child: Column(
-              children: [
-                _topBar(),
-                // True visual center: offset down to compensate for the
-                // taller top bar pushing the cluster optically high.
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 24),
-                    child: Center(child: _centerCluster()),
-                  ),
-                ),
-                _bottomBar(),
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _topBar() {
-    return Row(
-      children: [
-        GlassButton(icon: Icons.arrow_back, size: 40, iconSize: 20, circle: true, onTap: widget.onBack),
-        const SizedBox(width: 10),
-        // Fixed pill: always fills the space between the back button and
-        // the right-hand buttons, so it never grows or shrinks with the
-        // title. Long titles scroll (marquee) instead of being cut off.
-        Expanded(
-          child: GlassSurface(
-            radius: 14,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _MarqueeText(
-                    widget.title,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                  if (widget.status.isNotEmpty)
-                    _MarqueeText(
-                      widget.status,
-                      style: const TextStyle(color: Colors.white70, fontSize: 11),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        // RIGHT — fixed order: external, HW badge, audio, subs, stream, episode.
-        if (widget.onExternal != null) ...[
-          GlassButton(icon: Icons.open_in_new, size: 40, iconSize: 20, circle: true,
-              onTap: widget.onExternal!),
-          const SizedBox(width: 8),
-        ],
-        Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: GestureDetector(
-            onTap: widget.onToggleHw,
-            child: GlassSurface(
-              radius: 12,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                child: Text(
-                  widget.isHw ? 'HW' : 'SW',
-                  style: TextStyle(
-                    color: widget.isHw
-                        ? const Color(0xFF22C55E)
-                        : Colors.orangeAccent,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        GlassButton(icon: Icons.music_note, size: 40, iconSize: 20, circle: true, onTap: widget.onAudio),
-        const SizedBox(width: 8),
-        GlassButton(icon: Icons.subtitles_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSubs),
-        if (widget.onSources != null) ...[
-          const SizedBox(width: 8),
-          GlassButton(icon: Icons.dns_outlined, size: 40, iconSize: 20, circle: true, onTap: widget.onSources!),
-        ],
-        if (widget.onEpisodes != null) ...[
-          const SizedBox(width: 8),
-          GlassButton(icon: Icons.view_list_outlined, size: 40, iconSize: 20, circle: true,
-              onTap: widget.onEpisodes!),
-        ],
-      ],
-    );
-  }
-
-  Widget _centerCluster() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _SeekPulseButton(
-          side: -1,
-          events: _seekEvents,
-          icon: Icons.replay_10,
-          onTap: () => _seekBy(-10),
-        ),
-        const SizedBox(width: 24),
-        // Play/pause button with an in-button buffering spinner:
-        // while buffering, a 12-spoke style spinner replaces the icon
-        // (the button stays tappable); the old full-screen centered
-        // spinner is gone so nothing clips under the controls.
-        StreamBuilder<bool>(
-          stream: _p.stream.buffering,
-          initialData: _p.state.buffering,
-          builder: (_, bufSnap) {
-            final buffering = bufSnap.data ?? false;
-            return StreamBuilder<bool>(
-              stream: _p.stream.playing,
-              initialData: _p.state.playing,
-              builder: (_, playSnap) {
-                final playing = playSnap.data ?? false;
-                return GlassSurface(
-                  radius: 34,
-                  child: Material(
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      onTap: () {
-                        _p.playOrPause();
-                        _scheduleHide();
-                      },
-                      customBorder: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(34)),
-                      child: SizedBox(
-                        width: 68,
-                        height: 68,
-                        child: Center(
-                          child: buffering
-                              ? const SizedBox(
-                                  width: 30,
-                                  height: 30,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : Icon(
-                                  playing ? Icons.pause : Icons.play_arrow,
-                                  color: Colors.white,
-                                  size: 38,
-                                  shadows: const [
-                                    Shadow(color: Color(0x66000000), blurRadius: 4),
-                                  ],
-                                ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            );
-          },
-        ),
-        const SizedBox(width: 24),
-        _SeekPulseButton(
-          side: 1,
-          events: _seekEvents,
-          icon: Icons.forward_10,
-          onTap: () => _seekBy(10),
-        ),
-      ],
-    );
-  }
-
-  Widget _bottomBar() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Skip buttons are time-gated: each appears only while playback is
-        // inside its window (5s lead-in so it's there when the OP starts)
-        // and disappears once the window passes — mpvKt behavior.
-        if (widget.showSkipButtons && widget.skips.isNotEmpty)
-          StreamBuilder<Duration>(
-            stream: _p.stream.position,
-            initialData: _p.state.position,
-            builder: (_, snap) {
-              final pos = (snap.data ?? Duration.zero).inMilliseconds / 1000.0;
-              final active = widget.skips
-                  .where((s) => pos >= s.start - 5 && pos < s.end)
-                  .toList();
-              if (active.isEmpty) return const SizedBox.shrink();
-              return Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (final s in active)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: GlassSurface(
-                            radius: 12,
-                            child: Material(
-                              type: MaterialType.transparency,
-                              child: InkWell(
-                                onTap: () => _p.seek(Duration(milliseconds: (s.end * 1000).toInt())),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                  child: Text(s.label, style: const TextStyle(color: Colors.white, fontSize: 13)),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        // Keys row (mpv.kt style): left cluster lock/aspect/speed,
-        // right cluster next-episode.
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GlassButton(
-                  icon: Icons.lock_open,
-                  size: 36, iconSize: 18, circle: true,
-                  onTap: () {
-                    setState(() => _locked = true);
-                    _hideTimer?.cancel();
-                  },
-                ),
-                if (widget.onCycleFit != null) ...[
-                  const SizedBox(width: 8),
-                  GlassButton(icon: Icons.aspect_ratio, size: 36, iconSize: 18,
-                      circle: true, onTap: widget.onCycleFit!),
-                ],
-                if (widget.onCycleSpeed != null) ...[
-                  const SizedBox(width: 8),
-                  _RatePill(player: _p, onTap: widget.onCycleSpeed!),
-                ],
-              ],
-            ),
-            if (widget.onNextEpisode != null)
-              GlassButton(icon: Icons.skip_next, size: 36, iconSize: 18,
-                  circle: true, onTap: widget.onNextEpisode!),
-          ],
-        ),
-        const SizedBox(height: 6),
-        // Full-width seekbar on its own row, flanked by time labels.
-        StreamBuilder<Duration>(
-          stream: _p.stream.position,
-          initialData: _p.state.position,
-          builder: (_, posSnap) => StreamBuilder<Duration>(
-            stream: _p.stream.duration,
-            initialData: _p.state.duration,
-            builder: (_, durSnap) {
-              final pos = posSnap.data ?? Duration.zero;
-              final dur = durSnap.data ?? Duration.zero;
-              // Right timer cycles on tap: remaining → total (VLC-style).
-              // Elapsed is already shown on the left, so it's skipped.
-              final rightLabel = switch (_timeMode) {
-                1 => fmtPlayerTime(dur),
-                _ => '-${fmtPlayerTime(dur - pos)}',
-              };
-              return Row(
-                children: [
-                  // Fixed width so the seekbar doesn't shift as digits change.
-                  SizedBox(
-                    width: 52,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(fmtPlayerTime(pos),
-                          maxLines: 1,
-                          softWrap: false,
-                          style: const TextStyle(color: Colors.white, fontSize: 12)),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _SeekBar(
-                      position: pos,
-                      duration: dur,
-                      skips: widget.skips,
-                      chapters: widget.chapters,
-                      onSeek: (d) => _p.seek(d),
-                      onDragging: (v) {
-                        _dragging = v;
-                        _scheduleHide();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      setState(() => _timeMode = (_timeMode + 1) % 2);
-                      _scheduleHide();
-                    },
-                    child: SizedBox(
-                      width: 60,
-                      height: 32,
-                      child: Center(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(rightLabel,
-                              maxLines: 1,
-                              softWrap: false,
-                              style: const TextStyle(color: Colors.white, fontSize: 12)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SeekBar extends StatefulWidget {
-  final Duration position, duration;
-  final List<SkipInterval> skips;
-  final List<double> chapters; // 0..1 — drawn as breaks (mpvKt style)
-  final ValueChanged<Duration> onSeek;
-  final ValueChanged<bool> onDragging;
-  const _SeekBar({
-    required this.position,
-    required this.duration,
-    required this.skips,
-    required this.chapters,
-    required this.onSeek,
-    required this.onDragging,
-  });
-
-  @override
-  State<_SeekBar> createState() => _SeekBarState();
-}
-
-class _SeekBarState extends State<_SeekBar> {
-  double? _drag; // 0..1 while dragging
-
-  double _ratioAt(double dx, double w) => ((dx - 8) / (w - 16)).clamp(0.0, 1.0);
-
-  @override
-  Widget build(BuildContext context) {
-    final total = widget.duration.inMilliseconds;
-    final live = total > 0 ? widget.position.inMilliseconds / total : 0.0;
-    final ratio = (_drag ?? live).clamp(0.0, 1.0);
-    return LayoutBuilder(
-      builder: (_, c) {
-        final w = c.maxWidth;
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: (d) {
-            if (total > 0) {
-              widget.onSeek(Duration(milliseconds: (_ratioAt(d.localPosition.dx, w) * total).toInt()));
-            }
-          },
-          onHorizontalDragStart: (d) {
-            widget.onDragging(true);
-            setState(() => _drag = _ratioAt(d.localPosition.dx, w));
-          },
-          onHorizontalDragUpdate: (d) => setState(() => _drag = _ratioAt(d.localPosition.dx, w)),
-          onHorizontalDragEnd: (_) {
-            if (_drag != null && total > 0) {
-              widget.onSeek(Duration(milliseconds: (_drag! * total).toInt()));
-            }
-            widget.onDragging(false);
-            setState(() => _drag = null);
-          },
-          child: SizedBox(
-            height: 32,
-            child: CustomPaint(
-              painter: _SeekPainter(
-                ratio,
-                0.85,
-                ratio >= 0.85,
-                // Chapter breaks from mpv chapter-list (mpvKt style).
-                // Falls back to skip-window starts if no chapters.
-                widget.chapters.isNotEmpty
-                    ? widget.chapters
-                    : (total > 0
-                        ? [
-                            for (final s in widget.skips)
-                              if (s.end * 1000 <= total)
-                                (s.start * 1000 / total).clamp(0.0, 1.0),
-                          ]
-                        : const <double>[]),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _SeekPainter extends CustomPainter {
-  final double ratio, marker;
-  final bool passed;
-  final List<double> markers; // chapter positions 0..1 — drawn as breaks
-  _SeekPainter(this.ratio, this.marker, this.passed,
-      [this.markers = const <double>[]]);
-
-  @override
-  void paint(Canvas canvas, Size s) {
-    const pad = 8.0;
-    final left = pad, right = s.width - pad, y = s.height / 2;
-    final trackW = right - left;
-    const breakW = 3.0; // gap width at each chapter (mpvKt style)
-
-    // Build sorted break positions in pixels.
-    final breaks = markers
-        .map((m) => left + trackW * m.clamp(0.0, 1.0))
-        .where((bx) => bx > left + 4 && bx < right - 4)
-        .toList()
-      ..sort();
-
-    // Draw track + progress as segments, leaving gaps at breaks.
-    final trackPaint = Paint()..color = const Color(0x40FFFFFF);
-    final progressPaint = Paint()..color = Colors.white;
-    final x = left + trackW * ratio;
-
-    double segStart = left;
-    for (final bx in [...breaks, right + 10]) {
-      final segEnd = (bx - breakW / 2).clamp(segStart, right);
-      if (segEnd > segStart) {
-        // Background track segment.
-        canvas.drawRRect(
-          RRect.fromLTRBR(segStart, y - 3, segEnd, y + 3, const Radius.circular(3)),
-          trackPaint,
-        );
-        // Progress segment (only up to current position).
-        final pxEnd = segEnd.clamp(segStart, x);
-        if (pxEnd > segStart) {
-          canvas.drawRRect(
-            RRect.fromLTRBR(segStart, y - 3, pxEnd, y + 3, const Radius.circular(3)),
-            progressPaint,
-          );
-        }
-      }
-      segStart = bx + breakW / 2;
-      if (segStart >= right) break;
-    }
-
-    // 85% marker (diamond) — turns green once passed.
-    final mx = left + trackW * marker;
-    final d = Path()
-      ..moveTo(mx, y - 6)
-      ..lineTo(mx + 5, y)
-      ..lineTo(mx, y + 6)
-      ..lineTo(mx - 5, y)
-      ..close();
-    canvas.drawPath(d, Paint()..color = passed ? Colors.greenAccent : Colors.white70);
-    // Thumb: two flat circles instead of a blurred shadow — this painter
-    // repaints on every position tick, so a per-tick blur was wasted GPU.
-    canvas.drawCircle(Offset(x, y + 1.5), 7.5, Paint()..color = Colors.black26);
-    canvas.drawCircle(Offset(x, y), 7, Paint()..color = Colors.white);
-  }
-
-  @override
-  bool shouldRepaint(_SeekPainter o) =>
-      o.ratio != ratio ||
-      o.passed != passed ||
-      o.marker != marker ||
-      o.markers.length != markers.length;
-}
-
-/// Glass pill that shows the current playback rate (mpvKt style 1.00x).
-class _RatePill extends StatelessWidget {
-  final Player player;
-  final VoidCallback onTap;
-  const _RatePill({required this.player, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<double>(
-      stream: player.stream.rate,
-      initialData: player.state.rate,
-      builder: (_, snap) {
-        final r = snap.data ?? 1.0;
-        return GlassSurface(
-          radius: 12,
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                child: Text('${r.toStringAsFixed(2)}x',
-                    style: const TextStyle(color: Colors.white, fontSize: 12)),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-
-/// One double-tap event: [side] -1 = rewind, 1 = forward; [n] makes every
-/// tap a distinct value so repeated taps on the same side re-trigger.
-class _SeekEvent {
-  final int side, n;
-  const _SeekEvent(this.side, this.n);
-}
-
-/// A seek button with its OWN animation controller. It only reacts to
-/// events for its side, and only its transform changes — the glass child is
-/// built once and never rebuilt, so the other buttons stay perfectly still.
-class _SeekPulseButton extends StatefulWidget {
-  final int side;
-  final ValueListenable<_SeekEvent> events;
-  final IconData icon;
-  final VoidCallback onTap;
-  const _SeekPulseButton({
-    required this.side,
-    required this.events,
-    required this.icon,
-    required this.onTap,
-  });
-
-  @override
-  State<_SeekPulseButton> createState() => _SeekPulseButtonState();
-}
-
-class _SeekPulseButtonState extends State<_SeekPulseButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 420),
-  );
-  late final Widget _button = GlassButton(
-    icon: widget.icon,
-    size: 48,
-    iconSize: 24,
-    circle: true,
-    onTap: widget.onTap,
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    widget.events.addListener(_onEvent);
-  }
-
-  void _onEvent() {
-    if (widget.events.value.side == widget.side) _c.forward(from: 0);
-  }
-
-  @override
-  void dispose() {
-    widget.events.removeListener(_onEvent);
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      child: _button,
-      builder: (_, child) {
-        // 0 -> 1 -> 0 bump: half turn out and back, with a small scale pop.
-        final bump = math.sin(math.pi * Curves.easeInOut.transform(_c.value));
-        return Transform.scale(
-          scale: 1 + 0.14 * bump,
-          child: Transform.rotate(angle: widget.side * math.pi * bump, child: child),
-        );
-      },
-    );
-  }
-}
-
-/// Single-line text that scrolls sideways (with pauses) only when it does
-/// not fit; short text just sits still.
-class _MarqueeText extends StatefulWidget {
-  final String text;
-  final TextStyle style;
-  const _MarqueeText(this.text, {required this.style});
-
-  @override
-  State<_MarqueeText> createState() => _MarqueeTextState();
-}
-
-class _MarqueeTextState extends State<_MarqueeText> {
-  final ScrollController _sc = ScrollController();
-  int _gen = 0; // bumps whenever the text changes -> restarts the loop
-  int _startedFor = -1;
-
-  @override
-  void didUpdateWidget(covariant _MarqueeText old) {
-    super.didUpdateWidget(old);
-    if (old.text != widget.text) {
-      _gen++;
-      if (_sc.hasClients) _sc.jumpTo(0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _gen++; // stops the loop
-    _sc.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loop(int gen) async {
-    Future<bool> wait(int ms) async {
-      await Future<void>.delayed(Duration(milliseconds: ms));
-      return mounted && gen == _gen && _sc.hasClients;
-    }
-
-    if (!await wait(1500)) return;
-    while (mounted && gen == _gen && _sc.hasClients) {
-      final max = _sc.position.maxScrollExtent;
-      if (max <= 0) return;
-      await _sc.animateTo(
-        max,
-        duration: Duration(milliseconds: (max / 40 * 1000).round()), // 40 px/s
-        curve: Curves.linear,
-      );
-      if (!await wait(1200)) return;
-      _sc.jumpTo(0);
-      if (!await wait(1500)) return;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, c) {
-      final tp = TextPainter(
-        text: TextSpan(text: widget.text, style: widget.style),
-        maxLines: 1,
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final overflows = tp.width > c.maxWidth;
-      tp.dispose();
-      if (!overflows) {
-        _startedFor = -1;
-        return Text(widget.text,
-            maxLines: 1, softWrap: false, overflow: TextOverflow.clip, style: widget.style);
-      }
-      if (_startedFor != _gen) {
-        _startedFor = _gen;
-        final g = _gen;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && g == _gen) _loop(g);
-        });
-      }
-      return SingleChildScrollView(
-        controller: _sc,
-        scrollDirection: Axis.horizontal,
-        physics: const NeverScrollableScrollPhysics(),
-        child: Text(widget.text, maxLines: 1, softWrap: false, style: widget.style),
-      );
-    });
   }
 }

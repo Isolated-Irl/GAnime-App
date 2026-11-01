@@ -303,6 +303,7 @@ class AppSettings {
   final double seekInterval; // seconds
   final String secondaryAudioLanguage; // '' = none
   final bool showOnlyPreferredLanguages;
+  final bool autoPlayNext;
   final double subtitleSize; // sp
   final double subtitleBackgroundTint; // 0..1
   final bool hardwareDecoding;
@@ -347,6 +348,7 @@ class AppSettings {
     this.seekInterval = 5,
     this.secondaryAudioLanguage = '',
     this.showOnlyPreferredLanguages = false,
+    this.autoPlayNext = true,
     this.subtitleSize = 18,
     this.subtitleBackgroundTint = 0.5,
     this.hardwareDecoding = true,
@@ -389,6 +391,7 @@ class AppSettings {
         'seekInterval': seekInterval,
         'secondaryAudioLanguage': secondaryAudioLanguage,
         'showOnlyPreferredLanguages': showOnlyPreferredLanguages,
+        'autoPlayNext': autoPlayNext,
         'subtitleSize': subtitleSize,
         'subtitleBackgroundTint': subtitleBackgroundTint,
         'hardwareDecoding': hardwareDecoding,
@@ -432,6 +435,7 @@ class AppSettings {
         secondaryAudioLanguage: (j['secondaryAudioLanguage'] as String?) ?? '',
         showOnlyPreferredLanguages:
             (j['showOnlyPreferredLanguages'] as bool?) ?? false,
+        autoPlayNext: (j['autoPlayNext'] as bool?) ?? true,
         subtitleSize: (j['subtitleSize'] as num?)?.toDouble() ?? 18,
         subtitleBackgroundTint:
             (j['subtitleBackgroundTint'] as num?)?.toDouble() ?? 0.5,
@@ -479,6 +483,7 @@ class AppSettings {
     double? seekInterval,
     String? secondaryAudioLanguage,
     bool? showOnlyPreferredLanguages,
+    bool? autoPlayNext,
     double? subtitleSize,
     double? subtitleBackgroundTint,
     bool? hardwareDecoding,
@@ -525,6 +530,7 @@ class AppSettings {
             secondaryAudioLanguage ?? this.secondaryAudioLanguage,
         showOnlyPreferredLanguages:
             showOnlyPreferredLanguages ?? this.showOnlyPreferredLanguages,
+        autoPlayNext: autoPlayNext ?? this.autoPlayNext,
         subtitleSize: subtitleSize ?? this.subtitleSize,
         subtitleBackgroundTint:
             subtitleBackgroundTint ?? this.subtitleBackgroundTint,

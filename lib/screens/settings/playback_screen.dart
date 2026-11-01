@@ -69,6 +69,12 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
           label: (v) => '${v.round()}s',
           onChanged: (v) => _save(_s.copyWith(seekInterval: v)),
         ),
+        gaToggleRow(
+          title: 'Auto-Play Next Episode',
+          subtitle: 'Automatically start the next episode with a 5s countdown when playback finishes',
+          value: _s.autoPlayNext,
+          onChanged: (v) => _save(_s.copyWith(autoPlayNext: v)),
+        ),
         gaSectionLabel('Anime Skipping'),
         gaChevronRow(
           title: 'AniSkip Service',
@@ -119,27 +125,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
           value: _s.showOnlyPreferredLanguages,
           onChanged: (v) => _save(_s.copyWith(showOnlyPreferredLanguages: v)),
         ),
-        gaSectionLabel('Subtitle Rendering'),
-        gaSliderRow(
-          title: 'Subtitle Size',
-          subtitle: 'Adjustable live inside the player (CC - style)',
-          value: _s.subtitleSize,
-          min: 10,
-          max: 30,
-          divisions: 20,
-          label: (v) => '${v.round()}sp',
-          onChanged: (v) => _save(_s.copyWith(subtitleSize: v)),
-        ),
-        gaSliderRow(
-          title: 'Subtitle Background Tint',
-          subtitle: 'Adjustable live inside the player (CC - style)',
-          value: _s.subtitleBackgroundTint,
-          min: 0,
-          max: 1,
-          divisions: 20,
-          label: (v) => '${(v * 100).round()}%',
-          onChanged: (v) => _save(_s.copyWith(subtitleBackgroundTint: v)),
-        ),
+
       ],
     );
   }

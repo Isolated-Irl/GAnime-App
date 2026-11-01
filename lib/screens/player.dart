@@ -1,17 +1,22 @@
 // Player screen — media_kit (mpv) with REX-style glass overlay controls.
 // Features:
-//  - Glass controls: tap toggle, double-tap ±10s (flash), auto-hide, lock
+//  - Glass controls: smooth hardware-accelerated open/close, tap toggle,
+//    double-tap ±seekInterval (flash), swipe-to-seek, brightness/volume
+//    vertical gestures, long-press 2x speed, auto-hide, lock
 //  - Episodes panel (glass sheet, watched marks, jump in-place)
 //  - Sources panel (rich cards: parsed tags/size/duration/flags, now playing)
 //  - External player handoff (intent -> chooser -> copy link fallback)
 //  - Next-episode jump: website jumpEpisode scoring ported
 //    (same addon +100, release group +35, resolution +25, codec +10;
-//     6s ID-bridge cap, 12s fetch cap), auto-advance on playback end
-//  - 85% auto-mark, AniSkip (buttons + auto), audio/subtitle language
-//    auto-select via track events, buffering spinner, orientation restore
-import 'dart:convert';
+//     6s ID-bridge cap, 12s fetch cap), auto-advance on playback end with
+//    cancellable countdown & autoPlayNext setting
+//  - 85% auto-mark (gated by Private Viewing), AniSkip (buttons + auto OP/ED),
+//    ISO-normalized audio/subtitle language auto-select + secondary audio
+//    fallback + preferred-language track filtering
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -19,9 +24,9 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
-import '../services/aniskip.dart';
-import '../services/addons.dart';
 import '../services/addon_ids.dart';
+import '../services/addons.dart';
+import '../services/aniskip.dart';
 import '../services/resume_store.dart';
 import '../store.dart';
 import '../widgets/glass_player_controls.dart';
@@ -35,6 +40,115 @@ String fmtDuration(Duration d) {
   return h > 0 ? '$h:$m:$s' : '$m:$s';
 }
 
+/// Canonicalizes ISO-639-1, ISO-639-2, and English display names so that
+/// "en", "eng", "en-US", and "English" all resolve to the same code.
+String _canonicalLang(String raw) {
+  final cleaned = raw.trim().toLowerCase();
+  if (cleaned.isEmpty) return '';
+  final primary = cleaned.split(RegExp(r'[-_\s(]')).first;
+  switch (primary) {
+    case 'en':
+    case 'eng':
+    case 'english':
+      return 'en';
+    case 'ja':
+    case 'jp':
+    case 'jpn':
+    case 'japanese':
+      return 'ja';
+    case 'es':
+    case 'spa':
+    case 'spanish':
+    case 'espanol':
+      return 'es';
+    case 'fr':
+    case 'fre':
+    case 'fra':
+    case 'french':
+      return 'fr';
+    case 'de':
+    case 'ger':
+    case 'deu':
+    case 'german':
+      return 'de';
+    case 'pt':
+    case 'por':
+    case 'portuguese':
+      return 'pt';
+    case 'it':
+    case 'ita':
+    case 'italian':
+      return 'it';
+    case 'ru':
+    case 'rus':
+    case 'russian':
+      return 'ru';
+    case 'zh':
+    case 'chi':
+    case 'zho':
+    case 'chinese':
+    case 'cmn':
+      return 'zh';
+    case 'ko':
+    case 'kor':
+    case 'korean':
+      return 'ko';
+    case 'ar':
+    case 'ara':
+    case 'arabic':
+      return 'ar';
+    case 'hi':
+    case 'hin':
+    case 'hindi':
+      return 'hi';
+    case 'id':
+    case 'ind':
+    case 'indonesian':
+      return 'id';
+    case 'vi':
+    case 'vie':
+    case 'vietnamese':
+      return 'vi';
+    case 'th':
+    case 'tha':
+    case 'thai':
+      return 'th';
+    case 'tr':
+    case 'tur':
+    case 'turkish':
+      return 'tr';
+    case 'pl':
+    case 'pol':
+    case 'polish':
+      return 'pl';
+    default:
+      return primary;
+  }
+}
+
+/// Returns true when a track's language code or title matches [prefLang].
+bool _trackMatchesLang(String? trackLang, String? trackTitle, String prefLang) {
+  final target = _canonicalLang(prefLang);
+  if (target.isEmpty || target == 'none' || target == 'off') return false;
+
+  final tl = (trackLang ?? '').trim().toLowerCase();
+  if (tl.isNotEmpty && tl != 'und' && tl != 'unknown') {
+    if (_canonicalLang(tl) == target) return true;
+    if (tl.contains(prefLang.trim().toLowerCase())) return true;
+  }
+
+  final tt = (trackTitle ?? '').trim().toLowerCase();
+  if (tt.isNotEmpty) {
+    final pLow = prefLang.trim().toLowerCase();
+    if (pLow.length >= 3 && tt.contains(pLow)) return true;
+    final words = tt.split(RegExp(r'[^a-z]+')).where((w) => w.isNotEmpty);
+    for (final w in words) {
+      if (w.length >= 3 && _canonicalLang(w) == target) return true;
+    }
+  }
+  return false;
+}
+
 /// Local-only player preferences (SharedPreferences, never cloud-synced).
 /// Holds the subtitle style map and the subtitle/audio delays, each gated
 /// by its own opt-in "Remember across sessions" toggle.
@@ -45,7 +159,7 @@ class PlayerPrefs {
   static Future<SharedPreferences> get _p async =>
       _instance ??= await SharedPreferences.getInstance();
 
-  static Future<Map<String, dynamic>> _all() async {
+  static Future> _all() async {
     final raw = (await _p).getString(_k);
     if (raw == null || raw.isEmpty) return {};
     try {
@@ -58,8 +172,7 @@ class PlayerPrefs {
   static Future<dynamic> get(String key) async => (await _all())[key];
 
   // Writes are chained so two quick set() calls can never read the same
-  // old map and overwrite each other (that lost-update bug wiped the
-  // "remember" flag right after it was saved).
+  // old map and overwrite each other.
   static Future<void> _queue = Future<void>.value();
 
   static Future<void> set(String key, dynamic value) {
@@ -132,25 +245,76 @@ class _PlayerScreenState extends State<PlayerScreen>
   String _status = '';
   late bool _isHw; // active decoder: true = HW (MediaCodec), false = SW (CPU)
   Timer? _resumeTimer; // periodic backup save every 5s
+
+  // Auto-play next episode countdown state
+  Timer? _nextEpTimer;
+  int? _nextEpCountdown;
+
   /// Guest profile ID: resume saves locally even without login.
-  /// Logged-in users sync to cloud; guests stay on-device.
   static const _guestPid = 'guest';
 
-  /// Serializes every mpv open/reopen. Two overlapping Player.open() calls
-  /// (toggle / source switch / next-ep while the previous demuxer is still
-  /// tearing down) are a known native SIGSEGV trigger in mpv — queue instead.
+  /// Serializes every mpv open/reopen.
   Future<void> _openChain = Future.value();
   bool _skipSeeking = false; // re-entrancy guard for AniSkip auto-seek
   BoxFit _fit = BoxFit.contain;
 
   StreamSource get _cur => widget.streams[_streamIndex];
 
+  // ---- Safe settings getters (resilient to model field naming) ----
+  dynamic get _dynSettings => widget.settings;
+
+  bool get _isPrivateViewing {
+    try {
+      return _dynSettings.privateViewing == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _swipeToSeekEnabled {
+    try {
+      return _dynSettings.swipeToSeek != false;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  int get _seekIntervalSeconds {
+    try {
+      final v = _dynSettings.seekInterval;
+      if (v is num && v > 0) return v.toInt().clamp(1, 120);
+    } catch (_) {}
+    return 10;
+  }
+
+  String get _secondaryAudioLanguage {
+    try {
+      final v = _dynSettings.secondaryAudioLanguage;
+      if (v is String) return v;
+    } catch (_) {}
+    return '';
+  }
+
+  bool get _showOnlyPreferredLanguages {
+    try {
+      return _dynSettings.showOnlyPreferredLanguages == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _autoPlayNextEnabled {
+    try {
+      return _dynSettings.autoPlayNext != false;
+    } catch (_) {
+      return true;
+    }
+  }
+
   /// Sets mpv's native hwdec property ('mediacodec' = Android HW, 'no' = CPU SW).
   Future<void> _applyHwDecProperty(bool hw) async {
     final dynamic platform = _player.platform;
     try {
-      // NEVER set 'vo' or 'framedrop' manually on Android.
-      // media_kit_video manages the native SurfaceTexture context.
       await platform.setProperty('hwdec', hw ? 'mediacodec' : 'no');
     } catch (_) {}
   }
@@ -161,25 +325,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     final dynamic platform = _player.platform;
     try {
       await platform.setProperty('hwdec', _isHw ? 'mediacodec' : 'no');
-      // Generous forward cache: torrent swarms are slow and bursty; small
-      // buffers = constant underrun = "heavy" stutter. mpvKt-class players
-      // cache far more than this. (OOM was only ever a hypothesis — the
-      // crash turned out to be the open-race, not memory.)
       await platform.setProperty('demuxer-max-bytes', '64MiB');
       await platform.setProperty('demuxer-max-back-bytes', '32MiB');
       await platform.setProperty('demuxer-readahead-secs', '10');
-      // If the GPU/compositor falls behind, DROP late frames instead of
-      // letting latency pile up — this is what makes VLC feel "light".
       await platform.setProperty('framedrop', 'vo');
       await platform.setProperty('vd-lavc-framedrop', 'nonkey');
-      // Torrent-backed streams drop the connection mid-playback; make
-      // libavformat reconnect instead of driving mpv into a bad state.
       await platform.setProperty(
           'stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       await platform.setProperty('network-timeout', '60');
-      // Subtitle STYLE (size/colour/outline/position) is applied on the
-      // our own overlay (see _subtitleOverlay), not on mpv.
-      // Apply remembered subtitle / audio delays (these are mpv-side).
       try {
         if (await PlayerPrefs.get('remember_sub_delay') == true) {
           final ms = await PlayerPrefs.get('sub_delay_ms');
@@ -195,8 +348,6 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
       } catch (_) {}
     } catch (_) {}
-    // Capture mpv's OWN log so the next native-side error is on disk
-    // before the process dies (Dart handlers can't see native crashes).
     try {
       final dir = await getApplicationDocumentsDirectory();
       await platform.setProperty('log-file', '${dir.path}/mpv.log');
@@ -211,15 +362,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Queues [task] behind any in-flight open so mpv never sees two
-  /// concurrent opens. Errors don't break the chain.
+  /// concurrent opens.
   Future<void> _enqueueOpen(Future<void> Function() task) {
     final next = _openChain.then((_) => task());
     _openChain = next.then((_) {}, onError: (_) {});
     return next;
   }
 
-  /// Toggles HW/SW decoding mid-playback. MediaCodec cannot hot-swap, so the
-  /// stream is re-opened at the exact current position.
+  /// Toggles HW/SW decoding mid-playback.
   Future<void> _toggleHwDec() async {
     if (widget.streams.isEmpty) return;
     final nextHw = !_isHw;
@@ -243,13 +393,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  // ---- Subtitle style (rendered by Flutter's SubtitleView) ----
-  // Keys mirror the mpv names used by the settings panel ('sub-font-size'...).
+  // ---- Subtitle style (managed directly by the in-player panel) ----
   Map<String, String> _subStyle = {};
 
   Future<void> _loadSubStyle() async {
     try {
-      // Remembering is ON unless the user explicitly switched it off.
       if (await PlayerPrefs.get('remember_sub_style') == false) return;
       final m = await PlayerPrefs.get('sub_style');
       if (m is Map && mounted) {
@@ -259,8 +407,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     } catch (_) {}
   }
 
-  /// Called by the settings panel for every change: updates the live
-  /// subtitle immediately.
   Future<void> _setSubStyle(String key, dynamic value) async {
     final String sv = (value is double && value.truncateToDouble() == value)
         ? value.toInt().toString()
@@ -268,11 +414,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) setState(() => _subStyle[key] = sv);
   }
 
-  /// Settings > Playback > Subtitle Rendering supplies the defaults
-  /// (size 10–30sp -> panel value sp*3 -> ~1.8px per sp); anything the user
-  /// changed in the in-player panel overrides it until they press Reset.
+  /// Self-contained in-player subtitle defaults (55 in 720p-scaled px),
+  /// independent of the Playback Settings screen.
   Map<String, String> _effectiveSubStyle() => {
-        'sub-font-size': (widget.settings.subtitleSize * 3).round().toString(),
+        'sub-font-size': '55',
         ..._subStyle,
       };
 
@@ -281,12 +426,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     await PlayerPrefs.set('sub_style', <String, String>{});
   }
 
-  /// Our own subtitle renderer (replaces media_kit's SubtitleView, which
-  /// silently shrinks text by sqrt(w*h / 1920*1080) ~ 0.4 on a phone — that is
-  /// why "100" here only looked like "55" in mpvKt).
-  ///
-  /// Sizes follow mpv exactly: sub-font-size is in 720p-scaled pixels, so
-  /// the real size = value * (screen height / 720). Value 55 here == 55 there.
   Widget _subtitleOverlay() {
     return LayoutBuilder(builder: (context, c) {
       final st = _effectiveSubStyle();
@@ -346,10 +485,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
         );
         if (borderStyle == 2) {
+          final boxOpacity = d('sub-back-opacity', 0.65).clamp(0.0, 1.0);
           return DecoratedBox(
             decoration: BoxDecoration(
-              color: Color.fromRGBO(0, 0, 0,
-                  widget.settings.subtitleBackgroundTint.clamp(0.0, 1.0)),
+              color: Color.fromRGBO(0, 0, 0, boxOpacity),
               borderRadius: BorderRadius.circular(4 * k),
             ),
             child: Padding(
@@ -409,7 +548,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _loadSubStyle();
     _loadFitMode();
     _episode = widget.episode;
-    _streamIndex = widget.initialIndex; // open the stream the user tapped
+    _streamIndex = widget.initialIndex;
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -418,7 +557,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _isHw = widget.settings.hardwareDecoding;
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 64 * 1024 * 1024, // 64MB stream buffer — absorbs torrent swarm bursts
+        bufferSize: 64 * 1024 * 1024,
       ),
     );
     _controller = VideoController(
@@ -428,15 +567,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       ),
     );
     _player.stream.tracks.listen(_autoSelectTracks);
-    // Catch stream failures gracefully instead of crashing.
     _player.stream.error.listen((err) {
       if (mounted) setState(() => _status = 'Stream error: $err');
     });
-    // Defer the video open until the Android surface is mounted (post-frame),
-    // so the codec never starts before the SurfaceTexture exists.
     _initMpvAndOpen();
-    // Save the resume spot: every ~5s while playing, and on every pause.
-    // Plus a periodic timer backup in case the position stream stalls.
     _player.stream.playing.listen((playing) {
       if (!playing) _saveResume(force: true);
     });
@@ -444,10 +578,16 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted && _player.state.playing) _saveResume();
     });
     _player.stream.position.listen((pos) async {
-      _saveResume(); // throttled inside
+      _saveResume(); // throttled inside (and skipped in Private Viewing)
       final dur = _player.state.duration;
-      if (dur.inMilliseconds <= 0 || _marked85) return;
-      if (pos.inMilliseconds / dur.inMilliseconds >= 0.85) {
+      if (dur.inMilliseconds <= 0) return;
+
+      // 85% auto-mark: no longer returns early when _marked85 is true,
+      // so AniSkip auto-skip ending (after 85%) still runs.
+      // Also skipped when Private Viewing is active.
+      if (!_marked85 &&
+          !_isPrivateViewing &&
+          pos.inMilliseconds / dur.inMilliseconds >= 0.85) {
         _marked85 = true;
         if (widget.onMarkWatched != null) {
           try {
@@ -458,17 +598,20 @@ class _PlayerScreenState extends State<PlayerScreen>
           setState(() => _status = '85% reached — episode marked watched.');
         }
       }
+
       if (widget.settings.aniskipEnabled && !_skipSeeking) {
         for (final s in _skips) {
-          final auto = (s.kind == 'op' && widget.settings.aniskipAutoOp) ||
-              (s.kind == 'ed' && widget.settings.aniskipAutoEd);
+          final isOp = s.kind == 'op' || s.kind == 'mixed-op';
+          final isEd = s.kind == 'ed' || s.kind == 'mixed-ed';
+          final auto = (isOp && widget.settings.aniskipAutoOp) ||
+              (isEd && widget.settings.aniskipAutoEd);
           if (!auto) continue;
-          final t = pos.inMilliseconds / 1000;
-          if (t >= s.start && t < s.end) {
+          final t = pos.inMilliseconds / 1000.0;
+          if (t >= s.start && t < s.end - 0.5) {
             _skipSeeking = true;
             try {
               await _player
-                  .seek(Duration(milliseconds: (s.end * 1000).toInt()));
+                  .seek(Duration(milliseconds: (s.end * 1000).round()));
             } catch (_) {}
             if (mounted) setState(() => _skipSeeking = false);
             break;
@@ -476,39 +619,99 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
       }
     });
-    // Auto-advance to the next episode on playback end.
+
+    // Auto-advance to the next episode on playback end (with countdown).
     _player.stream.completed.listen((done) {
       if (!done || _jumping) return;
+      if (!_autoPlayNextEnabled) return;
+      if (widget.profileId == null) return;
       final next = _episode + 1;
       if (widget.totalEpisodes == null || next <= widget.totalEpisodes!) {
-        _jumpEpisode(next);
+        _startNextEpCountdown(next);
       }
     });
   }
 
+  void _startNextEpCountdown(int nextEp) {
+    _cancelNextEpCountdown();
+    if (!mounted) return;
+    setState(() => _nextEpCountdown = 5);
+    _nextEpTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final cur = _nextEpCountdown ?? 0;
+      if (cur <= 1) {
+        timer.cancel();
+        setState(() => _nextEpCountdown = null);
+        _jumpEpisode(nextEp);
+      } else {
+        setState(() => _nextEpCountdown = cur - 1);
+      }
+    });
+  }
+
+  void _cancelNextEpCountdown() {
+    _nextEpTimer?.cancel();
+    _nextEpTimer = null;
+    if (_nextEpCountdown != null && mounted) {
+      setState(() => _nextEpCountdown = null);
+    }
+  }
+
   void _autoSelectTracks(Tracks tracks) {
     if (_autoSelected) return;
-    if (tracks.audio.isEmpty && tracks.subtitle.isEmpty) return;
+    final realAudio = tracks.audio
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
+    final realSubs = tracks.subtitle
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
+    if (realAudio.isEmpty && realSubs.isEmpty) return;
     _autoSelected = true;
-    _loadChapters(); // Fetch chapter markers for seekbar breaks.
-    final audioLang = widget.settings.audioLanguage;
-    if (audioLang.isNotEmpty) {
-      for (final t in tracks.audio) {
-        if ((t.language ?? '').toLowerCase().contains(audioLang.toLowerCase())) {
-          _player.setAudioTrack(t);
+    _loadChapters();
+
+    // 1. Audio track: Primary language -> Secondary language fallback
+    final primaryAudio = widget.settings.audioLanguage.trim();
+    final secondaryAudio = _secondaryAudioLanguage.trim();
+    AudioTrack? chosenAudio;
+
+    if (primaryAudio.isNotEmpty) {
+      for (final t in realAudio) {
+        if (_trackMatchesLang(t.language, t.title, primaryAudio)) {
+          chosenAudio = t;
           break;
         }
       }
     }
-    final subLang = widget.settings.subtitleLanguage;
-    if (subLang.isEmpty) {
-      _player.setSubtitleTrack(SubtitleTrack.no());
-    } else {
-      for (final t in tracks.subtitle) {
-        if ((t.language ?? '').toLowerCase().contains(subLang.toLowerCase())) {
-          _player.setSubtitleTrack(t);
+    if (chosenAudio == null && secondaryAudio.isNotEmpty) {
+      for (final t in realAudio) {
+        if (_trackMatchesLang(t.language, t.title, secondaryAudio)) {
+          chosenAudio = t;
           break;
         }
+      }
+    }
+    if (chosenAudio != null) {
+      _player.setAudioTrack(chosenAudio);
+    }
+
+    // 2. Subtitle track: ISO-normalized match, preferring full dialogue over Signs/Songs
+    final subLang = widget.settings.subtitleLanguage.trim();
+    final subCanon = _canonicalLang(subLang);
+    if (subLang.isEmpty || subCanon == 'off' || subCanon == 'none') {
+      _player.setSubtitleTrack(SubtitleTrack.no());
+    } else {
+      final matches = realSubs
+          .where((t) => _trackMatchesLang(t.language, t.title, subLang))
+          .toList();
+      if (matches.isNotEmpty) {
+        final fullDialogue = matches.where((t) {
+          final title = (t.title ?? '').toLowerCase();
+          return !title.contains('sign') && !title.contains('song');
+        }).firstOrNull;
+        _player.setSubtitleTrack(fullDialogue ?? matches.first);
       }
     }
   }
@@ -523,8 +726,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) setState(() => _skips = skips);
   }
 
-  /// Fetch chapter list from mpv for seekbar breaks (mpvKt style).
-  /// Chapters come from the video file's embedded metadata.
   Future<void> _loadChapters() async {
     try {
       final dynamic platform = _player.platform;
@@ -544,21 +745,16 @@ class _PlayerScreenState extends State<PlayerScreen>
           setState(() => _chapters = ratios);
         }
       }
-    } catch (_) {
-      // Chapters are optional — no breaks if unavailable.
-    }
+    } catch (_) {}
   }
 
   // ---------- Resume position (device + cloud) ----------
   int _lastResumeSaveMs = 0;
-  bool _opening = false; // true while a new media is being opened
+  bool _opening = false;
 
-  /// Saves where you are. Safe to call often (throttled to every 5s unless
-  /// [force]). Reads the player state BEFORE any await, so it is also safe
-  /// to call from dispose().
   Future<void> _saveResume({bool force = false}) async {
-    // Guest support: use 'guest' ID when not logged in. Saves locally;
-    // cloud sync only happens for logged-in users.
+    // Private Viewing: never save local resume spots or push to cloud.
+    if (_isPrivateViewing) return;
     final pid = widget.profileId ?? _guestPid;
     if (_opening) return;
     final animeId = widget.anime.id;
@@ -571,22 +767,20 @@ class _PlayerScreenState extends State<PlayerScreen>
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastResumeSaveMs < 5000) return;
     _lastResumeSaveMs = now;
-    if (pos.inSeconds < 10) return; // never overwrite a real spot with ~0
+    if (pos.inSeconds < 10) return;
     final remaining = dur.inMilliseconds - pos.inMilliseconds;
     if (pos.inMilliseconds / dur.inMilliseconds >= 0.95 || remaining < 90000) {
-      await ResumeStore.clear(pid, animeId, ep); // finished
+      await ResumeStore.clear(pid, animeId, ep);
     } else {
       await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds,
           dur.inMilliseconds,
           title: title, cover: cover, notify: force);
     }
-    // Only push to cloud for logged-in users; guests stay local.
     if (widget.profileId != null) {
-      ResumeStore.requestCloudPush(); // throttled: max once a minute
+      ResumeStore.requestCloudPush();
     }
   }
 
-  /// Saved spot for the CURRENT episode (3s rewind for context), or null.
   Future<Duration?> _resumeStart() async {
     final pid = widget.profileId ?? _guestPid;
     final e = await ResumeStore.get(pid, widget.anime.id, _episode);
@@ -600,7 +794,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _saveResume(force: true).whenComplete(() {
-        if (widget.profileId != null) {
+        if (widget.profileId != null && !_isPrivateViewing) {
           ResumeStore.requestCloudPush(force: true);
         }
       });
@@ -608,14 +802,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _openCurrent({bool keepPosition = false}) async {
+    _cancelNextEpCountdown();
     if (widget.streams.isEmpty) {
       setState(() => _status = 'No streams. Install an addon (Settings > Addons).');
       return;
     }
     final src = _cur;
     _autoSelected = false;
-    // Switching source keeps the current time; a fresh episode resumes
-    // from the saved spot (device or cloud).
     Duration? start;
     if (keepPosition) {
       final p = _player.state.position;
@@ -624,9 +817,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       start = await _resumeStart();
     }
     if (!mounted) return;
+    final privBadge = _isPrivateViewing ? ' (Private)' : '';
     setState(() => _status = start != null
-        ? 'Resuming from ${fmtDuration(start)} …'
-        : 'Opening ${src.name} …');
+        ? 'Resuming from ${fmtDuration(start)}$privBadge …'
+        : 'Opening ${src.name}$privBadge …');
     _opening = true;
     try {
       await _enqueueOpen(() async {
@@ -638,15 +832,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     if (mounted) {
       setState(() => _status = start != null
-          ? 'Resumed from ${fmtDuration(start)}'
-          : 'Playing ${src.name}');
+          ? 'Resumed from ${fmtDuration(start)}$privBadge'
+          : 'Playing ${src.name}$privBadge');
     }
   }
 
-  /// Website jumpEpisode port: fetch target-episode streams from every
-  /// addon (6s ID cap, 12s fetch cap) and open the best match by scoring
-  /// the current stream's text (same addon > release group > res > codec).
   Future<void> _jumpEpisode(int target) async {
+    _cancelNextEpCountdown();
     if (_jumping || widget.profileId == null) return;
     if (widget.totalEpisodes != null && target > widget.totalEpisodes!) return;
     _jumping = true;
@@ -717,8 +909,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         setState(() => _status = 'No streams found for episode $target.');
         return;
       }
-      final hit = best; // non-null after the check above
-      await _saveResume(force: true); // save the episode we are leaving
+      final hit = best;
+      await _saveResume(force: true);
       _episode = target;
       final jumpStart = await _resumeStart();
       _marked85 = false;
@@ -743,10 +935,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _resumeTimer?.cancel();
-    // Leaving the player: save the spot (state is read synchronously inside),
-    // then push it to the cloud (logged-in only).
+    _nextEpTimer?.cancel();
     _saveResume(force: true).whenComplete(() {
-      if (widget.profileId != null) {
+      if (widget.profileId != null && !_isPrivateViewing) {
         ResumeStore.requestCloudPush(force: true);
       }
     });
@@ -766,18 +957,15 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   void _cycleFit() {
     setState(() {
-      // mpvKt-style: Fit Screen -> Stretch -> Crop
       _fit = switch (_fit) {
         BoxFit.contain => BoxFit.fill,
         BoxFit.fill => BoxFit.cover,
         _ => BoxFit.contain,
       };
     });
-    // Remember across sessions (on by default, like subtitle style).
     PlayerPrefs.set('fit_mode', _fit.name);
   }
 
-  /// Load the remembered fit mode (Fit/Stretch/Crop).
   Future<void> _loadFitMode() async {
     try {
       final saved = await PlayerPrefs.get('fit_mode') as String?;
@@ -793,13 +981,41 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _showAudio() => _trackPopup(audio: true);
   void _showSubs() => _trackPopup(audio: false);
 
-  /// Small liquid-glass popup (VLC/MX style) anchored near the top-right,
-  /// replacing the old full-width bottom sheet. Checkmark on the active
-  /// track. Sources/Episodes panels are untouched (already glass).
   void _trackPopup({required bool audio}) {
     final tracks = _player.state.tracks;
     final activeId =
         audio ? _player.state.track.audio.id : _player.state.track.subtitle.id;
+
+    final allAudio = tracks.audio
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
+    final allSubs = tracks.subtitle
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
+
+    List<AudioTrack> shownAudio = allAudio;
+    List<SubtitleTrack> shownSubs = allSubs;
+
+    if (_showOnlyPreferredLanguages) {
+      if (audio) {
+        final p1 = widget.settings.audioLanguage.trim();
+        final p2 = _secondaryAudioLanguage.trim();
+        final filtered = allAudio.where((t) {
+          if (t.id == activeId) return true;
+          return (p1.isNotEmpty && _trackMatchesLang(t.language, t.title, p1)) ||
+              (p2.isNotEmpty && _trackMatchesLang(t.language, t.title, p2));
+        }).toList();
+        if (filtered.isNotEmpty) shownAudio = filtered;
+      } else {
+        final subPref = widget.settings.subtitleLanguage.trim();
+        final filtered = allSubs.where((t) {
+          if (t.id == activeId) return true;
+          return subPref.isNotEmpty &&
+              _trackMatchesLang(t.language, t.title, subPref);
+        }).toList();
+        if (filtered.isNotEmpty) shownSubs = filtered;
+      }
+    }
 
     Widget row({
       required String title,
@@ -858,7 +1074,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                       fontSize: 14,
                       fontWeight: FontWeight.w700)),
             ),
-            // Clock → delay panel (subtitle or audio).
             IconButton(
               icon: const Icon(Icons.access_time, color: Colors.white70, size: 20),
               tooltip: audio ? 'Audio delay' : 'Subtitle delay',
@@ -871,7 +1086,6 @@ class _PlayerScreenState extends State<PlayerScreen>
                 }
               },
             ),
-            // Gear → style settings (subtitles only).
             if (!audio)
               IconButton(
                 icon: const Icon(Icons.settings, color: Colors.white70, size: 20),
@@ -896,7 +1110,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         },
       ),
       if (audio)
-        for (final t in tracks.audio)
+        for (final t in shownAudio)
           row(
             title: t.title ?? t.id,
             subtitle: 'language: ${t.language ?? 'unknown'} · id: ${t.id}',
@@ -904,7 +1118,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             onTap: () => _player.setAudioTrack(t),
           )
       else
-        for (final t in tracks.subtitle)
+        for (final t in shownSubs)
           row(
             title: t.title ?? t.id,
             subtitle: 'language: ${t.language ?? 'unknown'} · id: ${t.id}',
@@ -942,9 +1156,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _setMpvProp(String key, dynamic value) async {
     try {
       final dynamic platform = _player.platform;
-      // media_kit's setProperty takes a String; a raw double never reaches
-      // mpv (type/cast error, silently swallowed). Also strip trailing ".0"
-      // — mpv's integer options (sub-font-size, sub-pos) reject "55.0".
       final String s;
       if (value is double) {
         s = value.truncateToDouble() == value
@@ -957,7 +1168,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     } catch (_) {}
   }
 
-  /// Subtitle style settings (mpvKt-style): Typography, Colors, Miscellaneous.
   void _showSubtitleSettings() {
     showDialog<void>(
       context: context,
@@ -981,7 +1191,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// Subtitle delay with Voice heard / Text seen auto-sync.
   Future<void> _showSubtitleDelay() async {
     double initial = 0;
     if (await PlayerPrefs.get('remember_sub_delay') == true) {
@@ -1013,7 +1222,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
-  /// Audio delay with Sound heard / Sound spotted auto-sync.
   Future<void> _showAudioDelay() async {
     double initial = 0;
     if (await PlayerPrefs.get('remember_audio_delay') == true) {
@@ -1100,6 +1308,8 @@ class _PlayerScreenState extends State<PlayerScreen>
             chapters: _chapters,
             showSkipButtons:
                 widget.settings.aniskipEnabled && widget.settings.aniskipShowButton,
+            seekInterval: _seekIntervalSeconds,
+            swipeToSeek: _swipeToSeekEnabled,
             onBack: () => Navigator.of(context).maybePop(),
             onAudio: _showAudio,
             onSubs: _showSubs,
@@ -1118,6 +1328,65 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ? () => _jumpEpisode(_episode + 1)
                 : null,
           ),
+          if (_nextEpCountdown != null)
+            Positioned(
+              right: 24,
+              bottom: 92,
+              child: GlassSurface(
+                radius: 16,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Next episode in ${_nextEpCountdown}s…',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      TextButton(
+                        onPressed: _cancelNextEpCountdown,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white70,
+                          minimumSize: Size.zero,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 6),
+                      ElevatedButton(
+                        onPressed: () {
+                          final next = _episode + 1;
+                          _cancelNextEpCountdown();
+                          _jumpEpisode(next);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                          minimumSize: Size.zero,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        child: const Text(
+                          'Play Now',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1125,9 +1394,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 }
 
 /// Subtitle style settings panel (mpvKt-style).
-/// Sections: Typography, Colors, Miscellaneous.
-/// Values shown on open come from [initial] (the remembered style, if any);
-/// the "Remember across sessions" switch opts into persisting changes.
 class _SubtitleSettingsPanel extends StatefulWidget {
   final Future<void> Function(String key, dynamic value) onSet;
   final Map<String, dynamic> initial;
@@ -1147,23 +1413,19 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
   bool _colorsOpen = false;
   bool _miscOpen = false;
 
-  // Typography state
   late bool _bold;
   late bool _italic;
-  late String _align; // left/center/right
+  late String _align;
   late double _fontSize;
   late double _borderSize;
   late double _shadowOffset;
-  late int _borderStyle; // 0=none, 1=outline+shadow, 2=opaque box
+  late int _borderStyle;
 
-  // Colors state (0-255)
   late int _r, _g, _b, _a;
 
-  // Misc state
   late double _scale;
   late double _position;
 
-  // Persistence toggle
   late bool _remember;
 
   static double _d(dynamic v, double fallback) {
@@ -1195,13 +1457,12 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
     }
     _scale = _d(i['sub-scale'], 1.0);
     _position = _d(i['sub-pos'], 100);
-    _remember = true; // on by default; only off if the user turned it off
+    _remember = true;
     PlayerPrefs.get('remember_sub_style').then((v) {
       if (mounted) setState(() => _remember = v != false);
     });
   }
 
-  /// Current style as mpv-ready strings (also what gets persisted).
   Map<String, String> get _style => {
         'sub-bold': _bold ? 'yes' : 'no',
         'sub-italic': _italic ? 'yes' : 'no',
@@ -1217,7 +1478,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
 
   Future<void> _save() => PlayerPrefs.set('sub_style', _style);
 
-  /// Apply to the player now; persist only when remember is on.
   void _set(String key, dynamic value) {
     widget.onSet(key, value);
     if (_remember) _save();
@@ -1320,7 +1580,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
                     await widget.onReset();
                     if (context.mounted) Navigator.pop(context);
                   },
-                  child: const Text('Reset to Settings'),
+                  child: const Text('Reset defaults'),
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white70),
@@ -1329,7 +1589,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
               ],
             ),
           ),
-          // ---------- Typography ----------
           _sectionHeader('Typography', _typographyOpen,
               () => setState(() => _typographyOpen = !_typographyOpen)),
           if (_typographyOpen) ...[
@@ -1402,7 +1661,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
             ),
           ],
           const Divider(color: Colors.white12, height: 1),
-          // ---------- Colors ----------
           _sectionHeader('Colors', _colorsOpen,
               () => setState(() => _colorsOpen = !_colorsOpen)),
           if (_colorsOpen) ...[
@@ -1424,7 +1682,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
             }),
           ],
           const Divider(color: Colors.white12, height: 1),
-          // ---------- Miscellaneous ----------
           _sectionHeader('Miscellaneous', _miscOpen,
               () => setState(() => _miscOpen = !_miscOpen)),
           if (_miscOpen) ...[
@@ -1437,7 +1694,6 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
               _set('sub-pos', v.round());
             }),
           ],
-          // ---------- Persistence ----------
           SwitchListTile(
             dense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1449,7 +1705,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
             onChanged: (v) {
               setState(() => _remember = v);
               PlayerPrefs.set('remember_sub_style', v);
-              if (v) _save(); // capture the current style immediately
+              if (v) _save();
             },
           ),
           const SizedBox(height: 16),
@@ -1498,8 +1754,6 @@ class _DelayPanel extends StatefulWidget {
   final double Function() getPosition;
   final String heardLabel;
   final String seenLabel;
-  /// SharedPreferences keys for the opt-in "Remember across sessions"
-  /// toggle: [persistKey] holds the delay in ms, [rememberKey] the bool.
   final String persistKey;
   final String rememberKey;
   final double initialDelayMs;
@@ -1535,14 +1789,12 @@ class _DelayPanelState extends State<_DelayPanel> {
 
   void _apply(double ms) {
     setState(() => _delayMs = ms);
-    widget.onSet(ms / 1000.0); // mpv uses seconds
+    widget.onSet(ms / 1000.0);
     if (_remember) PlayerPrefs.set(widget.persistKey, ms);
   }
 
   void _tryAutoSync() {
     if (_heardAt != null && _seenAt != null) {
-      // Heard at T1, saw at T2. If text came after voice (T2 > T1),
-      // subtitles are late → negative delay to show earlier.
       final delayMs = (_heardAt! - _seenAt!) * 1000;
       _apply(delayMs.clamp(-10000, 10000));
       setState(() {
@@ -1649,8 +1901,8 @@ class _DelayPanelState extends State<_DelayPanel> {
             contentPadding: EdgeInsets.zero,
             title: const Text('Remember across sessions',
                 style: TextStyle(color: Colors.white, fontSize: 13)),
-            subtitle: Text('Save this delay for every video',
-                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+            subtitle: const Text('Save this delay for every video',
+                style: TextStyle(color: Colors.white38, fontSize: 11)),
             value: _remember,
             onChanged: (v) {
               setState(() => _remember = v);
