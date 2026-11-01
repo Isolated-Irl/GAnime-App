@@ -56,13 +56,6 @@ const _libMenu = [
   ('Rewatching', 'REPEATING'),
 ];
 
-String _libStatusName(String code) {
-  for (final e in _libMenu) {
-    if (e.$2 == code) return e.$1;
-  }
-  return code;
-}
-
 class _EpRange {
   final int from;
   final int to;
@@ -113,7 +106,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   late String _layout; // 'detailed' | 'minimum'
   int? _rangeFrom; // null = All
   // Key for the library PopupMenuButton so the whole pill can open it.
-  final _libMenuKey = GlobalKey<PopupMenuButtonState<String>>();
+  final _libMenuKey = GlobalKey();
   String? _libStatus; // app status code, null = not in library
   String _studio = ''; // main studio from AniList, '' = unknown (no chip)
   // Canonical anime for this screen. Calendar/tracker entries arrive
@@ -125,10 +118,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _layout = const {'minimum', 'compact'}
-            .contains(widget.settings.episodeLayout)
-        ? widget.settings.episodeLayout
+    // Episode layout comes from the global cached preference (synced on
+    // every save), not the potentially-stale widget.settings snapshot —
+    // so the choice persists across all anime.
+    final cached = Store.episodeLayoutSync;
+    _layout = const {'minimum', 'compact'}.contains(cached)
+        ? cached
         : 'detailed';
+    // Warm the cache from disk in the background (no-op if already set).
+    Store.settings().then((s) {
+      Store.setEpisodeLayoutCache(s.episodeLayout);
+      if (mounted && _layout != s.episodeLayout) {
+        setState(() => _layout = s.episodeLayout);
+      }
+    });
     _anime = widget.anime;
     // Only mark as having full data if banner+description are present.
     // Thin versions (from library) wait for the full fetch in _load().
@@ -308,21 +311,23 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // Sync tracker progress: if local watched is empty, populate from
       // the tracker's progress (e.g. opened from MAL/Simkl/AniList tab).
       // Falls back to widget.initialProgress passed from the library card.
-      // NEW: also fetches directly from the tracker API if still empty.
+      // The tracker API fetch is DECOUPLED — it runs after the UI renders
+      // so episode loading is never delayed by tracking.
       if (w.isEmpty) {
         final existing = lib
             .where((e) => e.key == 'local_${a.id}' || e.anilistId == a.id)
             .firstOrNull;
-        var prog = (existing?.progress ?? 0) > 0
+        final prog = (existing?.progress ?? 0) > 0
             ? existing!.progress
             : widget.initialProgress;
-        // If still 0, try fetching from the connected tracker API.
-        if (prog <= 0) {
-          prog = await _fetchTrackerProgress(a);
-        }
         if (prog > 0) {
           w = List.generate(prog, (i) => i + 1).toSet();
           await Store.setWatched(widget.profileId, a.id, w);
+        }
+        // If still 0, fetch from the tracker API in the background —
+        // episodes render first, progress updates when it arrives.
+        else {
+          _fetchTrackerProgressAsync(a);
         }
       }
 
@@ -464,6 +469,20 @@ class _DetailsScreenState extends State<DetailsScreen> {
     return 0;
   }
 
+  /// Background wrapper for [_fetchTrackerProgress] — runs after the
+  /// episode list has rendered so tracking never delays episode loading.
+  /// Updates the watched state + UI when the tracker data arrives.
+  void _fetchTrackerProgressAsync(Anime a) {
+    _fetchTrackerProgress(a).then((prog) async {
+      if (prog <= 0 || !mounted) return;
+      // Don't overwrite if the user already marked something meanwhile.
+      if (_watched.isNotEmpty) return;
+      final w = List.generate(prog, (i) => i + 1).toSet();
+      await Store.setWatched(widget.profileId, a.id, w);
+      if (mounted) setState(() => _watched = w);
+    });
+  }
+
   Future<void> _markAllWatched() async {
     final total = _total;
     if (total <= 0) return;
@@ -521,11 +540,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 
   Future<void> _setLayout(String v) async {
-    // Dismiss the floating filter sheet if it's open.
-    if (_filterSheetOpen) {
-      _filterSheetOpen = false;
-      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-    }
     setState(() => _layout = v);
     await Store.saveSettings(widget.settings.copyWith(episodeLayout: v));
   }
@@ -1302,7 +1316,8 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 borderRadius: BorderRadius.circular(28)),
             child: GlassSurface(
               radius: 28,
-              fill: const Color(0x4D000000),
+              fill: kGlassPopupFill,
+              border: kGlassPopupBorder,
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(18),
                 child: Column(
@@ -2288,48 +2303,15 @@ class _DetailsScreenState extends State<DetailsScreen> {
                           // Whole pill opens the menu, not just the icon.
                           Expanded(
                             child: _actionPill(
-                              onTap: () =>
-                                  _libMenuKey.currentState?.showButtonMenu(),
-                              child: PopupMenuButton<String>(
-                                key: _libMenuKey,
-                                color: GaColors.of(context).card,
-                                tooltip: _libStatus == null
-                                    ? 'Add to Library'
-                                    : _libStatusName(_libStatus!),
-                                onSelected: _setLibraryStatus,
-                                itemBuilder: (_) => [
-                                  for (final e in _libMenu)
-                                    PopupMenuItem(
-                                      value: e.$2,
-                                      child: Row(
-                                        children: [
-                                          Text(e.$1),
-                                          const Spacer(),
-                                          if (_libStatus == e.$2)
-                                            Icon(Icons.check,
-                                                size: 18,
-                                                color: accent),
-                                        ],
-                                      ),
-                                    ),
-                                  if (_libStatus != null)
-                                    const PopupMenuDivider(),
-                                  if (_libStatus != null)
-                                    const PopupMenuItem(
-                                      value: null,
-                                      child: Text('Remove from Library',
-                                          style: TextStyle(
-                                              color: Colors.redAccent)),
-                                    ),
-                                ],
-                                child: Icon(
-                                  _libStatus == null
-                                      ? Icons.bookmark_border
-                                      : Icons.bookmark,
-                                  color: _libStatus == null
-                                      ? Colors.white
-                                      : accent,
-                                ),
+                              key: _libMenuKey,
+                              onTap: () => _showLibraryMenu(context),
+                              child: Icon(
+                                _libStatus == null
+                                    ? Icons.bookmark_border
+                                    : Icons.bookmark,
+                                color: _libStatus == null
+                                    ? Colors.white
+                                    : accent,
                               ),
                             ),
                           ),
@@ -2442,12 +2424,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
                         Row(
                           children: [
                             InkWell(
-                              // Opens a floating sheet, not an inline
-                              // expand — content below doesn't move.
-                              onTap: _showFilterSheet,
+                              // Opens a floating popup anchored to the
+                              // button, matching the library popup style.
+                              onTap: () => _showFilterSheet(context),
                               borderRadius:
                                   BorderRadius.circular(20),
                               child: Container(
+                                key: _filterKey,
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 14, vertical: 8),
                                 decoration: BoxDecoration(
@@ -2585,8 +2568,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
-  Widget _actionPill({required Widget child, VoidCallback? onTap}) {
+  Widget _actionPill(
+      {required Widget child, VoidCallback? onTap, Key? key}) {
     final pill = Container(
+      key: key,
       height: 56,
       decoration: BoxDecoration(
         color: GaColors.of(context).card,
@@ -2603,67 +2588,116 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 
-  bool _filterSheetOpen = false;
+  final _filterKey = GlobalKey();
+
+  /// Anchored library status menu — positioned relative to the bookmark
+  /// pill's global rect so it appears synced to its button, not floating
+  /// in the center of the screen.
+  Future<void> _showLibraryMenu(BuildContext context) async {
+    final box =
+        _libMenuKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final accent = Theme.of(context).colorScheme.primary;
+    final pos = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<String>(
+      context: context,
+      // Anchor the menu just below the bookmark pill.
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(pos.dx, pos.dy + size.height + 8, size.width, 0),
+        Offset.zero & overlay.size,
+      ),
+      // Opaque glass fill for readability (not the transparent default).
+      color: kGlassPopupFill,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kGlassPopupBorder, width: 1),
+      ),
+      items: [
+        for (final e in _libMenu)
+          PopupMenuItem(
+            value: e.$2,
+            child: Row(
+              children: [
+                Text(e.$1),
+                const Spacer(),
+                if (_libStatus == e.$2)
+                  Icon(Icons.check, size: 18, color: accent),
+              ],
+            ),
+          ),
+        if (_libStatus != null) const PopupMenuDivider(),
+        // Sentinel for "remove" — showMenu returns null on outside tap,
+        // so we need a non-null value to distinguish the two.
+        if (_libStatus != null)
+          const PopupMenuItem(
+            value: '__remove__',
+            child: Text('Remove from Library',
+                style: TextStyle(color: Colors.redAccent)),
+          ),
+      ],
+    );
+    // null = tapped outside, do nothing.
+    if (selected == null) return;
+    _setLibraryStatus(selected == '__remove__' ? null : selected);
+  }
 
   /// Floating filter sheet (episode design picker). Overlays the
   /// content instead of pushing it down like the old inline expand.
-  void _showFilterSheet() {
-    _filterSheetOpen = true;
-    showModalBottomSheet<void>(
+  /// Anchored episode design popup — same floating style as the library
+  /// popup (showMenu anchored to the button), not a bottom sheet.
+  Future<void> _showFilterSheet(BuildContext context) async {
+    final box = _filterKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<String>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: GaColors.of(ctx).card,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('EPISODE DESIGN',
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.1,
-                    color: Colors.grey)),
-            const SizedBox(height: 8),
-            _designRow('minimum', 'Minimum'),
-            _designRow('compact', 'Compact'),
-            _designRow('detailed', 'Detailed'),
-            const SizedBox(height: 8),
-          ],
-        ),
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(pos.dx, pos.dy + size.height + 8, size.width, 0),
+        Offset.zero & overlay.size,
       ),
-    ).then((_) => _filterSheetOpen = false);
-  }
-
-  Widget _designRow(String value, String name) {
-    final active = _layout == value;
-    final accent = Theme.of(context).colorScheme.primary;
-    return InkWell(
-      onTap: () => _setLayout(value),
-      // Whole row is tappable, not just the icon.
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(name,
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+      // Opaque glass fill for readability, matching the library popup.
+      color: kGlassPopupFill,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: kGlassPopupBorder, width: 1),
+      ),
+      items: [
+        const PopupMenuItem(
+          enabled: false,
+          child: Text('EPISODE DESIGN',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.1,
+                  color: Colors.grey)),
+        ),
+        for (final e in const [
+          ('minimum', 'Minimum'),
+          ('compact', 'Compact'),
+          ('detailed', 'Detailed'),
+        ])
+          PopupMenuItem(
+            value: e.$1,
+            child: Row(
+              children: [
+                Text(e.$2),
+                const Spacer(),
+                if (_layout == e.$1)
+                  Icon(Icons.check,
+                      size: 18, color: Theme.of(context).colorScheme.primary),
+              ],
             ),
-            if (active)
-              Icon(Icons.check, color: accent)
-            else
-              Icon(Icons.circle_outlined,
-                  color: Colors.grey.shade600, size: 20),
-          ],
-        ),
-      ),
+          ),
+      ],
     );
+    // null = tapped outside, do nothing.
+    if (selected != null) _setLayout(selected);
   }
 }
 

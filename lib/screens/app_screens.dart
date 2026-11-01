@@ -3464,7 +3464,10 @@ class _SeeAllScreenState extends State<_SeeAllScreen> {
                 crossAxisCount: 3,
                 mainAxisSpacing: 12,
                 crossAxisSpacing: 10,
-                childAspectRatio: 0.62,
+                // 0.47 reserves ~64px under the 2:3 poster for the
+                // 2-line title + score/year line (0.62 clipped titles
+                // to a single truncated line).
+                childAspectRatio: 0.47,
               ),
               itemCount: _items.length + 1, // +1 for footer
               itemBuilder: (ctx, i) {

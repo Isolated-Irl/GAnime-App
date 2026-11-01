@@ -3,6 +3,14 @@
 // + inner shadow (bottom-right) + hairline border.
 import 'package:flutter/material.dart';
 
+/// Opaque glass fill for popups — keeps the glass vibe (highlight/shadow
+/// strokes) but at 88% opacity so background content doesn't bleed through
+/// and hamper text readability. Used by all popups app-wide (player excluded).
+const kGlassPopupFill = Color(0xE0141414);
+
+/// Border color for glass popups — subtle white at 18%.
+const kGlassPopupBorder = Color(0x2EFFFFFF);
+
 class GlassSurface extends StatelessWidget {
   final Widget child;
   final double radius;

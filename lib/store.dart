@@ -96,6 +96,29 @@ class Store {
 
   static Future<void> saveSettings(AppSettings s) async {
     await _write(_kSettings, s.toJson());
+    // Keep the in-memory episode layout in sync so new detail pages
+    // pick up the latest choice without waiting for a settings reload.
+    _cachedEpisodeLayout = s.episodeLayout;
+  }
+
+  /// In-memory cache of the episode layout preference. Synced on
+  /// [saveSettings]; falls back to reading from disk on first access.
+  static String? _cachedEpisodeLayout;
+
+  /// Returns the current episode layout preference (minimum/compact/
+  /// detailed), from memory if available, else from disk. Never blocks
+  /// the UI — falls back to 'detailed' if nothing is stored yet.
+  static String get episodeLayoutSync {
+    if (_cachedEpisodeLayout != null) return _cachedEpisodeLayout!;
+    // Async read can't complete synchronously; kick it off to warm the
+    // cache and return the default meanwhile.
+    settings().then((s) => _cachedEpisodeLayout = s.episodeLayout);
+    return 'detailed';
+  }
+
+  /// Updates the cached episode layout (called after a fresh disk read).
+  static void setEpisodeLayoutCache(String v) {
+    _cachedEpisodeLayout = v;
   }
 
   // Watched episodes, per profile. Hole-preserving: unmark removes one ep.
