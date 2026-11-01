@@ -139,8 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ResumeItem> _resume = [];
 
   Future<void> _loadResume() async {
-    final items =
-        await ResumeStore.recent(widget.profileId ?? 'guest');
+    final items = await ResumeStore.recent(widget.profileId);
     if (mounted) setState(() => _resume = items);
   }
 
@@ -891,7 +890,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             await openDetails(
                                               context,
                                               anime: ra,
-                                              profileId: widget.profileId ?? '',
+                                              profileId: widget.profileId,
                                               settings: widget.settings,
                                               onMarkWatched:
                                                   widget.onMarkWatched,
