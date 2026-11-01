@@ -173,7 +173,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           'stream-lavf-o', 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
       await platform.setProperty('network-timeout', '60');
       // Subtitle STYLE (size/colour/outline/position) is applied on the
-      // Flutter SubtitleView (see _subViewConfig), not on mpv.
+      // our own overlay (see _subtitleOverlay), not on mpv.
       // Apply remembered subtitle / audio delays (these are mpv-side).
       try {
         if (await PlayerPrefs.get('remember_sub_delay') == true) {
@@ -276,73 +276,125 @@ class _PlayerScreenState extends State<PlayerScreen>
     await PlayerPrefs.set('sub_style', <String, String>{});
   }
 
-  SubtitleViewConfiguration _subViewConfig(BuildContext context) {
-    final st = _effectiveSubStyle();
-    double d(String k, double fb) => double.tryParse(st[k] ?? '') ?? fb;
+  /// Our own subtitle renderer (replaces media_kit's SubtitleView, which
+  /// silently shrinks text by sqrt(w*h / 1920*1080) ~ 0.4 on a phone — that is
+  /// why "100" here only looked like "55" in mpvKt).
+  ///
+  /// Sizes follow mpv exactly: sub-font-size is in 720p-scaled pixels, so
+  /// the real size = value * (screen height / 720). Value 55 here == 55 there.
+  Widget _subtitleOverlay() {
+    return LayoutBuilder(builder: (context, c) {
+      final st = _effectiveSubStyle();
+      double d(String k, double fb) => double.tryParse(st[k] ?? '') ?? fb;
+      final k = c.maxHeight / 720.0;
+      final fontPx = d('sub-font-size', 55) * d('sub-scale', 1.0) * k;
+      final border = d('sub-border-size', 3) * k;
+      final shadowOff = d('sub-shadow-offset', 0) * k;
+      final borderStyle = int.tryParse(st['sub-border-style'] ?? '') ?? 1;
+      final pos = d('sub-pos', 100).clamp(0.0, 100.0);
 
-    // mpv's default 55 maps to ~33 logical px (close to media_kit's 32).
-    final fontSize = d('sub-font-size', 55) * 0.6 * d('sub-scale', 1.0);
-    final borderSize = d('sub-border-size', 3);
-    final shadowOff = d('sub-shadow-offset', 0);
-    final borderStyle = int.tryParse(st['sub-border-style'] ?? '') ?? 2;
-    final pos = d('sub-pos', 100).clamp(0.0, 100.0);
-
-    var color = Colors.white;
-    final c = st['sub-color'] ?? '';
-    if (c.length >= 9 && c.startsWith('#')) {
-      final r = int.tryParse(c.substring(1, 3), radix: 16) ?? 255;
-      final g = int.tryParse(c.substring(3, 5), radix: 16) ?? 255;
-      final b = int.tryParse(c.substring(5, 7), radix: 16) ?? 255;
-      final a = int.tryParse(c.substring(7, 9), radix: 16) ?? 255;
-      color = Color.fromARGB(a, r, g, b);
-    }
-
-    final shadows = <Shadow>[];
-    if (borderStyle == 1) {
-      final b = borderSize.clamp(0.0, 10.0) * 0.5;
-      if (b > 0) {
-        for (final o in const [
-          Offset(-1, -1), Offset(1, -1), Offset(-1, 1), Offset(1, 1),
-          Offset(0, -1), Offset(0, 1), Offset(-1, 0), Offset(1, 0),
-        ]) {
-          shadows.add(Shadow(
-              color: Colors.black, offset: Offset(o.dx * b, o.dy * b), blurRadius: 1));
-        }
+      var color = Colors.white;
+      final cs = st['sub-color'] ?? '';
+      if (cs.length >= 9 && cs.startsWith('#')) {
+        final r = int.tryParse(cs.substring(1, 3), radix: 16) ?? 255;
+        final g = int.tryParse(cs.substring(3, 5), radix: 16) ?? 255;
+        final b = int.tryParse(cs.substring(5, 7), radix: 16) ?? 255;
+        final a = int.tryParse(cs.substring(7, 9), radix: 16) ?? 255;
+        color = Color.fromARGB(a, r, g, b);
       }
-      if (shadowOff > 0) {
-        shadows.add(Shadow(
-            color: Colors.black87,
-            offset: Offset(shadowOff, shadowOff),
-            blurRadius: 2));
-      }
-    }
 
-    final align = switch (st['sub-align-x']) {
-      'left' => TextAlign.left,
-      'right' => TextAlign.right,
-      _ => TextAlign.center,
-    };
-    final h = MediaQuery.sizeOf(context).height;
+      final alignX = st['sub-align-x'];
+      final textAlign = alignX == 'left'
+          ? TextAlign.left
+          : alignX == 'right'
+              ? TextAlign.right
+              : TextAlign.center;
+      final boxAlign = alignX == 'left'
+          ? Alignment.bottomLeft
+          : alignX == 'right'
+              ? Alignment.bottomRight
+              : Alignment.bottomCenter;
 
-    return SubtitleViewConfiguration(
-      visible: true,
-      style: TextStyle(
-        height: 1.3,
-        fontSize: fontSize,
-        color: color,
+      final base = TextStyle(
+        fontSize: fontPx,
+        height: 1.15,
         fontWeight:
-            st['sub-bold'] == 'yes' ? FontWeight.w800 : FontWeight.w500,
+            st['sub-bold'] == 'yes' ? FontWeight.w800 : FontWeight.w600,
         fontStyle:
             st['sub-italic'] == 'yes' ? FontStyle.italic : FontStyle.normal,
-        backgroundColor: borderStyle == 2
-            ? Color.fromRGBO(
-                0, 0, 0, widget.settings.subtitleBackgroundTint.clamp(0.0, 1.0))
-            : null,
-        shadows: shadows,
-      ),
-      textAlign: align,
-      padding: EdgeInsets.fromLTRB(16, 0, 16, 24 + (100 - pos) / 100 * h * 0.8),
-    );
+      );
+
+      Widget label(String t) {
+        final fill = Text(
+          t,
+          textAlign: textAlign,
+          style: base.copyWith(
+            color: color,
+            shadows: (borderStyle == 1 && shadowOff > 0)
+                ? [
+                    Shadow(
+                        color: Colors.black87,
+                        offset: Offset(shadowOff, shadowOff),
+                        blurRadius: shadowOff)
+                  ]
+                : null,
+          ),
+        );
+        if (borderStyle == 2) {
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              color: Color.fromRGBO(0, 0, 0,
+                  widget.settings.subtitleBackgroundTint.clamp(0.0, 1.0)),
+              borderRadius: BorderRadius.circular(4 * k),
+            ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8 * k, vertical: 2 * k),
+              child: fill,
+            ),
+          );
+        }
+        if (borderStyle == 1 && border > 0) {
+          return Stack(
+            children: [
+              Text(
+                t,
+                textAlign: textAlign,
+                style: base.copyWith(
+                  foreground: Paint()
+                    ..style = PaintingStyle.stroke
+                    ..strokeWidth = border * 1.6
+                    ..strokeJoin = StrokeJoin.round
+                    ..color = Colors.black,
+                ),
+              ),
+              fill,
+            ],
+          );
+        }
+        return fill;
+      }
+
+      return IgnorePointer(
+        child: Align(
+          alignment: boxAlign,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+                24, 0, 24, c.maxHeight * 0.06 + (100 - pos) / 100 * c.maxHeight * 0.8),
+            child: StreamBuilder<List<String>>(
+              stream: _player.stream.subtitle,
+              initialData: _player.state.subtitle,
+              builder: (_, snap) {
+                final lines = (snap.data ?? const <String>[])
+                    .where((l) => l.trim().isNotEmpty)
+                    .toList();
+                if (lines.isEmpty) return const SizedBox.shrink();
+                return label(lines.join('\n'));
+              },
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   @override
@@ -350,6 +402,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadSubStyle();
+    _loadFitMode();
     _episode = widget.episode;
     _streamIndex = widget.initialIndex; // open the stream the user tapped
     SystemChrome.setPreferredOrientations([
@@ -696,6 +749,21 @@ class _PlayerScreenState extends State<PlayerScreen>
         _ => BoxFit.contain,
       };
     });
+    // Remember across sessions (on by default, like subtitle style).
+    PlayerPrefs.set('fit_mode', _fit.name);
+  }
+
+  /// Load the remembered fit mode (Fit/Stretch/Crop).
+  Future<void> _loadFitMode() async {
+    try {
+      final saved = await PlayerPrefs.get('fit_mode') as String?;
+      if (saved == null || !mounted) return;
+      final fit = BoxFit.values.cast<BoxFit?>().firstWhere(
+            (f) => f?.name == saved,
+            orElse: () => null,
+          );
+      if (fit != null) setState(() => _fit = fit);
+    } catch (_) {}
   }
 
   void _showAudio() => _trackPopup(audio: true);
@@ -994,8 +1062,10 @@ class _PlayerScreenState extends State<PlayerScreen>
             controls: NoVideoControls,
             fit: _fit,
             fill: Colors.black,
-            subtitleViewConfiguration: _subViewConfig(context),
+            subtitleViewConfiguration:
+                const SubtitleViewConfiguration(visible: false),
           ),
+          _subtitleOverlay(),
           GlassPlayerControls(
             player: _player,
             isHw: _isHw,
@@ -1090,7 +1160,7 @@ class _SubtitleSettingsPanelState extends State<_SubtitleSettingsPanel> {
     _fontSize = _d(i['sub-font-size'], 55);
     _borderSize = _d(i['sub-border-size'], 3);
     _shadowOffset = _d(i['sub-shadow-offset'], 0);
-    _borderStyle = int.tryParse('${i['sub-border-style'] ?? 2}') ?? 2;
+    _borderStyle = int.tryParse('${i['sub-border-style'] ?? 1}') ?? 1;
     _r = _g = _b = _a = 255;
     final c = '${i['sub-color'] ?? ''}';
     if (c.length >= 9 && c.startsWith('#')) {

@@ -65,10 +65,15 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
   bool _dragging = false;
   bool _locked = false;
   Timer? _hideTimer;
-  Timer? _flashTimer;
+  Timer? _pulseTimer;
   StreamSubscription<bool>? _playSub;
   Offset _lastTap = Offset.zero;
-  IconData? _flash;
+  // Which seek button to pulse after a double-tap (-1 = rewind, 1 = forward, 0 = none).
+  int _pulse = 0;
+  // Timer display mode: 0 = remaining (-23:27), 1 = elapsed (00:22), 2 = total (23:49).
+  int _timeMode = 0;
+  // Rotation turns for the pulse (0 → 0.5 → 0 = half rotate and back).
+  double _pulseTurns = 0;
 
   Player get _p => widget.player;
 
@@ -90,7 +95,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
   @override
   void dispose() {
     _hideTimer?.cancel();
-    _flashTimer?.cancel();
+    _pulseTimer?.cancel();
     _playSub?.cancel();
     super.dispose();
   }
@@ -118,11 +123,23 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     _scheduleHide();
   }
 
-  void _flashIcon(IconData icon) {
-    setState(() => _flash = icon);
-    _flashTimer?.cancel();
-    _flashTimer = Timer(const Duration(milliseconds: 600), () {
-      if (mounted) setState(() => _flash = null);
+  // Pulse the respective seek button after a double-tap, but only when
+  // the controls are open. When hidden, the seek happens silently.
+  // The button does a half rotate and back, like popular players.
+  void _pulseSeekButton(bool left) {
+    if (!_visible) return;
+    setState(() {
+      _pulse = left ? -1 : 1;
+      _pulseTurns = 0.5;
+    });
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) {
+        setState(() {
+          _pulse = 0;
+          _pulseTurns = 0;
+        });
+      }
     });
   }
 
@@ -138,7 +155,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
               final w = context.size?.width ?? 0;
               final left = _lastTap.dx < w / 2;
               _seekBy(left ? -10 : 10);
-              _flashIcon(left ? Icons.replay_10 : Icons.forward_10);
+              _pulseSeekButton(left);
             },
       child: AnimatedOpacity(
         opacity: _visible || _locked ? 1 : 0,
@@ -199,27 +216,16 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
             child: Column(
               children: [
                 _topBar(),
-                Expanded(child: Center(child: _centerCluster())),
+                // True visual center: offset down to compensate for the
+                // taller top bar pushing the cluster optically high.
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 24),
+                    child: Center(child: _centerCluster()),
+                  ),
+                ),
                 _bottomBar(),
               ],
-            ),
-          ),
-        ),
-        // Double-tap seek feedback — always in the tree so the fade-out
-        // actually animates (removing the subtree kills the animation).
-        IgnorePointer(
-          child: Center(
-            child: AnimatedOpacity(
-              opacity: _flash == null ? 0 : 1,
-              duration: const Duration(milliseconds: 200),
-              child: Container(
-                padding: const EdgeInsets.all(18),
-                decoration: const BoxDecoration(
-                  color: Color(0x59000000), shape: BoxShape.circle,
-                ),
-                child: Icon(_flash ?? Icons.replay_10,
-                    color: Colors.white, size: 40),
-              ),
             ),
           ),
         ),
@@ -232,7 +238,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
       children: [
         GlassButton(icon: Icons.arrow_back, size: 40, iconSize: 20, circle: true, onTap: widget.onBack),
         const SizedBox(width: 10),
-        Expanded(
+        // Flexible (not Expanded): pill hugs the title content. Long titles
+        // push buttons right naturally, like popular players.
+        Flexible(
+          fit: FlexFit.loose,
           child: GlassSurface(
             radius: 14,
             child: Padding(
@@ -309,7 +318,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        GlassButton(icon: Icons.replay_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(-10)),
+        AnimatedRotation(
+          turns: _pulse == -1 ? _pulseTurns : 0,
+          duration: const Duration(milliseconds: 300),
+          child: GlassButton(icon: Icons.replay_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(-10)),
+        ),
         const SizedBox(width: 24),
         // Play/pause button with an in-button buffering spinner:
         // while buffering, a 12-spoke style spinner replaces the icon
@@ -367,7 +380,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
           },
         ),
         const SizedBox(width: 24),
-        GlassButton(icon: Icons.forward_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(10)),
+        AnimatedRotation(
+          turns: _pulse == 1 ? _pulseTurns : 0,
+          duration: const Duration(milliseconds: 300),
+          child: GlassButton(icon: Icons.forward_10, size: 48, iconSize: 24, circle: true, onTap: () => _seekBy(10)),
+        ),
       ],
     );
   }
@@ -462,9 +479,21 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
             builder: (_, durSnap) {
               final pos = posSnap.data ?? Duration.zero;
               final dur = durSnap.data ?? Duration.zero;
+              // Right timer cycles on tap: remaining → elapsed → total (VLC-style).
+              final rightLabel = switch (_timeMode) {
+                1 => fmtPlayerTime(pos),
+                2 => fmtPlayerTime(dur),
+                _ => '-${fmtPlayerTime(dur - pos)}',
+              };
               return Row(
                 children: [
-                  Text(fmtPlayerTime(pos), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  // Fixed width so the seekbar doesn't shift as digits change.
+                  SizedBox(
+                    width: 48,
+                    child: Text(fmtPlayerTime(pos),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: _SeekBar(
@@ -480,7 +509,18 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text('-${fmtPlayerTime(dur - pos)}', style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _timeMode = (_timeMode + 1) % 3);
+                      _scheduleHide();
+                    },
+                    child: SizedBox(
+                      width: 56,
+                      child: Text(rightLabel,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    ),
+                  ),
                 ],
               );
             },
