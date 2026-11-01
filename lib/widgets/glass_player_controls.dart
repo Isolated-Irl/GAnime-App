@@ -22,6 +22,7 @@ class GlassPlayerControls extends StatefulWidget {
   final String status;
   final List<SkipInterval> skips;
   final List<double> chapters;
+  final List<Map<String, dynamic>> chapterMeta;
   final bool showSkipButtons;
   final int seekInterval;
   final bool swipeToSeek;
@@ -44,6 +45,7 @@ class GlassPlayerControls extends StatefulWidget {
     required this.status,
     required this.skips,
     this.chapters = const [],
+    this.chapterMeta = const [],
     required this.showSkipButtons,
     this.seekInterval = 10,
     this.swipeToSeek = true,
@@ -864,6 +866,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           _SeekbarSection(
             player: widget.player,
             chapters: widget.chapters,
+            chapterMeta: widget.chapterMeta,
             onInteraction: _scheduleHide,
           ),
           const SizedBox(height: 6),
@@ -958,11 +961,13 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
 class _SeekbarSection extends StatefulWidget {
   final Player player;
   final List<double> chapters;
+  final List<Map<String, dynamic>> chapterMeta;
   final VoidCallback onInteraction;
 
   const _SeekbarSection({
     required this.player,
     required this.chapters,
+    this.chapterMeta = const [],
     required this.onInteraction,
   });
 
@@ -973,6 +978,119 @@ class _SeekbarSection extends StatefulWidget {
 class _SeekbarSectionState extends State<_SeekbarSection> {
   double? _dragMs;
   bool _showRemaining = false;
+  bool _showChapterPill = false;
+  Timer? _pillTimer;
+
+  @override
+  void dispose() {
+    _pillTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Find chapter index for a given position in milliseconds.
+  int _chapterIndexAt(double ms) {
+    final meta = widget.chapterMeta;
+    if (meta.isEmpty) return -1;
+    int idx = -1;
+    for (int i = 0; i < meta.length; i++) {
+      final t = (meta[i]['timeMs'] as num?)?.toDouble() ?? 0;
+      if (t <= ms) {
+        idx = i;
+      } else {
+        break;
+      }
+    }
+    return idx;
+  }
+
+  void _showPill() {
+    _pillTimer?.cancel();
+    if (widget.chapterMeta.isNotEmpty && mounted) {
+      setState(() => _showChapterPill = true);
+    }
+  }
+
+  void _hidePillDelayed() {
+    _pillTimer?.cancel();
+    _pillTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showChapterPill = false);
+    });
+  }
+
+  void _openChapterSheet() {
+    final meta = widget.chapterMeta;
+    if (meta.isEmpty) return;
+    // Find current chapter for highlighting
+    final posMs = widget.player.state.position.inMilliseconds.toDouble();
+    final curIdx = _chapterIndexAt(posMs);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Chapters',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: meta.length,
+                itemBuilder: (c, i) {
+                  final m = meta[i];
+                  final ms = (m['timeMs'] as num?)?.toDouble() ?? 0;
+                  final title = (m['title']?.toString() ?? '').trim();
+                  final isCur = i == curIdx;
+                  return ListTile(
+                    dense: true,
+                    leading: Text(
+                      _fmt(Duration(milliseconds: ms.round())),
+                      style: TextStyle(
+                        color: isCur ? Colors.white : Colors.white70,
+                        fontSize: 13,
+                        fontWeight: isCur ? FontWeight.w700 : FontWeight.w400,
+                      ),
+                    ),
+                    title: Text(
+                      'Chapter ${i + 1}${title.isNotEmpty ? ': $title' : ''}',
+                      style: TextStyle(
+                        color: isCur ? Colors.white : Colors.white70,
+                        fontSize: 14,
+                        fontWeight: isCur ? FontWeight.w700 : FontWeight.w400,
+                      ),
+                    ),
+                    trailing: isCur
+                        ? const Icon(Icons.play_arrow,
+                            color: Colors.white, size: 20)
+                        : null,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      widget.player
+                          .seek(Duration(milliseconds: ms.round()));
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1038,19 +1156,67 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
                         max: maxMs,
                         onChangeStart: (v) {
                           widget.onInteraction();
+                          _showPill();
                           setState(() => _dragMs = v);
                         },
                         onChanged: (v) {
                           widget.onInteraction();
+                          _showPill();
                           setState(() => _dragMs = v);
                         },
                         onChangeEnd: (v) {
                           widget.onInteraction();
                           setState(() => _dragMs = null);
+                          _hidePillDelayed();
                           widget.player.seek(Duration(milliseconds: v.round()));
                         },
                       ),
                     ),
+                    // Chapter pill: appears on seekbar touch, shows "03:53 • Chapter 1"
+                    if (_showChapterPill && widget.chapterMeta.isNotEmpty)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Builder(
+                            builder: (ctx) {
+                              final checkMs = _dragMs ??
+                                  pos.inMilliseconds.toDouble();
+                              final idx = _chapterIndexAt(checkMs);
+                              if (idx < 0) return const SizedBox.shrink();
+                              final meta = widget.chapterMeta[idx];
+                              final cMs =
+                                  (meta['timeMs'] as num?)?.toDouble() ?? 0;
+                              final label =
+                                  '${_fmt(Duration(milliseconds: cMs.round()))} • Chapter ${idx + 1}';
+                              return GestureDetector(
+                                onTap: _openChapterSheet,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.75),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.2),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    label,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

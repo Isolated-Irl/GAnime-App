@@ -1346,6 +1346,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             status: _status,
             skips: _skips,
             chapters: _chapters,
+            chapterMeta: _chapterMeta,
             showSkipButtons:
                 widget.settings.aniskipEnabled && widget.settings.aniskipShowButton,
             seekInterval: _seekIntervalSeconds,
