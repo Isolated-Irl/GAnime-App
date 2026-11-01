@@ -657,8 +657,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           Expanded(
             child: GlassSurface(
               radius: 14,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Column(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -682,6 +683,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                   ],
                 ],
               ),
+            ),
             ),
           ),
           const SizedBox(width: 10),
