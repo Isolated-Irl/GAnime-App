@@ -10,6 +10,7 @@
 //  - 85% auto-mark, AniSkip (buttons + auto), audio/subtitle language
 //    auto-select via track events, buffering spinner, orientation restore
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -130,6 +131,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _episode = 0;
   String _status = '';
   late bool _isHw; // active decoder: true = HW (MediaCodec), false = SW (CPU)
+  Timer? _resumeTimer; // periodic backup save every 5s
+  /// Guest profile ID: resume saves locally even without login.
+  /// Logged-in users sync to cloud; guests stay on-device.
+  static const _guestPid = 'guest';
 
   /// Serializes every mpv open/reopen. Two overlapping Player.open() calls
   /// (toggle / source switch / next-ep while the previous demuxer is still
@@ -431,8 +436,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     // so the codec never starts before the SurfaceTexture exists.
     _initMpvAndOpen();
     // Save the resume spot: every ~5s while playing, and on every pause.
+    // Plus a periodic timer backup in case the position stream stalls.
     _player.stream.playing.listen((playing) {
       if (!playing) _saveResume(force: true);
+    });
+    _resumeTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted && _player.state.playing) _saveResume();
     });
     _player.stream.position.listen((pos) async {
       _saveResume(); // throttled inside
@@ -548,8 +557,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// [force]). Reads the player state BEFORE any await, so it is also safe
   /// to call from dispose().
   Future<void> _saveResume({bool force = false}) async {
-    final pid = widget.profileId;
-    if (pid == null || _opening) return;
+    // Guest support: use 'guest' ID when not logged in. Saves locally;
+    // cloud sync only happens for logged-in users (see requestCloudPush).
+    final pid = widget.profileId ?? _guestPid;
+    if (_opening) return;
     final animeId = widget.anime.id;
     final ep = _episode;
     final pos = _player.state.position;
@@ -565,13 +576,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     } else {
       await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds, dur.inMilliseconds);
     }
-    ResumeStore.requestCloudPush(); // throttled: max once a minute
+    // Only push to cloud for logged-in users; guests stay local.
+    if (widget.profileId != null) {
+      ResumeStore.requestCloudPush(); // throttled: max once a minute
+    }
   }
 
   /// Saved spot for the CURRENT episode (3s rewind for context), or null.
   Future<Duration?> _resumeStart() async {
-    final pid = widget.profileId;
-    if (pid == null) return null;
+    final pid = widget.profileId ?? _guestPid;
     final e = await ResumeStore.get(pid, widget.anime.id, _episode);
     if (e == null || e.posMs < 10000) return null;
     return Duration(milliseconds: e.posMs) - const Duration(seconds: 3);
@@ -582,8 +595,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
-      _saveResume(force: true)
-          .whenComplete(() => ResumeStore.requestCloudPush(force: true));
+      _saveResume(force: true).whenComplete(() {
+        // Cloud push only for logged-in users.
+        if (widget.profileId != null) {
+          ResumeStore.requestCloudPush(force: true);
+        }
+      });
     }
   }
 
@@ -722,10 +739,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _resumeTimer?.cancel();
     // Leaving the player: save the spot (state is read synchronously inside),
-    // then push it to the cloud.
-    _saveResume(force: true)
-        .whenComplete(() => ResumeStore.requestCloudPush(force: true));
+    // then push it to the cloud (logged-in only).
+    _saveResume(force: true).whenComplete(() {
+      if (widget.profileId != null) {
+        ResumeStore.requestCloudPush(force: true);
+      }
+    });
     SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _player.dispose();
