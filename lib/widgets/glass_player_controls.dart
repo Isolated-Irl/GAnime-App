@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import 'glass_surface.dart';
 
@@ -72,6 +74,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
   bool _locked = false;
   Timer? _hideTimer;
 
+  // Fix 8: Fit mode state + persistence ('Fit', 'Stretch', 'Fill')
+  BoxFit _fitMode = BoxFit.contain;
+
   // Double-tap seek flash state
   int _doubleTapAccumSecs = 0;
   bool? _doubleTapRight;
@@ -86,14 +91,20 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
   // Vertical swipe (left = brightness, right = volume) state
   bool _isVerticalSwiping = false;
   bool _verticalIsVolume = true;
-  double _brightness = 1.0; // 0.15 .. 1.0 visual brightness
-  double _hudValue = 1.0;   // 0.0 .. 1.0 shown in HUD
+  double _brightness = 1.0;
+  double _hudValue = 1.0;
   Timer? _hudTimer;
   bool _showVerticalHud = false;
 
   // Long-press 2x speed state
   bool _isLongPress2x = false;
   double _savedRateBefore2x = 1.0;
+
+  String get _fitLabel => switch (_fitMode) {
+        BoxFit.fill => 'Stretch',
+        BoxFit.cover => 'Fill',
+        _ => 'Fit',
+      };
 
   @override
   void initState() {
@@ -119,7 +130,49 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     ).animate(_fade);
     _centerScale = Tween<double>(begin: 0.92, end: 1.0).animate(_fade);
 
+    _loadSavedFitMode();
     _scheduleHide();
+  }
+
+  Future<void> _loadSavedFitMode() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? saved;
+      final raw = prefs.getString('ganime_player_prefs');
+      if (raw != null && raw.isNotEmpty) {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        saved = map['fit_mode'] as String?;
+      }
+      saved ??= prefs.getString('fit_mode');
+      if (saved != null && mounted) {
+        final match = BoxFit.values.cast<BoxFit?>().firstWhere(
+              (f) => f?.name == saved,
+              orElse: () => null,
+            );
+        if (match != null) setState(() => _fitMode = match);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleCycleFit() async {
+    final next = switch (_fitMode) {
+      BoxFit.contain => BoxFit.fill,
+      BoxFit.fill => BoxFit.cover,
+      _ => BoxFit.contain,
+    };
+    setState(() => _fitMode = next);
+    widget.onCycleFit();
+    _scheduleHide();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('fit_mode', next.name);
+      final raw = prefs.getString('ganime_player_prefs');
+      final map = (raw != null && raw.isNotEmpty)
+          ? (jsonDecode(raw) as Map<String, dynamic>)
+          : <String, dynamic>{};
+      map['fit_mode'] = next.name;
+      await prefs.setString('ganime_player_prefs', jsonEncode(map));
+    } catch (_) {}
   }
 
   @override
@@ -192,7 +245,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     });
   }
 
-  // ---- Long-press 2x speed ----
   void _onLongPressStart(LongPressStartDetails _) {
     if (_locked) return;
     _savedRateBefore2x = widget.player.state.rate;
@@ -206,7 +258,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     setState(() => _isLongPress2x = false);
   }
 
-  // ---- Horizontal swipe to seek ----
   void _onHorizontalDragStart(DragStartDetails d) {
     if (_locked || !widget.swipeToSeek) return;
     final dur = widget.player.state.duration;
@@ -223,7 +274,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     final dur = widget.player.state.duration;
     if (dur.inMilliseconds <= 0 || width <= 0) return;
     _swipeDeltaX += d.primaryDelta ?? 0;
-    // Full screen width swipe = ±120 seconds (scaled smoothly)
     final deltaMs = ((_swipeDeltaX / width) * 120000).round();
     final targetMs =
         (_swipeStartPos.inMilliseconds + deltaMs).clamp(0, dur.inMilliseconds);
@@ -237,7 +287,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     widget.player.seek(target);
   }
 
-  // ---- Vertical swipe: left = brightness, right = volume ----
   void _onVerticalDragStart(DragStartDetails d, double width) {
     if (_locked) return;
     _isVerticalSwiping = true;
@@ -284,7 +333,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
         return Stack(
           fit: StackFit.expand,
           children: [
-            // Visual brightness overlay (zero native plugin dependency)
             if (dimAlpha > 0.005)
               IgnorePointer(
                 child: ColoredBox(
@@ -292,10 +340,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                 ),
               ),
 
-            // Full-screen gesture layer
+            // Fix 7: Full-screen gesture layer
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _toggleVisible,
+              onTap: _locked ? null : _toggleVisible,
               onDoubleTapDown: (d) => _handleDoubleTap(d, w),
               onDoubleTap: () {},
               onLongPressStart: _onLongPressStart,
@@ -311,27 +359,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
               onVerticalDragUpdate: (d) => _onVerticalDragUpdate(d, h),
               onVerticalDragEnd: _onVerticalDragEnd,
               child: const SizedBox.expand(),
-            ),
-
-            // Buffering indicator
-            IgnorePointer(
-              child: Center(
-                child: StreamBuilder<bool>(
-                  stream: widget.player.stream.buffering,
-                  initialData: widget.player.state.buffering,
-                  builder: (_, snap) {
-                    if (snap.data != true) return const SizedBox.shrink();
-                    return const SizedBox(
-                      width: 46,
-                      height: 46,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        color: Colors.white,
-                      ),
-                    );
-                  },
-                ),
-              ),
             ),
 
             // Double-tap seek feedback pill
@@ -375,7 +402,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                 ),
               ),
 
-            // Swipe-to-seek center time preview
+            // Swipe-to-seek center preview
             if (_isHorizontalSwiping)
               IgnorePointer(
                 child: Center(
@@ -385,8 +412,8 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 20, vertical: 12),
                       child: Builder(builder: (_) {
-                        final diffSecs = (_swipeTargetPos - _swipeStartPos)
-                            .inSeconds;
+                        final diffSecs =
+                            (_swipeTargetPos - _swipeStartPos).inSeconds;
                         final sign = diffSecs >= 0 ? '+' : '-';
                         return Text(
                           '${_fmt(_swipeTargetPos)}  ($sign${_fmt(Duration(seconds: diffSecs.abs()))})',
@@ -402,7 +429,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                 ),
               ),
 
-            // Vertical Brightness / Volume HUD pill
+            // Vertical Brightness / Volume HUD
             if (_showVerticalHud)
               IgnorePointer(
                 child: Align(
@@ -498,20 +525,20 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                 ),
               ),
 
-            //AniSkip floating button (visible even when controls are hidden)
+            // AniSkip floating button
             if (widget.showSkipButtons && widget.skips.isNotEmpty && !_locked)
               _ActiveSkipButton(
                 player: widget.player,
                 skips: widget.skips,
               ),
 
-            // Animated Controls Overlay (RepaintBoundary prevents re-blurring jank)
+            // Fix 7: Background gradient is wrapped in IgnorePointer so it never
+            // absorbs taps on blank video space when _visible is true.
             IgnorePointer(
-              ignoring: !_visible,
               child: FadeTransition(
                 opacity: _fade,
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
+                child: const DecoratedBox(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
@@ -524,76 +551,80 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                       stops: [0.0, 0.25, 0.72, 1.0],
                     ),
                   ),
-                  child: SafeArea(
-                    child: _locked
-                        ? Align(
-                            alignment: Alignment.centerLeft,
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 20),
-                              child: _TapScaleButton(
-                                onTap: () {
-                                  setState(() => _locked = false);
-                                  _scheduleHide();
-                                },
-                                child: GlassSurface(
-                                  radius: 999,
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(
-                                        horizontal: 16, vertical: 12),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.lock_rounded,
-                                            color: Colors.white, size: 20),
-                                        SizedBox(width: 8),
-                                        Text('Tap to Unlock',
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w700)),
-                                      ],
-                                    ),
+                  child: SizedBox.expand(),
+                ),
+              ),
+            ),
+
+            // Animated Controls Overlay
+            IgnorePointer(
+              ignoring: !_visible,
+              child: FadeTransition(
+                opacity: _fade,
+                child: SafeArea(
+                  child: _locked
+                      ? Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 20),
+                            child: _TapScaleButton(
+                              onTap: () {
+                                setState(() => _locked = false);
+                                _scheduleHide();
+                              },
+                              child: GlassSurface(
+                                radius: 999,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 12),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.lock_rounded,
+                                          color: Colors.white, size: 20),
+                                      SizedBox(width: 8),
+                                      Text('Tap to Unlock',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700)),
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
-                          )
-                        : Stack(
-                            children: [
-                              // Top bar
-                              Align(
-                                alignment: Alignment.topCenter,
-                                child: SlideTransition(
-                                  position: _topSlide,
-                                  child: RepaintBoundary(
-                                    child: _buildTopBar(),
-                                  ),
-                                ),
-                              ),
-
-                              // Center transport controls
-                              Center(
-                                child: ScaleTransition(
-                                  scale: _centerScale,
-                                  child: RepaintBoundary(
-                                    child: _buildCenterControls(),
-                                  ),
-                                ),
-                              ),
-
-                              // Bottom seekbar + action pills
-                              Align(
-                                alignment: Alignment.bottomCenter,
-                                child: SlideTransition(
-                                  position: _bottomSlide,
-                                  child: RepaintBoundary(
-                                    child: _buildBottomBar(),
-                                  ),
-                                ),
-                              ),
-                            ],
                           ),
-                  ),
+                        )
+                      : Stack(
+                          children: [
+                            Align(
+                              alignment: Alignment.topCenter,
+                              child: SlideTransition(
+                                position: _topSlide,
+                                child: RepaintBoundary(
+                                  child: _buildTopBar(),
+                                ),
+                              ),
+                            ),
+                            Center(
+                              child: ScaleTransition(
+                                scale: _centerScale,
+                                child: RepaintBoundary(
+                                  child: _buildCenterControls(),
+                                ),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.bottomCenter,
+                              child: SlideTransition(
+                                position: _bottomSlide,
+                                child: RepaintBoundary(
+                                  child: _buildBottomBar(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ),
@@ -603,6 +634,8 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     );
   }
 
+  // Preserves Fix 1 & Fix 2: GlassSurface(radius: 14, padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8))
+  // + positional _MarqueeText(widget.title, style: ...)
   Widget _buildTopBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
@@ -612,43 +645,46 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             onTap: widget.onBack,
             child: GlassSurface(
               radius: 999,
-              child: const Padding(
-                padding: EdgeInsets.all(10),
+              child: const SizedBox(
+                width: 42,
+                height: 42,
                 child: Icon(Icons.arrow_back_rounded,
                     color: Colors.white, size: 20),
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                if (widget.status.isNotEmpty)
-                  Text(
-                    widget.status,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+            child: GlassSurface(
+              radius: 14,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _MarqueeText(
+                    widget.title,
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 11.5,
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-              ],
+                  if (widget.status.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    _MarqueeText(
+                      widget.status,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           _TapScaleButton(
             onTap: () {
               widget.onToggleHw();
@@ -656,15 +692,18 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             },
             child: GlassSurface(
               radius: 999,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Text(
-                  widget.isHw ? 'HW' : 'SW',
-                  style: TextStyle(
-                    color: widget.isHw ? const Color(0xFF4ADE80) : Colors.amber,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
+              child: SizedBox(
+                width: 42,
+                height: 42,
+                child: Center(
+                  child: Text(
+                    widget.isHw ? 'HW' : 'SW',
+                    style: TextStyle(
+                      color:
+                          widget.isHw ? const Color(0xFF4ADE80) : Colors.amber,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ),
@@ -675,8 +714,8 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           const SizedBox(width: 8),
           _topIconBtn(Icons.subtitles_rounded, 'Subtitles', widget.onSubs),
           const SizedBox(width: 8),
-          _topIconBtn(Icons.open_in_new_rounded, 'External player',
-              widget.onExternal),
+          _topIconBtn(
+              Icons.open_in_new_rounded, 'External player', widget.onExternal),
         ],
       ),
     );
@@ -690,105 +729,120 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
       },
       child: GlassSurface(
         radius: 999,
-        child: Padding(
-          padding: const EdgeInsets.all(10),
+        child: SizedBox(
+          width: 42,
+          height: 42,
           child: Icon(icon, color: Colors.white, size: 19),
         ),
       ),
     );
   }
 
+  // Preserves Fix 3 (_SeekSpinButton with side: -1/1, seekInterval, onTap)
+  // & Fix 5 (nested StreamBuilder on player.stream.buffering inside play button with 30px white spinner)
   Widget _buildCenterControls() {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _TapScaleButton(
+        _SeekSpinButton(
+          side: -1,
+          seekInterval: widget.seekInterval,
           onTap: () => _seekRelative(-widget.seekInterval),
-          child: GlassSurface(
-            radius: 999,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.replay_rounded,
-                      color: Colors.white, size: 22),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${widget.seekInterval}s',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
         ),
-        const SizedBox(width: 24),
+        const SizedBox(width: 28),
         StreamBuilder<bool>(
           stream: widget.player.stream.playing,
           initialData: widget.player.state.playing,
-          builder: (_, snap) {
-            final playing = snap.data ?? false;
-            return _TapScaleButton(
-              onTap: () {
-                widget.player.playOrPause();
-                _scheduleHide();
-              },
-              child: GlassSurface(
-                radius: 999,
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 160),
-                    transitionBuilder: (child, anim) =>
-                        ScaleTransition(scale: anim, child: child),
-                    child: Icon(
-                      playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      key: ValueKey<bool>(playing),
-                      color: Colors.white,
-                      size: 36,
+          builder: (_, playSnap) {
+            final playing = playSnap.data ?? false;
+            return StreamBuilder<bool>(
+              stream: widget.player.stream.buffering,
+              initialData: widget.player.state.buffering,
+              builder: (_, bufSnap) {
+                final buffering = bufSnap.data ?? false;
+                return _TapScaleButton(
+                  onTap: () {
+                    widget.player.playOrPause();
+                    _scheduleHide();
+                  },
+                  child: GlassSurface(
+                    radius: 999,
+                    child: SizedBox(
+                      width: 68,
+                      height: 68,
+                      child: Center(
+                        child: buffering
+                            ? const SizedBox(
+                                width: 30,
+                                height: 30,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.8,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 160),
+                                transitionBuilder: (child, anim) =>
+                                    ScaleTransition(scale: anim, child: child),
+                                child: Icon(
+                                  playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                  key: ValueKey<bool>(playing),
+                                  color: Colors.white,
+                                  size: 38,
+                                ),
+                              ),
+                      ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         ),
-        const SizedBox(width: 24),
-        _TapScaleButton(
+        const SizedBox(width: 28),
+        _SeekSpinButton(
+          side: 1,
+          seekInterval: widget.seekInterval,
           onTap: () => _seekRelative(widget.seekInterval),
-          child: GlassSurface(
-            radius: 999,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${widget.seekInterval}s',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.forward_rounded,
-                      color: Colors.white, size: 22),
-                ],
-              ),
-            ),
-          ),
         ),
       ],
     );
   }
 
+  // Fix 3 & Fix 8: Rebalanced left/right bottom bar + remembered Fit mode label
   Widget _buildBottomBar() {
+    final rightPills = <Widget>[
+      if (widget.onSources != null)
+        _bottomPill(
+          icon: Icons.dns_rounded,
+          label: 'Sources',
+          onTap: () {
+            _scheduleHide();
+            widget.onSources!();
+          },
+        ),
+      if (widget.onEpisodes != null)
+        _bottomPill(
+          icon: Icons.video_library_rounded,
+          label: 'Episodes',
+          onTap: () {
+            _scheduleHide();
+            widget.onEpisodes!();
+          },
+        ),
+      if (widget.onNextEpisode != null)
+        _bottomPill(
+          icon: Icons.skip_next_rounded,
+          label: 'Next Ep',
+          onTap: () {
+            _scheduleHide();
+            widget.onNextEpisode!();
+          },
+        ),
+    ];
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
       child: Column(
@@ -800,75 +854,53 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             onInteraction: _scheduleHide,
           ),
           const SizedBox(height: 6),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _bottomPill(
-                  icon: Icons.lock_open_rounded,
-                  label: 'Lock',
-                  onTap: () => setState(() => _locked = true),
-                ),
-                const SizedBox(width: 8),
-                StreamBuilder<double>(
-                  stream: widget.player.stream.rate,
-                  initialData: widget.player.state.rate,
-                  builder: (_, snap) {
-                    final r = snap.data ?? 1.0;
-                    return _bottomPill(
-                      icon: Icons.speed_rounded,
-                      label: '${r}x',
-                      onTap: () {
-                        widget.onCycleSpeed();
-                        _scheduleHide();
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(width: 8),
-                _bottomPill(
-                  icon: Icons.aspect_ratio_rounded,
-                  label: 'Fit',
-                  onTap: () {
-                    widget.onCycleFit();
-                    _scheduleHide();
-                  },
-                ),
-                if (widget.onSources != null) ...[
-                  const SizedBox(width: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Left Row: Lock, Speed, Fit
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                   _bottomPill(
-                    icon: Icons.dns_rounded,
-                    label: 'Sources',
-                    onTap: () {
-                      _scheduleHide();
-                      widget.onSources!();
+                    icon: Icons.lock_open_rounded,
+                    label: 'Lock',
+                    onTap: () => setState(() => _locked = true),
+                  ),
+                  const SizedBox(width: 8),
+                  StreamBuilder<double>(
+                    stream: widget.player.stream.rate,
+                    initialData: widget.player.state.rate,
+                    builder: (_, snap) {
+                      final r = snap.data ?? 1.0;
+                      return _bottomPill(
+                        icon: Icons.speed_rounded,
+                        label: '${r}x',
+                        onTap: () {
+                          widget.onCycleSpeed();
+                          _scheduleHide();
+                        },
+                      );
                     },
                   ),
-                ],
-                if (widget.onEpisodes != null) ...[
                   const SizedBox(width: 8),
                   _bottomPill(
-                    icon: Icons.video_library_rounded,
-                    label: 'Episodes',
-                    onTap: () {
-                      _scheduleHide();
-                      widget.onEpisodes!();
-                    },
+                    icon: Icons.aspect_ratio_rounded,
+                    label: _fitLabel,
+                    onTap: _handleCycleFit,
                   ),
                 ],
-                if (widget.onNextEpisode != null) ...[
-                  const SizedBox(width: 8),
-                  _bottomPill(
-                    icon: Icons.skip_next_rounded,
-                    label: 'Next Ep',
-                    onTap: () {
-                      _scheduleHide();
-                      widget.onNextEpisode!();
-                    },
-                  ),
+              ),
+              // Right Row: Sources, Episodes, Next Ep
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < rightPills.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    rightPills[i],
+                  ],
                 ],
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
@@ -907,8 +939,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
   }
 }
 
-/// Isolated seekbar widget so high-frequency position ticks never rebuild
-/// the glass buttons or interrupt open/close animations.
+/// Isolated seekbar widget with your Fix 4 tappable right timer
+/// (`_showRemaining ? '-${_fmt(dur - pos)}' : _fmt(dur)`) and
+/// Fix 9 segmented chapter gaps (`_SeekPainter`).
 class _SeekbarSection extends StatefulWidget {
   final Player player;
   final List<double> chapters;
@@ -926,6 +959,7 @@ class _SeekbarSection extends StatefulWidget {
 
 class _SeekbarSectionState extends State<_SeekbarSection> {
   double? _dragMs;
+  bool _showRemaining = false;
 
   @override
   Widget build(BuildContext context) {
@@ -955,77 +989,72 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
               ),
             ),
             Expanded(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 4,
-                      thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 7),
-                      overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 14),
-                      activeTrackColor: Colors.white,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: Colors.white,
+              child: SizedBox(
+                height: 28,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Fix 9: Draw track + progress as segments with 3px chapter gaps
+                    Positioned.fill(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: CustomPaint(
+                          painter: _SeekPainter(
+                            progress: (curMs / maxMs).clamp(0.0, 1.0),
+                            chapters: widget.chapters,
+                            activeColor: Colors.white,
+                            inactiveColor: Colors.white24,
+                          ),
+                        ),
+                      ),
                     ),
-                    child: Slider(
-                      value: curMs,
-                      min: 0.0,
-                      max: maxMs,
-                      onChangeStart: (v) {
-                        widget.onInteraction();
-                        setState(() => _dragMs = v);
-                      },
-                      onChanged: (v) {
-                        widget.onInteraction();
-                        setState(() => _dragMs = v);
-                      },
-                      onChangeEnd: (v) {
-                        widget.onInteraction();
-                        setState(() => _dragMs = null);
-                        widget.player.seek(Duration(milliseconds: v.round()));
-                      },
-                    ),
-                  ),
-                  if (widget.chapters.isNotEmpty)
-                    IgnorePointer(
-                      child: LayoutBuilder(
-                        builder: (_, c) {
-                          final trackW = (c.maxWidth - 28).clamp(0.0, c.maxWidth);
-                          return SizedBox(
-                            width: trackW,
-                            height: 6,
-                            child: Stack(
-                              children: [
-                                for (final ratio in widget.chapters)
-                                  Positioned(
-                                    left: (ratio.clamp(0.0, 1.0) * trackW) - 1,
-                                    top: 0,
-                                    bottom: 0,
-                                    child: Container(
-                                      width: 2,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          );
+                    SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 4,
+                        thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 7),
+                        overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 14),
+                        activeTrackColor: Colors.transparent,
+                        inactiveTrackColor: Colors.transparent,
+                        thumbColor: Colors.white,
+                      ),
+                      child: Slider(
+                        value: curMs,
+                        min: 0.0,
+                        max: maxMs,
+                        onChangeStart: (v) {
+                          widget.onInteraction();
+                          setState(() => _dragMs = v);
+                        },
+                        onChanged: (v) {
+                          widget.onInteraction();
+                          setState(() => _dragMs = v);
+                        },
+                        onChangeEnd: (v) {
+                          widget.onInteraction();
+                          setState(() => _dragMs = null);
+                          widget.player.seek(Duration(milliseconds: v.round()));
                         },
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
-            SizedBox(
-              width: 52,
-              child: Text(
-                _fmt(dur),
-                textAlign: TextAlign.end,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _showRemaining = !_showRemaining),
+              child: SizedBox(
+                width: 56,
+                child: Text(
+                  _showRemaining ? '-${_fmt(dur - pos)}' : _fmt(dur),
+                  textAlign: TextAlign.end,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -1036,7 +1065,73 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
   }
 }
 
-/// Floating AniSkip button that only rebuilds when entering/leaving a skip interval.
+/// Fix 9: Draws track + progress as segments, leaving 3.0px gaps at chapter breaks.
+class _SeekPainter extends CustomPainter {
+  final double progress;
+  final List<double> chapters;
+  final Color activeColor;
+  final Color inactiveColor;
+
+  const _SeekPainter({
+    required this.progress,
+    required this.chapters,
+    required this.activeColor,
+    required this.inactiveColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final width = size.width;
+    if (width <= 0) return;
+    const trackH = 4.0;
+    const breakW = 3.0;
+    const halfBreak = breakW / 2.0;
+    final top = (size.height - trackH) / 2.0;
+    final bottom = top + trackH;
+    const radius = Radius.circular(2.0);
+
+    final breaks = chapters
+        .where((c) => c > 0.005 && c < 0.995)
+        .toList()
+      ..sort();
+    final pts = <double>[0.0, ...breaks, 1.0];
+
+    final inactivePaint = Paint()..color = inactiveColor;
+    final activePaint = Paint()..color = activeColor;
+    final progX = (progress.clamp(0.0, 1.0)) * width;
+
+    for (var i = 0; i < pts.length - 1; i++) {
+      final segStart =
+          (pts[i] * width) + (i == 0 ? 0.0 : halfBreak);
+      final segEnd =
+          (pts[i + 1] * width) - (i == pts.length - 2 ? 0.0 : halfBreak);
+      if (segEnd <= segStart) continue;
+
+      canvas.drawRRect(
+        RRect.fromLTRBR(segStart, top, segEnd, bottom, radius),
+        inactivePaint,
+      );
+
+      if (progX > segStart) {
+        final fillEnd = progX < segEnd ? progX : segEnd;
+        if (fillEnd > segStart) {
+          canvas.drawRRect(
+            RRect.fromLTRBR(segStart, top, fillEnd, bottom, radius),
+            activePaint,
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SeekPainter old) =>
+      old.progress != progress ||
+      old.chapters != chapters ||
+      old.activeColor != activeColor ||
+      old.inactiveColor != inactiveColor;
+}
+
 class _ActiveSkipButton extends StatelessWidget {
   final Player player;
   final List<SkipInterval> skips;
@@ -1112,7 +1207,160 @@ class _ActiveSkipButton extends StatelessWidget {
   }
 }
 
-/// Tactile press-scale wrapper so every player button feels responsive.
+/// Preserves Fix 2: Positional `text` parameter `_MarqueeText(String text, {required TextStyle style})`.
+class _MarqueeText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+
+  const _MarqueeText(
+    this.text, {
+    required this.style,
+  });
+
+  @override
+  State<_MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<_MarqueeText> {
+  final ScrollController _scroll = ScrollController();
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startMarquee());
+  }
+
+  @override
+  void didUpdateWidget(_MarqueeText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _timer?.cancel();
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startMarquee());
+    }
+  }
+
+  void _startMarquee() {
+    _timer?.cancel();
+    if (!mounted || !_scroll.hasClients) return;
+    final max = _scroll.position.maxScrollExtent;
+    if (max <= 0) return;
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) async {
+      if (!mounted || !_scroll.hasClients) return;
+      final extent = _scroll.position.maxScrollExtent;
+      if (extent <= 0) return;
+      await _scroll.animateTo(
+        extent,
+        duration: Duration(milliseconds: (extent * 28).round().clamp(800, 6000)),
+        curve: Curves.linear,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (!mounted || !_scroll.hasClients) return;
+      await _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: _scroll,
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      child: Text(
+        widget.text,
+        maxLines: 1,
+        style: widget.style,
+      ),
+    );
+  }
+}
+
+/// Preserves Fix 3: Circular seek button with 420ms half-spin (`side: -1/1, seekInterval: int, onTap: ...`).
+class _SeekSpinButton extends StatefulWidget {
+  final int side; // -1 for rewind, 1 for forward
+  final int seekInterval;
+  final VoidCallback onTap;
+
+  const _SeekSpinButton({
+    required this.side,
+    required this.seekInterval,
+    required this.onTap,
+  });
+
+  @override
+  State<_SeekSpinButton> createState() => _SeekSpinButtonState();
+}
+
+class _SeekSpinButtonState extends State<_SeekSpinButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  IconData _icon() {
+    final forward = widget.side > 0;
+    return switch (widget.seekInterval) {
+      5 => forward ? Icons.forward_5_rounded : Icons.replay_5_rounded,
+      10 => forward ? Icons.forward_10_rounded : Icons.replay_10_rounded,
+      30 => forward ? Icons.forward_30_rounded : Icons.replay_30_rounded,
+      _ => forward ? Icons.replay_rounded : Icons.replay_rounded,
+    };
+  }
+
+  void _trigger() {
+    _ctrl.forward(from: 0);
+    widget.onTap();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final turns = Tween<double>(
+      begin: 0.0,
+      end: widget.side > 0 ? 0.5 : -0.5,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+
+    return _TapScaleButton(
+      onTap: _trigger,
+      child: GlassSurface(
+        radius: 999,
+        child: SizedBox(
+          width: 54,
+          height: 54,
+          child: Center(
+            child: RotationTransition(
+              turns: turns,
+              child: Icon(
+                _icon(),
+                color: Colors.white,
+                size: 26,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TapScaleButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
