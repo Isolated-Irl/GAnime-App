@@ -158,7 +158,7 @@ class PlayerPrefs {
   static Future<SharedPreferences> get _p async =>
       _instance ??= await SharedPreferences.getInstance();
 
-  static Future> _all() async {
+  static Future<Map<String, dynamic>> _all() async {
     final raw = (await _p).getString(_k);
     if (raw == null || raw.isEmpty) return {};
     try {

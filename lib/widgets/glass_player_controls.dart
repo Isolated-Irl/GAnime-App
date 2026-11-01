@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import '../services/aniskip.dart';
+import '../models.dart';
 import 'glass_surface.dart';
 
 String _fmt(Duration d) {
