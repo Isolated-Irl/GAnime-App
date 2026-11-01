@@ -236,6 +236,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   late final VideoController _controller;
   List<SkipInterval> _skips = [];
   List<double> _chapters = []; // 0..1 ratios from mpv chapter-list
+  List<Map<String, dynamic>> _chapterMeta = []; // {timeMs, title} for chapter UI
+  StreamSubscription<List<Chapter>>? _chapterSub;
   bool _marked85 = false;
   bool _autoSelected = false;
   bool _jumping = false;
@@ -669,6 +671,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         .toList();
     if (realAudio.isEmpty && realSubs.isEmpty) return;
     _autoSelected = true;
+    _listenChapters();
     _loadChapters();
 
     // 1. Audio track: Primary language -> Secondary language fallback
@@ -729,23 +732,56 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (mounted) setState(() => _skips = skips);
   }
 
+  void _listenChapters() {
+    _chapterSub?.cancel();
+    _chapterSub = _player.stream.chapters.listen((chapters) {
+      if (!mounted || chapters.isEmpty) return;
+      final dur = _player.state.duration.inMilliseconds;
+      if (dur <= 0) return;
+      final ratios = <double>[];
+      final meta = <Map<String, dynamic>>[];
+      for (final c in chapters) {
+        final ms = c.start.inMilliseconds;
+        if (ms > 0) {
+          ratios.add((ms / dur).clamp(0.0, 1.0));
+          meta.add({'timeMs': ms, 'title': c.title});
+        }
+      }
+      if (ratios.isNotEmpty && mounted) {
+        setState(() {
+          _chapters = ratios;
+          _chapterMeta = meta;
+        });
+      }
+    });
+  }
+
   Future<void> _loadChapters() async {
+    // Fallback one-shot for older streams; the stream listener is primary.
     try {
       final dynamic platform = _player.platform;
       final list = await platform.getProperty('chapter-list');
-      if (list is List && mounted) {
+      if (list is List && mounted && _chapters.isEmpty) {
         final dur = _player.state.duration.inMilliseconds;
         if (dur > 0) {
           final ratios = <double>[];
+          final meta = <Map<String, dynamic>>[];
           for (final c in list) {
             if (c is Map) {
               final time = (c['time'] as num?)?.toDouble();
               if (time != null && time > 0) {
-                ratios.add((time * 1000 / dur).clamp(0.0, 1.0));
+                final ms = (time * 1000).round();
+                ratios.add((ms / dur).clamp(0.0, 1.0));
+                meta.add({'timeMs': ms, 'title': c['title']?.toString() ?? ''});
               }
             }
           }
-          setState(() => _chapters = ratios);
+          if (ratios.isNotEmpty) {
+            setState(() {
+              _chapters = ratios;
+              _chapterMeta = meta;
+            });
+          }
         }
       }
     } catch (_) {}
@@ -937,6 +973,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _chapterSub?.cancel();
     _resumeTimer?.cancel();
     _nextEpTimer?.cancel();
     _saveResume(force: true).whenComplete(() {
