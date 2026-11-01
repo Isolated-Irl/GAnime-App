@@ -343,7 +343,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             // Fix 7: Full-screen gesture layer
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _locked ? null : _toggleVisible,
+              onTap: _locked ? () => _setVisible(true) : _toggleVisible,
               onDoubleTapDown: (d) => _handleDoubleTap(d, w),
               onDoubleTap: () {},
               onLongPressStart: _onLongPressStart,
@@ -1329,7 +1329,9 @@ class _SeekSpinButtonState extends State<_SeekSpinButton>
   }
 
   void _trigger() {
-    _ctrl.forward(from: 0);
+    _ctrl.forward(from: 0).then((_) {
+      if (mounted) _ctrl.reverse();
+    });
     widget.onTap();
   }
 
