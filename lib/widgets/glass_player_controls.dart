@@ -1196,10 +1196,11 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.75),
+                                    color: Colors.black.withValues(alpha: 0.75),
                                     borderRadius: BorderRadius.circular(16),
                                     border: Border.all(
-                                      color: Colors.white.withOpacity(0.2),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.2),
                                       width: 1,
                                     ),
                                   ),
