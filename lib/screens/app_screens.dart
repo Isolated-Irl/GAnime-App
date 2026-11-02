@@ -5,7 +5,6 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../theme.dart';
 import '../models.dart';
 import '../services/anilist.dart';
@@ -13,7 +12,6 @@ import '../services/trackers.dart';
 import '../services/tracker_oauth.dart';
 import '../services/firebase_sync.dart';
 import '../services/resume_store.dart';
-import '../services/app_logger.dart';
 import '../store.dart';
 import '../widgets/ga_image.dart';
 import '../widgets/anime_card.dart';
@@ -3242,45 +3240,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
 
 
-// TEMPORARY DEBUG: remove before release build
-void _showDebugLog(BuildContext context) async {
-  final text = await AppLogger().readAll();
-  if (!context.mounted) return;
-  showDialog(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: const Color(0xFF1A1A1A),
-      title: const Text('Debug Log', style: TextStyle(color: Colors.white)),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 400,
-        child: SingleChildScrollView(
-          child: SelectableText(
-            text,
-            style: const TextStyle(
-                color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Clipboard.setData(ClipboardData(text: text));
-            ScaffoldMessenger.of(ctx).showSnackBar(
-              const SnackBar(content: Text('Log copied to clipboard')),
-            );
-          },
-          child: const Text('COPY'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: const Text('CLOSE'),
-        ),
-      ],
-    ),
-  );
-}
-
 class _SettingsMenuRow extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -3427,13 +3386,6 @@ class SettingsScreen extends StatelessWidget {
                 onTap: () => open(const AboutSettingsScreen()),
               ),
               const Divider(height: 1, color: Color(0xFF333333)),
-              // TEMPORARY DEBUG: remove before release build
-              _SettingsMenuRow(
-                icon: Icons.bug_report_outlined,
-                title: 'Debug Log',
-                subtitle: 'View ganime_debug.log (temporary)',
-                onTap: () => _showDebugLog(context),
-              ),
             ],
           ),
         ),
