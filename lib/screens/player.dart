@@ -386,10 +386,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     final src = _cur;
     await _enqueueOpen(() async {
       final back = currentPos.inSeconds > 1;
-      await _player.open(Media(src.url, start: currentPos),
-          play: isPlaying && !back);
+      await _player.open(Media(src.url), play: isPlaying);
       if (back) await _ensureAt(currentPos);
-      if (isPlaying) await _player.play();
+      if (!isPlaying) await _player.pause();
     });
     if (mounted) {
       setState(() {
@@ -866,13 +865,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     while (mounted && DateTime.now().isBefore(deadline)) {
       try {
         final v = await platform.getProperty('seekable');
-        if ('$v' == 'yes' && _player.state.duration > Duration.zero) {
+        if (_player.state.playing &&
+            '$v' == 'yes' &&
+            _player.state.duration > Duration.zero) {
           ready = true;
           break;
         }
       } catch (_) {
-        // Property not available: fall back to "duration is known".
-        if (_player.state.duration > Duration.zero) {
+        // Property not available: fall back to "playing + duration known".
+        if (_player.state.playing &&
+            _player.state.duration > Duration.zero) {
           ready = true;
           break;
         }
@@ -943,11 +945,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     _opening = true;
     try {
       await _enqueueOpen(() async {
-        // With a resume point: open paused, seek once the stream is ready,
-        // then play (no flash of 0:00 and no jump back to the start).
-        await _player.open(Media(src.url, start: start), play: start == null);
+        // Resume pattern that sticks for network streams: start playback
+        // FIRST, then seek once mpv is really running. Seeking while
+        // paused gets discarded when the network demuxer (re)starts.
+        await _player.open(Media(src.url), play: true);
         if (start != null) await _ensureAt(start);
-        await _player.play();
       });
     } finally {
       _opening = false;
@@ -974,9 +976,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _opening = true;
     try {
       await _enqueueOpen(() async {
-        await _player.open(Media(src.url, start: start), play: start == null);
+        await _player.open(Media(src.url), play: true);
         if (start != null) await _ensureAt(start);
-        await _player.play();
       });
     } finally {
       _opening = false;
@@ -1073,10 +1074,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       _opening = true;
       try {
         await _enqueueOpen(() async {
-          await _player.open(Media(hit.$2.url, start: jumpStart),
-              play: jumpStart == null);
+          await _player.open(Media(hit.$2.url), play: true);
           if (jumpStart != null) await _ensureAt(jumpStart);
-          await _player.play();
         });
       } finally {
         _opening = false;
