@@ -384,8 +384,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
     await _applyHwDecProperty(nextHw);
     final src = _cur;
-    await _enqueueOpen(
-        () => _player.open(Media(src.url, start: currentPos), play: isPlaying));
+    await _enqueueOpen(() async {
+      final back = currentPos.inSeconds > 1;
+      await _player.open(Media(src.url, start: currentPos),
+          play: isPlaying && !back);
+      if (back) await _ensureAt(currentPos);
+      if (isPlaying) await _player.play();
+    });
     if (mounted) {
       setState(() {
         _status = nextHw
@@ -850,6 +855,49 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// mpv's `start` option is not always honoured for network streams: the
+  /// position shows the resume time while the stream loads, then playback
+  /// actually begins at 0:00. So after opening, wait until the stream is
+  /// really seekable, then seek explicitly and verify (a few retries).
+  Future<void> _ensureAt(Duration target) async {
+    final dynamic platform = _player.platform;
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
+    var ready = false;
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      try {
+        final v = await platform.getProperty('seekable');
+        if ('$v' == 'yes' && _player.state.duration > Duration.zero) {
+          ready = true;
+          break;
+        }
+      } catch (_) {
+        // Property not available: fall back to "duration is known".
+        if (_player.state.duration > Duration.zero) {
+          ready = true;
+          break;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    if (!ready) {
+      _rlog('resume seek: stream never became seekable');
+      return;
+    }
+    for (var i = 0; i < 3; i++) {
+      // Always seek once (the reported position can already show the
+      // start time even though playback really begins at 0).
+      await _player.seek(target);
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      final cur = _player.state.position;
+      final diff = (cur - target).inSeconds;
+      if (diff >= -3 && diff <= 8) {
+        _rlog('resume seek ok: target ${target.inSeconds}s, now ${cur.inSeconds}s');
+        return;
+      }
+    }
+    _rlog('resume seek failed: target ${target.inSeconds}s, now ${_player.state.position.inSeconds}s');
+  }
+
   Future<Duration?> _resumeStart() async {
     final pid = widget.profileId ?? _guestPid;
     final e = await ResumeStore.get(pid, widget.anime.id, _episode);
@@ -895,7 +943,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     _opening = true;
     try {
       await _enqueueOpen(() async {
-        await _player.open(Media(src.url, start: start));
+        // With a resume point: open paused, seek once the stream is ready,
+        // then play (no flash of 0:00 and no jump back to the start).
+        await _player.open(Media(src.url, start: start), play: start == null);
+        if (start != null) await _ensureAt(start);
         await _player.play();
       });
     } finally {
@@ -995,7 +1046,9 @@ class _PlayerScreenState extends State<PlayerScreen>
       _opening = true;
       try {
         await _enqueueOpen(() async {
-          await _player.open(Media(hit.$2.url, start: jumpStart));
+          await _player.open(Media(hit.$2.url, start: jumpStart),
+              play: jumpStart == null);
+          if (jumpStart != null) await _ensureAt(jumpStart);
           await _player.play();
         });
       } finally {
