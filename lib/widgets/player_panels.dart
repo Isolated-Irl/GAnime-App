@@ -58,23 +58,26 @@ class ExternalPlayer {
   }
 }
 
-// ---------- glass sheet scaffold ----------
+// ---------- glass dialog scaffold (centered) ----------
 Future<T?> glassSheet<T>(BuildContext context, Widget child) {
-  return showModalBottomSheet<T>(
+  return showDialog<T>(
     context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
-    builder: (ctx) => ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-        child: GlassSurface(
-          radius: 24,
-          child: SafeArea(
-            top: false,
+    barrierColor: Colors.black54,
+    builder: (ctx) => Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: GlassSurface(
+            radius: 24,
             child: ConstrainedBox(
-              constraints:
-                  BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.72),
+              constraints: BoxConstraints(
+                maxWidth: 520,
+                maxHeight: MediaQuery.of(ctx).size.height * 0.72,
+              ),
               child: child,
             ),
           ),
@@ -84,48 +87,47 @@ Future<T?> glassSheet<T>(BuildContext context, Widget child) {
   );
 }
 
-// ---------- sources panel ----------
+// ---------- sources panel (grouped by addon) ----------
 Future<StreamSource?> showSourcesPanel(
   BuildContext context, {
-  required List<StreamSource> streams,
+  required Map<String, List<StreamSource>> groupedStreams,
   required String nowPlayingUrl,
-  required String addonName,
 }) {
+  final total = groupedStreams.values.fold<int>(0, (s, l) => s + l.length);
   return glassSheet<StreamSource>(context, Column(
     mainAxisSize: MainAxisSize.min,
     children: [
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
         child: Row(children: [
-          const Text('Sources',
-              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+          Text('Sources ($total)',
+              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
           const Spacer(),
           GlassButton(icon: Icons.close, size: 36, iconSize: 18, circle: true,
               onTap: () => Navigator.pop(context)),
         ]),
       ),
-      if (addonName.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: GlassSurface(
-              radius: 10,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                child: Text('$addonName · ${streams.length}',
-                    style: const TextStyle(color: Colors.white, fontSize: 12)),
-              ),
-            ),
-          ),
-        ),
       Flexible(
-        child: ListView.builder(
+        child: ListView(
           shrinkWrap: true,
           padding: const EdgeInsets.all(12),
-          itemCount: streams.length,
-          itemBuilder: (_, i) {
-            final s = streams[i];
+          children: [
+            for (final entry in groupedStreams.entries) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: GlassSurface(
+                    radius: 10,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      child: Text('${entry.key} · ${entry.value.length}',
+                          style: const TextStyle(color: Colors.white, fontSize: 12)),
+                    ),
+                  ),
+                ),
+              ),
+              for (final s in entry.value) Builder(builder: (_) {
             final info = parseStreamInfo(s);
             final playing = s.url == nowPlayingUrl;
             return Padding(
@@ -182,7 +184,9 @@ Future<StreamSource?> showSourcesPanel(
                 ),
               ),
             );
-          },
+              }),
+            ],
+          ],
         ),
       ),
     ],

@@ -959,6 +959,33 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
+  /// Opens a specific stream source directly (for cross-addon switching).
+  Future<void> _openStreamSource(StreamSource src, {bool keepPosition = false}) async {
+    _cancelNextEpCountdown();
+    _autoSelected = false;
+    Duration? start;
+    if (keepPosition) {
+      final p = _player.state.position;
+      if (p.inSeconds > 1) start = p;
+    }
+    if (!mounted) return;
+    final privBadge = _isPrivateViewing ? ' (Private)' : '';
+    setState(() => _status = 'Opening ${src.name}$privBadge …');
+    _opening = true;
+    try {
+      await _enqueueOpen(() async {
+        await _player.open(Media(src.url, start: start), play: start == null);
+        if (start != null) await _ensureAt(start);
+        await _player.play();
+      });
+    } finally {
+      _opening = false;
+    }
+    if (mounted) {
+      setState(() => _status = 'Playing ${src.name}$privBadge');
+    }
+  }
+
   Future<void> _jumpEpisode(int target) async {
     _cancelNextEpCountdown();
     // Clear old chapters — new episode gets fresh ones via _loadChapters.
@@ -1383,14 +1410,76 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _showSources() async {
-    final list = widget.allStreams ?? widget.streams;
-    if (list.length < 2) return;
+    // Fetch streams from all enabled addons, grouped by addon name.
+    // Shows loading dialog while fetching.
+    final grouped = await _fetchAllAddonStreams();
+    if (!mounted || grouped.isEmpty) return;
+    final total = grouped.values.fold<int>(0, (s, l) => s + l.length);
+    if (total < 2) return;
     final s = await showSourcesPanel(context,
-        streams: list, nowPlayingUrl: _cur.url, addonName: widget.addonName ?? '');
+        groupedStreams: grouped, nowPlayingUrl: _cur.url);
     if (s != null && s.url != _cur.url && mounted) {
-      final i = list.indexWhere((e) => e.url == s.url);
-      setState(() => _streamIndex = i < 0 ? 0 : i);
-      _openCurrent(keepPosition: true);
+      await _openStreamSource(s, keepPosition: true);
+    }
+  }
+
+  /// Fetches streams from all enabled addons for the current episode,
+  /// grouped by addon name. Returns empty map on failure.
+  Future<Map<String, List<StreamSource>>> _fetchAllAddonStreams() async {
+    try {
+      var addons = (await Store.addons(widget.profileId!))
+          .where((a) => a.enabled)
+          .toList();
+      if (addons.isEmpty) {
+        addons = (await Store.allAddons()).where((a) => a.enabled).toList();
+      }
+      if (addons.isEmpty) {
+        // Fallback to current streams
+        return {widget.addonName ?? 'Current': List.from(widget.streams)};
+      }
+      final fallback = AddonIds(kitsu: '${widget.anime.id}');
+      final ids = await Future.any([
+        AddonIdResolver.resolve(widget.anime),
+        Future<AddonIds>.delayed(const Duration(seconds: 6), () => fallback),
+      ]);
+      final isMovie = widget.anime.format.toUpperCase() == 'MOVIE';
+      final fetchAll = Future.wait(addons.map((a) async {
+        try {
+          final type = AddonsService.streamTypeFor(a, isMovie);
+          final sids = AddonIdResolver.streamIdsFor(
+            a, ids,
+            title: widget.anime.title,
+            isMovie: isMovie,
+            episode: _episode,
+          );
+          final seen = <String>{};
+          final out = <StreamSource>[];
+          for (final sid in sids) {
+            for (final x in await AddonsService.streams(a, type, sid)) {
+              if (x.url.isNotEmpty && seen.add(x.url)) out.add(x);
+            }
+          }
+          final name = a.name.isNotEmpty ? a.name : a.id;
+          return MapEntry(name, out);
+        } catch (_) {
+          return MapEntry<String, List<StreamSource>>(a.name, []);
+        }
+      }));
+      final results = await Future.any([
+        fetchAll,
+        Future<List<MapEntry<String, List<StreamSource>>>>.delayed(
+            const Duration(seconds: 12), () => []),
+      ]);
+      final grouped = <String, List<StreamSource>>{};
+      for (final e in results) {
+        if (e.value.isNotEmpty) grouped[e.key] = e.value;
+      }
+      if (grouped.isEmpty) {
+        return {widget.addonName ?? 'Current': List.from(widget.streams)};
+      }
+      return grouped;
+    } catch (_) {
+      return {widget.addonName ?? 'Current': List.from(widget.streams)};
     }
   }
 
@@ -1460,9 +1549,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             onSubs: _showSubs,
             onCycleSpeed: _cycleSpeed,
             onCycleFit: _cycleFit,
-            onSources: (widget.allStreams ?? widget.streams).length > 1
-                ? _showSources
-                : null,
+            onSources: _showSources,
             onEpisodes: (widget.episodes != null && widget.episodes!.isNotEmpty)
                 ? _showEpisodes
                 : null,
