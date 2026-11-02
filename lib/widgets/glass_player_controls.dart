@@ -666,9 +666,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             ),
           ),
           const SizedBox(width: 10),
-          Flexible(
+          Expanded(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 360),
+              constraints: const BoxConstraints(maxWidth: 560),
               child: GlassSurface(
                 radius: 14,
               child: Padding(

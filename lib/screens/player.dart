@@ -198,6 +198,9 @@ class PlayerScreen extends StatefulWidget {
   final List<EpisodeInfo>? episodes;      // episode list panel data
   final Set<int>? watchedEpisodes;      // watched marks
   final List<StreamSource>? allStreams;   // source switcher (the addon group)
+  // All addons' streams already fetched by the StreamsScreen (keyed by
+  // addon name) — lets Sources open INSTANTLY with grouped results.
+  final Map<String, List<StreamSource>>? preGroupedStreams;
   final String? addonId;                // scoring: prefer same addon
   final String? addonName;
   final int? totalEpisodes;             // anime.episodes
@@ -214,6 +217,7 @@ class PlayerScreen extends StatefulWidget {
     this.episodes,
     this.watchedEpisodes,
     this.allStreams,
+    this.preGroupedStreams,
     this.addonId,
     this.addonName,
     this.totalEpisodes,
@@ -735,6 +739,18 @@ class _PlayerScreenState extends State<PlayerScreen>
       detectRecap: widget.settings.aniskipDetectRecap,
     );
     if (mounted) setState(() => _skips = skips);
+    // mpv chapter-list is empty for most debrid/torrent streams, which left
+    // the chapter button permanently hidden even though the seekbar ticks
+    // (AniSkip intervals) existed. Fall back to the AniSkip intervals as
+    // the chapter list so the button (and sheet) actually appear.
+    if (mounted && _chapterMeta.isEmpty && skips.isNotEmpty) {
+      setState(() {
+        _chapterMeta = [
+          for (final s in skips)
+            {'timeMs': (s.start * 1000).round(), 'title': s.label},
+        ];
+      });
+    }
   }
 
   void _listenChapters() {
@@ -1409,10 +1425,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _showSources() async {
-    // Fetch streams from all enabled addons, grouped by addon name.
-    // Shows loading dialog while fetching.
-    final grouped = await _fetchAllAddonStreams();
-    if (!mounted || grouped.isEmpty) return;
+    // INSTANT first: the StreamsScreen already fetched every enabled addon
+    // — show those grouped results immediately. Only fall back to a live
+    // re-fetch when the player was opened without them.
+    Map<String, List<StreamSource>>? grouped = widget.preGroupedStreams;
+    if (grouped == null || grouped.isEmpty) {
+      grouped = await _fetchAllAddonStreams();
+      if (!mounted || grouped.isEmpty) return;
+    }
     final total = grouped.values.fold<int>(0, (s, l) => s + l.length);
     if (total < 2) return;
     final s = await showSourcesPanel(context,

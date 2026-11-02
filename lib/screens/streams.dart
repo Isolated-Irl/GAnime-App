@@ -539,6 +539,10 @@ class _StreamsScreenState extends State<StreamsScreen> {
           episodes: widget.episodes,
           watchedEpisodes: widget.watchedEpisodes,
           allStreams: g.streams,
+          // every addon's streams, already fetched — Sources opens instantly
+          preGroupedStreams: {
+            for (final grp in _groups) grp.addon.name: grp.streams
+          },
           addonId: g.addon.id,
           addonName: g.addon.name,
           totalEpisodes: widget.anime.episodes,

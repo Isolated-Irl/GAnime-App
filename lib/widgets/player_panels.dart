@@ -60,24 +60,24 @@ class ExternalPlayer {
 
 // ---------- glass dialog scaffold (centered) ----------
 Future<T?> glassSheet<T>(BuildContext context, Widget child) {
-  return showDialog<T>(
+  // Bottom sheet (mpvKt-style position) with the glass treatment — NOT a
+  // centered dialog. The chapter list keeps its own centered dialog;
+  // streams & episodes slide up from the bottom.
+  return showModalBottomSheet<T>(
     context: context,
-    barrierColor: Colors.black54,
-    builder: (ctx) => Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: GlassSurface(
-            radius: 24,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (ctx) => ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: GlassSurface(
+          radius: 24,
+          child: SafeArea(
+            top: false,
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxWidth: 520,
-                maxHeight: MediaQuery.of(ctx).size.height * 0.72,
-              ),
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.72),
               child: child,
             ),
           ),
