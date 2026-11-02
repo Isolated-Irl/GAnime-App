@@ -113,12 +113,12 @@ class TrackerOAuth {
       m['simklClientId'] = OAuthService.simklClientId;
       m['simklToken'] = data['access_token'];
       m['simklRefreshToken'] = data['refresh_token'] ?? '';
-      final _expiresRaw = data['expires_in'];
-      final _expiresSecs = _expiresRaw is num
-          ? _expiresRaw.toInt()
-          : int.tryParse('$_expiresRaw') ?? 0;
+      final expiresRaw = data['expires_in'];
+      final expiresSecs = expiresRaw is num
+          ? expiresRaw.toInt()
+          : int.tryParse('$expiresRaw') ?? 0;
       m['simklExpiresAt'] = data['expires_in'] != null
-          ? DateTime.now().millisecondsSinceEpoch + _expiresSecs * 1000
+          ? DateTime.now().millisecondsSinceEpoch + expiresSecs * 1000
           : 0;
       try {
         final r = await http.get(
