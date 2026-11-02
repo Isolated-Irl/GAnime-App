@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import 'glass_surface.dart';
+import 'player_panels.dart';
 
 String _fmt(Duration d) {
   final totalSecs = d.inSeconds.abs();
@@ -666,9 +667,10 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             ),
           ),
           const SizedBox(width: 10),
-          Expanded(
+          Flexible(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
+              constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.5),
               child: GlassSurface(
                 radius: 14,
               child: Padding(
@@ -996,34 +998,26 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     _scheduleHide();
     final posMs = widget.player.state.position.inMilliseconds.toDouble();
     final curIdx = _chapterIndexAt(posMs);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => Dialog(
-        alignment: Alignment.center,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        child: GlassSurface(
-          radius: 18,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460, maxHeight: 400),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text('Chapters',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800)),
-                      ),
+    glassSheet<void>(
+      context,
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Chapters',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700)),
+                ),
                       _TapScaleButton(
-                        onTap: () => Navigator.pop(ctx),
+                        onTap: () => Navigator.pop(context),
                         child: GlassSurface(
                           radius: 999,
                           child: const SizedBox(
@@ -1055,7 +1049,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                           child: InkWell(
                             borderRadius: BorderRadius.circular(12),
                             onTap: () {
-                              Navigator.pop(ctx);
+                              Navigator.pop(context);
                               widget.player
                                   .seek(Duration(milliseconds: ms.round()));
                             },
@@ -1092,7 +1086,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                                   ),
                                   Expanded(
                                     child: Text(
-                                      'Chapter ${i + 1}: $title',
+                                      title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
@@ -1120,10 +1114,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                 ],
               ),
             ),
-          ),
-        ),
-      ),
-    );
+          );
   }
 
 }

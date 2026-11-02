@@ -87,110 +87,190 @@ Future<T?> glassSheet<T>(BuildContext context, Widget child) {
   );
 }
 
-// ---------- sources panel (grouped by addon) ----------
+// ---------- sources panel (grouped by addon, horizontal tabs) ----------
 Future<StreamSource?> showSourcesPanel(
   BuildContext context, {
   required Map<String, List<StreamSource>> groupedStreams,
   required String nowPlayingUrl,
 }) {
   final total = groupedStreams.values.fold<int>(0, (s, l) => s + l.length);
-  return glassSheet<StreamSource>(context, Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
-        child: Row(children: [
-          Text('Sources ($total)',
-              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
-          const Spacer(),
-          GlassButton(icon: Icons.close, size: 36, iconSize: 18, circle: true,
-              onTap: () => Navigator.pop(context)),
-        ]),
-      ),
-      Flexible(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.all(12),
+  final addonNames = groupedStreams.keys.toList();
+  var selectedTab = 0; // 0 = All, 1..n = addon index + 1
+  return glassSheet<StreamSource>(
+    context,
+    StatefulBuilder(builder: (ctx, setState) {
+        List<MapEntry<String, List<StreamSource>>> visibleEntries;
+        if (selectedTab == 0) {
+          visibleEntries = groupedStreams.entries.toList();
+        } else {
+          final name = addonNames[selectedTab - 1];
+          visibleEntries = [MapEntry(name, groupedStreams[name]!)];
+        }
+        return Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            for (final entry in groupedStreams.entries) ...[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: GlassSurface(
-                    radius: 10,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      child: Text('${entry.key} · ${entry.value.length}',
-                          style: const TextStyle(color: Colors.white, fontSize: 12)),
-                    ),
-                  ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+              child: Row(children: [
+                Expanded(
+                  child: Text('Sources ($total)',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700)),
                 ),
+                GlassButton(
+                    icon: Icons.close,
+                    size: 36,
+                    iconSize: 18,
+                    circle: true,
+                    onTap: () => Navigator.pop(context)),
+              ]),
+            ),
+            // Horizontal addon tabs, like the StreamsScreen
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                children: [
+                  _panelTabChip('All \u00b7 $total', selectedTab == 0,
+                      () => setState(() => selectedTab = 0)),
+                  for (var i = 0; i < addonNames.length; i++)
+                    _panelTabChip(
+                      '${addonNames[i]} \u00b7 ${groupedStreams[addonNames[i]]!.length}',
+                      selectedTab == i + 1,
+                      () => setState(() => selectedTab = i + 1),
+                    ),
+                ],
               ),
-              for (final s in entry.value) Builder(builder: (_) {
-            final info = parseStreamInfo(s);
-            final playing = s.url == nowPlayingUrl;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: GlassSurface(
-                radius: 14,
-                border: playing ? const Color(0x80FFFFFF) : const Color(0x26FFFFFF),
-                child: Material(
-                  type: MaterialType.transparency,
-                  child: InkWell(
-                    onTap: () => Navigator.pop(context, s),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(info.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600)),
-                          if (info.tags.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(info.tags.join('  '),
-                                  style: const TextStyle(
-                                      color: Colors.white70, fontSize: 12)),
-                            ),
-                          if (info.size.isNotEmpty || info.duration.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
+            ),
+            const SizedBox(height: 4),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.all(12),
+                children: [
+                  for (final entry in visibleEntries) ...[
+                    if (selectedTab == 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                        child: Align(
+                          alignment: Alignment.center,
+                          child: GlassSurface(
+                            radius: 10,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 5),
                               child: Text(
-                                '${info.size}'
-                                '${info.size.isNotEmpty && info.duration.isNotEmpty ? ' · ' : ''}'
-                                '${info.duration}'
-                                '${info.flags.isNotEmpty ? '  ·  ${info.flags}' : ''}',
-                                style: const TextStyle(
-                                    color: Colors.white54, fontSize: 12),
+                                  '${entry.key} \u00b7 ${entry.value.length}',
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 12)),
+                            ),
+                          ),
+                        ),
+                      ),
+                    for (final s in entry.value) Builder(builder: (_) {
+                      final info = parseStreamInfo(s);
+                      final playing = s.url == nowPlayingUrl;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: GlassSurface(
+                          radius: 14,
+                          border: playing
+                              ? const Color(0x80FFFFFF)
+                              : const Color(0x26FFFFFF),
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: InkWell(
+                              onTap: () => Navigator.pop(context, s),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(info.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600)),
+                                    if (info.tags.isNotEmpty)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 4),
+                                        child: Text(info.tags.join('  '),
+                                            style: const TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 12)),
+                                      ),
+                                    if (info.size.isNotEmpty ||
+                                        info.duration.isNotEmpty)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 2),
+                                        child: Text(
+                                          '${info.size}'
+                                          '${info.size.isNotEmpty && info.duration.isNotEmpty ? ' \u00b7 ' : ''}'
+                                          '${info.duration}'
+                                          '${info.flags.isNotEmpty ? '  \u00b7  ${info.flags}' : ''}',
+                                          style: const TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 12),
+                                        ),
+                                      ),
+                                    if (playing)
+                                      const Padding(
+                                        padding: EdgeInsets.only(top: 6),
+                                        child: Text('Now playing',
+                                            style: TextStyle(
+                                                color: Colors.greenAccent,
+                                                fontSize: 12)),
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
-                          if (playing)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 6),
-                              child: Text('Now playing',
-                                  style: TextStyle(
-                                      color: Colors.greenAccent, fontSize: 12)),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ],
               ),
-            );
-              }),
-            ],
+            ),
           ],
+        );
+    }),
+  );
+}
+
+Widget _panelTabChip(String label, bool active, VoidCallback onTap) {
+  return Padding(
+    padding: const EdgeInsets.only(right: 8),
+    child: GlassSurface(
+      radius: 10,
+      fill: active ? const Color(0x3300E676) : const Color(0x0DFFFFFF),
+      border: active ? const Color(0x5900E676) : const Color(0x26FFFFFF),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Text(label,
+                style: TextStyle(
+                    color: active ? const Color(0xFF00E676) : Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ),
         ),
       ),
-    ],
-  ));
+    ),
+  );
 }
 
 // ---------- episodes panel ----------
@@ -206,9 +286,14 @@ Future<int?> showEpisodesPanel(
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
         child: Row(children: [
-          Text('Episodes (${episodes.length})',
-              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
-          const Spacer(),
+          Expanded(
+            child: Text('Episodes (${episodes.length})',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700)),
+          ),
           GlassButton(icon: Icons.close, size: 36, iconSize: 18, circle: true,
               onTap: () => Navigator.pop(context)),
         ]),
