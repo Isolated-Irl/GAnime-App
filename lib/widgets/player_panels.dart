@@ -188,11 +188,12 @@ Future<StreamSource?> showSourcesPanel(
                               child: Padding(
                                 padding: const EdgeInsets.all(12),
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Text(info.title,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
                                         style: const TextStyle(
                                             color: Colors.white,
                                             fontSize: 14,

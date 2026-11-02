@@ -196,7 +196,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     _hideTimer?.cancel();
     if (!_visible) return;
     _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && widget.player.state.playing && !_isHorizontalSwiping) {
+      if (mounted &&
+          (widget.player.state.playing || _locked) &&
+          !_isHorizontalSwiping) {
         _setVisible(false);
       }
     });
@@ -356,7 +358,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             // Fix 7: Full-screen gesture layer
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _locked ? () => _setVisible(true) : _toggleVisible,
+              onTap: _toggleVisible,
               onDoubleTapDown: (d) => _handleDoubleTap(d, w),
               onDoubleTap: () {},
               onLongPressStart: _onLongPressStart,
@@ -649,11 +651,15 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
 
   // Preserves Fix 1 & Fix 2: GlassSurface(radius: 14, padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8))
   // + positional _MarqueeText(widget.title, style: ...)
+  // 50/50 split: Left 50% holds Back + dynamic-width Title; Right 50% keeps icons fixed at right edge
   Widget _buildTopBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 10, 0, 0),
       child: Row(
         children: [
+          Expanded(
+            child: Row(
+              children: [
           _TapScaleButton(
             onTap: widget.onBack,
             child: GlassSurface(
@@ -668,10 +674,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           ),
           const SizedBox(width: 10),
           Flexible(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.5),
-              child: GlassSurface(
+            child: GlassSurface(
                 radius: 14,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -702,9 +705,14 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
               ),
             ),
           ),
+              ],
+            ),
           ),
-          const Spacer(),
           const SizedBox(width: 10),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
           // Chapter button (only when chapters exist)
           if (widget.chapterMeta.isNotEmpty) ...[
             _TapScaleButton(
@@ -752,6 +760,9 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           const SizedBox(width: 8),
           _topIconBtn(
               Icons.open_in_new_rounded, 'External player', widget.onExternal),
+              ],
+            ),
+          ),
         ],
       ),
     );
