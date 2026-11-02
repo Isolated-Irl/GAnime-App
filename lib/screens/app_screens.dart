@@ -259,7 +259,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final now = DateTime.now().millisecondsSinceEpoch;
     final local = await Store.localLibrary(widget.profileId);
-    if (cachedRails != null && cachedRails.length == 6) {
+    // Usable = at least one rail has data. This also (a) accepts partial
+    // caches and (b) rejects legacy all-empty ("poisoned") caches, which
+    // then fall through to a foreground fetch instead of a black void.
+    if (cachedRails != null && cachedRails.any((r) => r.isNotEmpty)) {
       if (now - cachedTs < _homeFreshMs) {
         return [...cachedRails, local]; // fresh: zero Kitsu requests
       }
@@ -276,14 +279,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _homeFetching = true;
     try {
       final fresh = await _loadHome();
-      // Stamp ONLY on success.
-      final railsJson = jsonEncode(
-        (fresh.sublist(0, 6))
-            .map((r) => (r as List<Anime>).map((a) => a.toJson()).toList())
-            .toList(),
-      );
-      await Store.saveHomeRails(
-          railsJson, DateTime.now().millisecondsSinceEpoch);
+      // _safe() turns failures into empty lists WITHOUT throwing, so a dead
+      // network returns 6 empty rails here. Stamping that would overwrite
+      // the last good cache and pin Home to a black void (the bug). Only
+      // stamp when at least one rail actually has data.
+      final rails = fresh.sublist(0, 6) as List<List<Anime>>;
+      if (rails.any((r) => r.isNotEmpty)) {
+        final railsJson = jsonEncode(
+            rails.map((r) => r.map((a) => a.toJson()).toList()).toList());
+        await Store.saveHomeRails(
+            railsJson, DateTime.now().millisecondsSinceEpoch);
+      }
       if (!mounted) return;
       setState(() {
         _homeFuture = Future.value(fresh);
@@ -304,15 +310,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _homeFetching = true;
     try {
       final fresh = await _loadHome();
-      // Stamp ONLY on success; persist the 6 AniList rails (not the local
-      // library — that stays live).
-      final railsJson = jsonEncode(
-        (fresh.sublist(0, 6))
-            .map((r) => (r as List<Anime>).map((a) => a.toJson()).toList())
-            .toList(),
-      );
-      await Store.saveHomeRails(
-          railsJson, DateTime.now().millisecondsSinceEpoch);
+      // Same guard as the background refresh: never cache a fully-empty
+      // result (network failure masquerading as success).
+      final rails = fresh.sublist(0, 6);
+      if (rails.any((r) => (r as List<Anime>).isNotEmpty)) {
+        final railsJson = jsonEncode(
+          rails.map((r) => (r as List<Anime>).map((a) => a.toJson()).toList()).toList(),
+        );
+        await Store.saveHomeRails(
+            railsJson, DateTime.now().millisecondsSinceEpoch);
+      }
       return fresh;
     } finally {
       _homeFetching = false;
@@ -414,6 +421,30 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _homeRetryState(VoidCallback onRetry) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+      child: Column(
+        children: [
+          Icon(Icons.wifi_off_rounded,
+              size: 44, color: Colors.white.withValues(alpha: 0.35)),
+          const SizedBox(height: 12),
+          Text(
+            'Could not load the home rails.\nCheck your connection and retry.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<List<Anime>> _safe(Future<List<Anime>> f) async {
     try {
       return await f;
@@ -494,6 +525,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ];
         final showHero = ls.showHero && heroItems.isNotEmpty;
         final showCw = ls.showContinueWatching && cwAll.isNotEmpty;
+        // NEVER a black void: no rails and no hero -> retry block. Continue
+        // Watching still renders below from local data when present.
+        if (rails.isEmpty && !showHero) {
+          rails.add(_homeRetryState(() => setState(() {
+                _homeFuture = _loadHomeCached();
+              })));
+        }
         return ListView(
           children: [
             // Hero carousel, like the web home: rounded card (margin 14,
