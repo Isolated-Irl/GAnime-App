@@ -752,8 +752,15 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _loadChapters() async {
     try {
       final dynamic platform = _player.platform;
-      final list = await platform.getProperty('chapter-list');
-      if (list is List && mounted) {
+      final raw = await platform.getProperty('chapter-list');
+      // media_kit returns a JSON String, not a List — decode it.
+      List<dynamic>? list;
+      if (raw is List) {
+        list = raw;
+      } else if (raw is String && raw.trim().startsWith('[')) {
+        list = jsonDecode(raw) as List<dynamic>;
+      }
+      if (list != null && mounted) {
         final dur = _player.state.duration.inMilliseconds;
         if (dur > 0) {
           final ratios = <double>[];
@@ -903,6 +910,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _jumpEpisode(int target) async {
     _cancelNextEpCountdown();
+    // Clear old chapters — new episode gets fresh ones via _loadChapters.
+    _chapters = [];
+    _chapterMeta = [];
     if (_jumping || widget.profileId == null) return;
     if (widget.totalEpisodes != null && target > widget.totalEpisodes!) return;
     _jumping = true;
@@ -1371,7 +1381,22 @@ class _PlayerScreenState extends State<PlayerScreen>
             title: '${widget.anime.title} — EP $_episode',
             status: _status,
             skips: _skips,
-            chapters: _chapters,
+            // Seekbar breaks: MKV chapters if present, else AniSkip
+            // interval edges so there's always something to see.
+            chapters: _chapters.isNotEmpty
+                ? _chapters
+                : (_player.state.duration.inMilliseconds > 0
+                    ? [
+                        for (final s in _skips) ...[
+                          (s.start * 1000 /
+                                  _player.state.duration.inMilliseconds)
+                              .clamp(0.0, 1.0),
+                          (s.end * 1000 /
+                                  _player.state.duration.inMilliseconds)
+                              .clamp(0.0, 1.0),
+                        ]
+                      ]
+                    : const []),
             chapterMeta: _chapterMeta,
             showSkipButtons:
                 widget.settings.aniskipEnabled && widget.settings.aniskipShowButton,

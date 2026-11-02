@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -572,7 +573,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
               ignoring: !_visible,
               child: FadeTransition(
                 opacity: _fade,
-                child: SafeArea(
+                child: _SymmetricSafeArea(
                   child: _locked
                       ? Align(
                           alignment: Alignment.centerLeft,
@@ -649,7 +650,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
   // + positional _MarqueeText(widget.title, style: ...)
   Widget _buildTopBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 0),
       child: Row(
         children: [
           _TapScaleButton(
@@ -665,9 +666,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
             ),
           ),
           const SizedBox(width: 10),
-          Expanded(
-            child: GlassSurface(
-              radius: 14,
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260),
+              child: GlassSurface(
+                radius: 14,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 child: Column(
@@ -693,10 +696,12 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
                     ),
                   ],
                 ],
+                ),
               ),
             ),
-            ),
           ),
+          ),
+          const Spacer(),
           const SizedBox(width: 10),
           _TapScaleButton(
             onTap: () {
@@ -859,7 +864,7 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
     ];
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1508,24 +1513,20 @@ class _SeekSpinButtonState extends State<_SeekSpinButton>
   }
 
   void _trigger() {
-    _ctrl.forward(from: 0).then((_) {
-      if (mounted) _ctrl.reverse();
-    });
+    _ctrl.forward(from: 0);
     widget.onTap();
   }
 
   /// Public: play just the spin animation (no seek). Used by double-tap.
   void spin() {
-    _ctrl.forward(from: 0).then((_) {
-      if (mounted) _ctrl.reverse();
-    });
+    _ctrl.forward(from: 0);
   }
 
   @override
   Widget build(BuildContext context) {
     final turns = Tween<double>(
       begin: 0.0,
-      end: widget.side > 0 ? 0.5 : -0.5,
+      end: widget.side > 0 ? 1.0 : -1.0,
     ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
 
     return _TapScaleButton(
@@ -1595,6 +1596,30 @@ class _TapScaleButtonState extends State<_TapScaleButton>
         scale: _ctrl,
         child: widget.child,
       ),
+    );
+  }
+}
+
+/// Symmetric safe area: on Android landscape the camera cutout makes
+/// MediaQuery padding left ~36px while right is 0px. SafeArea would pad
+/// only the cutout side, leaving uneven margins. This uses max() on both
+/// sides so left/right are always equal, like mpvKt.
+class _SymmetricSafeArea extends StatelessWidget {
+  final Widget child;
+  const _SymmetricSafeArea({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final pad = MediaQuery.paddingOf(context);
+    final side = math.max(pad.left, pad.right) + 12.0;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        side,
+        math.max(pad.top, 10.0),
+        side,
+        math.max(pad.bottom, 10.0),
+      ),
+      child: child,
     );
   }
 }
