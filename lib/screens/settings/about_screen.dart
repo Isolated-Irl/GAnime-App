@@ -47,14 +47,14 @@ class AboutSettingsScreen extends StatelessWidget {
             'Crowdsourced timestamp intervals for opening (OP) and ending (ED) skip buttons.'),
         _credit('media_kit',
             'The playback engine behind the Android app (mpv).'),
-        _credit('Built with Muse & Gemini',
-            'Designed and built by Isolated in a three-way collaboration — Muse (build & verification) and Gemini (analysis & benchmarking).'),
+        _credit('Built with Muse, Gemini & Kimi',
+            'Designed and engineered by Isolated in a multi-AI collaboration — Muse (implementation & pipeline), Gemini (UI/UX design), and Kimi (diagnostics & cross-review).'),
         _credit('♥ NuvioWeb Inspiration',
             'UI and player design inspired by NuvioWeb — modern glass styling, floating control pills, and a sleek dark aesthetic.'),
         const SizedBox(height: 16),
         const Center(
           child: Text(
-            'Made with ♥ by Isolated\nGAnime 0.1.0',
+            'Made with ♥ by Isolated\nGAnime 0.2.0-alpha',
             textAlign: TextAlign.center,
             style: TextStyle(color: gaGrey, fontSize: 12, height: 1.6),
           ),

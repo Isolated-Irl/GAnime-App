@@ -900,7 +900,6 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
           _SeekbarSection(
             player: widget.player,
             chapters: widget.chapters,
-            chapterMeta: widget.chapterMeta,
             onInteraction: _scheduleHide,
           ),
           const SizedBox(height: 6),
@@ -1136,13 +1135,11 @@ class _GlassPlayerControlsState extends State<GlassPlayerControls>
 class _SeekbarSection extends StatefulWidget {
   final Player player;
   final List<double> chapters;
-  final List<Map<String, dynamic>> chapterMeta;
   final VoidCallback onInteraction;
 
   const _SeekbarSection({
     required this.player,
     required this.chapters,
-    this.chapterMeta = const [],
     required this.onInteraction,
   });
 
@@ -1154,27 +1151,9 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
   double? _dragMs;
   bool _showRemaining = false;
 
-  Timer? _pillTimer;
-
   @override
   void dispose() {
-    _pillTimer?.cancel();
     super.dispose();
-  }
-
-
-  void _showPill() {
-    _pillTimer?.cancel();
-    if (widget.chapterMeta.isNotEmpty && mounted) {
-
-    }
-  }
-
-  void _hidePillDelayed() {
-    _pillTimer?.cancel();
-    _pillTimer = Timer(const Duration(seconds: 2), () {
-
-    });
   }
 
 
@@ -1242,18 +1221,15 @@ class _SeekbarSectionState extends State<_SeekbarSection> {
                         max: maxMs,
                         onChangeStart: (v) {
                           widget.onInteraction();
-                          _showPill();
                           setState(() => _dragMs = v);
                         },
                         onChanged: (v) {
                           widget.onInteraction();
-                          _showPill();
                           setState(() => _dragMs = v);
                         },
                         onChangeEnd: (v) {
                           widget.onInteraction();
                           setState(() => _dragMs = null);
-                          _hidePillDelayed();
                           widget.player.seek(Duration(milliseconds: v.round()));
                         },
                       ),

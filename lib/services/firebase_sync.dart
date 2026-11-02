@@ -633,9 +633,12 @@ class FirebaseSync {
           for (final ep in (wm['eps'] as List? ?? [])) (ep as num).toInt()
         };
       }
-      // (Store has no bulk import for watched; skip — the merge already
-      // unioned eps, and the next pullProfileExtras-style read is not
-      // needed for watched since push is the writer here.)
+      // Persist cloud watched locally so a fresh sign-in restores checkmarks.
+      for (final we in watched.entries) {
+        if (we.key > 0 && we.value.isNotEmpty) {
+          await Store.setWatched(pid, we.key, we.value);
+        }
+      }
       // Local library.
       final lib = <LibraryEntry>[];
       for (final le in (s['locallib'] as Map? ?? {}).values) {
@@ -662,6 +665,13 @@ class FirebaseSync {
         } catch (_) {}
       }
       if (lib.isNotEmpty) await Store.saveLocalLibrary(pid, lib);
+
+      // Merge cloud resume spots locally.
+      final remoteResume =
+          Map<String, dynamic>.from((s['resume'] as Map?) ?? {});
+      if (remoteResume.isNotEmpty) {
+        await ResumeStore.mergeRemote(pid, remoteResume);
+      }
     }
     // Per-profile extras (addons only — tracker logins are per-device).
     final pid = activeId ?? (profiles.isNotEmpty ? profiles.first.id : '');
@@ -791,6 +801,51 @@ class FirebaseSync {
     final byProfile = doc['byProfile'] as Map<String, dynamic>?;
     final pdata = byProfile?[pid] as Map<String, dynamic>?;
     if (pdata == null) return;
+
+    // Pull watched checkmarks.
+    final rawWatched = pdata['watched'] as Map?;
+    if (rawWatched != null) {
+      for (final we in rawWatched.entries) {
+        final animeId = int.tryParse('${we.key}') ?? 0;
+        final wm = we.value as Map? ?? {};
+        final eps = {
+          for (final ep in (wm['eps'] as List? ?? [])) (ep as num).toInt()
+        };
+        if (animeId > 0 && eps.isNotEmpty) {
+          await Store.setWatched(pid, animeId, eps);
+        }
+      }
+    }
+
+    // Pull local library.
+    final rawLib = pdata['locallib'] as Map?;
+    if (rawLib != null) {
+      final lib = <LibraryEntry>[];
+      for (final le in rawLib.values) {
+        try {
+          final jm = Map<String, dynamic>.from(le as Map);
+          final lkey = '${jm['key'] ?? ''}';
+          lib.add(LibraryEntry(
+            key: lkey,
+            source: 'local',
+            title: '${jm['title'] ?? ''}',
+            cover: '${jm['cover'] ?? ''}',
+            status: '${jm['status'] ?? ''}',
+            progress: (jm['progress'] as num?)?.toInt() ?? 0,
+            total: (jm['total'] as num?)?.toInt(),
+            anilistId: (jm['anilistId'] as num?)?.toInt(),
+          ));
+        } catch (_) {}
+      }
+      if (lib.isNotEmpty) await Store.saveLocalLibrary(pid, lib);
+    }
+
+    // Pull resume spots.
+    final rawResume = pdata['resume'] as Map?;
+    if (rawResume != null) {
+      await ResumeStore.mergeRemote(pid, Map<String, dynamic>.from(rawResume));
+    }
+
     // Addons (website shape -> AddonRecord; `logo` -> `logoUrl`,
     // numeric `addedAt` -> ISO string).
     final rawAddons = pdata['addons'] as List?;

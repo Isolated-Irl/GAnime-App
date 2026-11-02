@@ -3391,7 +3391,7 @@ class SettingsScreen extends StatelessWidget {
         ),
         const SizedBox(height: 30),
         const Center(
-          child: Text('Made with ♥ by Isolated\nGAnime 0.1.0',
+          child: Text('Made with ♥ by Isolated\nGAnime 0.2.0-alpha',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey, fontSize: 12, height: 1.6)),
         ),

@@ -243,6 +243,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   List<Map<String, dynamic>> _chapterMeta = []; // {timeMs, title} for chapter UI
   Timer? _chapterPollTimer;
   bool _marked85 = false;
+  late Set<int> _mutableWatched;
   bool _autoSelected = false;
   bool _jumping = false;
   int _streamIndex = 0;
@@ -558,6 +559,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _loadFitMode();
     _episode = widget.episode;
     _streamIndex = widget.initialIndex;
+    _mutableWatched = Set<int>.from(widget.watchedEpisodes ?? const {});
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -598,13 +600,17 @@ class _PlayerScreenState extends State<PlayerScreen>
           !_isPrivateViewing &&
           pos.inMilliseconds / dur.inMilliseconds >= 0.85) {
         _marked85 = true;
-        if (widget.onMarkWatched != null) {
-          try {
+        _mutableWatched.add(_episode);
+        try {
+          await Store.setWatched(
+              widget.profileId ?? 'guest', widget.anime.id, _mutableWatched);
+          if (widget.onMarkWatched != null) {
             await widget.onMarkWatched!();
-          } catch (_) {}
-        }
+          }
+        } catch (_) {}
         if (mounted) {
-          setState(() => _status = '85% reached — episode marked watched.');
+          setState(() =>
+              _status = '85% reached — episode $_episode marked watched.');
         }
       }
 
@@ -787,7 +793,7 @@ class _PlayerScreenState extends State<PlayerScreen>
           for (final c in list) {
             if (c is Map) {
               final time = (c['time'] as num?)?.toDouble();
-              if (time != null && time > 0) {
+              if (time != null && time >= 0) {
                 final ms = (time * 1000).round();
                 ratios.add((ms / dur).clamp(0.0, 1.0));
                 meta.add({'timeMs': ms, 'title': c['title']?.toString() ?? ''});
@@ -1500,7 +1506,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final ep = await showEpisodesPanel(context,
         episodes: widget.episodes!,
         current: _episode,
-        watched: widget.watchedEpisodes ?? const {});
+        watched: _mutableWatched);
     if (ep != null && ep != _episode) _jumpEpisode(ep);
   }
 
