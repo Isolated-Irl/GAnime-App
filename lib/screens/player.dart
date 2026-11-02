@@ -26,6 +26,7 @@ import '../models.dart';
 import '../services/addon_ids.dart';
 import '../services/addons.dart';
 import '../services/aniskip.dart';
+import '../services/app_logger.dart';
 import '../services/resume_store.dart';
 import '../store.dart';
 import '../widgets/glass_player_controls.dart';
@@ -781,29 +782,60 @@ class _PlayerScreenState extends State<PlayerScreen>
   // ---------- Resume position (device + cloud) ----------
   int _lastResumeSaveMs = 0;
   bool _opening = false;
+  // Longest duration seen for the current episode (this session or the
+  // previous saved spot). A briefly-short duration reading must never look
+  // like "reached the end" and wipe the spot.
+  int _maxDurMs = 0;
+
+  // Resume diagnostics: which profile bucket + why a save was skipped.
+  // Skips are logged only for forced saves (pause / exit / app paused),
+  // otherwise the 5-second timer would flood the log.
+  String get _pidTag => widget.profileId == null ? 'guest' : 'profile';
+  void _rlog(String m) => AppLogger().log('resume', '[$_pidTag] $m');
 
   Future<void> _saveResume({bool force = false}) async {
     // Private Viewing: never save local resume spots or push to cloud.
-    if (_isPrivateViewing) return;
+    if (_isPrivateViewing) {
+      if (force) _rlog('skip save: Private Viewing is on');
+      return;
+    }
     final pid = widget.profileId ?? _guestPid;
-    if (_opening) return;
+    if (_opening) {
+      if (force) _rlog('skip save: player still opening the stream');
+      return;
+    }
     final animeId = widget.anime.id;
     final title = widget.anime.title;
     final cover = widget.anime.cover;
     final ep = _episode;
     final pos = _player.state.position;
     final dur = _player.state.duration;
-    if (dur.inMilliseconds <= 0) return;
+    if (dur.inMilliseconds <= 0) {
+      if (force) _rlog('skip save: duration unknown yet (pos ${pos.inSeconds}s)');
+      return;
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
     if (!force && now - _lastResumeSaveMs < 5000) return;
     _lastResumeSaveMs = now;
-    if (pos.inSeconds < 10) return;
-    final remaining = dur.inMilliseconds - pos.inMilliseconds;
-    if (pos.inMilliseconds / dur.inMilliseconds >= 0.95 || remaining < 90000) {
+    if (pos.inSeconds < 10) {
+      if (force) _rlog('skip save: only ${pos.inSeconds}s in (needs 10s)');
+      return;
+    }
+    if (dur.inMilliseconds > _maxDurMs) _maxDurMs = dur.inMilliseconds;
+    final durMs = _maxDurMs;
+    final remaining = durMs - pos.inMilliseconds;
+    // "Finished" only when the episode is a real length (>= 5 min) AND we
+    // are really at the end.
+    final finished = durMs >= 300000 &&
+        (pos.inMilliseconds / durMs >= 0.95 || remaining < 90000);
+    if (finished) {
+      _rlog('finished ep $ep at ${pos.inSeconds}s of ${durMs ~/ 1000}s -> spot cleared');
       await ResumeStore.clear(pid, animeId, ep);
     } else {
-      await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds,
-          dur.inMilliseconds,
+      if (force) {
+        _rlog('saved ep $ep of anime $animeId at ${pos.inSeconds}s of ${durMs ~/ 1000}s');
+      }
+      await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds, durMs,
           title: title, cover: cover, notify: force);
     }
     if (widget.profileId != null) {
@@ -814,6 +846,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<Duration?> _resumeStart() async {
     final pid = widget.profileId ?? _guestPid;
     final e = await ResumeStore.get(pid, widget.anime.id, _episode);
+    _rlog('lookup ep $_episode of anime ${widget.anime.id} -> ${e == null ? 'no saved spot' : '${e.posMs ~/ 1000}s'}');
+    if (e != null && e.durMs > _maxDurMs) _maxDurMs = e.durMs;
     if (e == null || e.posMs < 10000) return null;
     return Duration(milliseconds: e.posMs) - const Duration(seconds: 3);
   }
@@ -942,6 +976,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       final hit = best;
       await _saveResume(force: true);
       _episode = target;
+      _maxDurMs = 0;
       final jumpStart = await _resumeStart();
       _marked85 = false;
       _autoSelected = false;

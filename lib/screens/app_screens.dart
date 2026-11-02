@@ -151,6 +151,38 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  /// Builds the Continue Watching list. The old code removed every library
+  /// entry that had a resume spot, but the cards are drawn FROM the library
+  /// entries, so the row ended up empty (heading with nothing under it).
+  /// Now: resume spots first (newest first), using the library entry when
+  /// there is one, or a small stand-in entry when the anime is not in the
+  /// library list (guest users, completed shows being re-watched, ...).
+  List<LibraryEntry> _buildContinueList(List<LibraryEntry> cw) {
+    final byAnime = <int, LibraryEntry>{
+      for (final e in cw)
+        if (e.anilistId != null) e.anilistId!: e,
+    };
+    final first = <LibraryEntry>[];
+    final used = <String>{};
+    for (final r in _resume) {
+      final lib = byAnime[r.animeId];
+      if (lib != null) {
+        first.add(lib);
+        used.add(lib.key);
+      } else {
+        first.add(LibraryEntry(
+          key: 'resume_${r.animeId}',
+          source: 'local',
+          title: r.title,
+          cover: r.cover,
+          progress: r.ep > 1 ? r.ep - 1 : 0,
+          anilistId: r.animeId,
+        ));
+      }
+    }
+    return [...first, ...cw.where((e) => !used.contains(e.key))];
+  }
+
   /// Resume info line: "EP 5 · 12 min left" with progress bar of how far
   /// into this episode you are.
   Widget _resumeInfo(ResumeItem r) {
@@ -437,11 +469,10 @@ class _HomeScreenState extends State<HomeScreen> {
           final t = e.total ?? 0;
           if (t > 0 && e.progress >= t) return false; // completed
           return true;
-        })
-            // An anime with a half-watched episode is shown by its resume
-            // card instead (no duplicate card for the same show).
-            .where((e) => !_resume.any((r) => r.animeId == e.anilistId))
-            .toList();
+        }).toList();
+        // Cards: every half-watched episode first (newest first), then the
+        // other in-progress library entries.
+        final cwAll = _buildContinueList(cw);
         final heroItems = trending.take(4).toList();
         // Layout settings (Settings > Layout) gate every Home section.
         final ls = widget.settings;
@@ -460,8 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _rail('Top 100 Movies', topMovies),
         ];
         final showHero = ls.showHero && heroItems.isNotEmpty;
-        final showCw =
-            ls.showContinueWatching && (cw.isNotEmpty || _resume.isNotEmpty);
+        final showCw = ls.showContinueWatching && cwAll.isNotEmpty;
         return ListView(
           children: [
             // Hero carousel, like the web home: rounded card (margin 14,
@@ -735,11 +765,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       height: 144,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
-                        itemCount: cw.length,
+                        itemCount: cwAll.length,
                         separatorBuilder: (_, _) =>
                             const SizedBox(width: 10),
                         itemBuilder: (_, i) {
-                          final e = cw[i];
+                          final e = cwAll[i];
                           final total = e.total ?? 0;
                           final done = total > 0 && e.progress >= total;
                           final anime = Anime(
