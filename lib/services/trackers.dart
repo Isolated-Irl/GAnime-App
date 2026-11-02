@@ -4,7 +4,7 @@
 // 1-year token shown there. No redirect URI registration is needed.
 // Simkl: PIN flow (api.simkl.com/oauth/pin) with client id + user code.
 // MAL: public list via api.myanimelist.net with a user-supplied client id
-// (read-only; marking never pushes to MAL, matching the web app).
+// (full read/write via the relay: malSave, malUpdateDates, malDeleteEntry).
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models.dart';
