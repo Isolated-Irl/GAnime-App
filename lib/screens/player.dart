@@ -1051,10 +1051,13 @@ class _PlayerScreenState extends State<PlayerScreen>
           return (a, <StreamSource>[]);
         }
       }));
+      // No global 12s race: each addon call has its own 25s timeout, and on
+      // slow networks the 12s race gave up early -> "No streams found for
+      // episode N" while the fetches were still running. 45s safety net only.
       final settled = await Future.any([
         fetchAll,
         Future<List<(AddonRecord, List<StreamSource>)>>.delayed(
-            const Duration(seconds: 12), () => const []),
+            const Duration(seconds: 45), () => const []),
       ]);
 
       (AddonRecord, StreamSource)? best;
@@ -1484,10 +1487,13 @@ class _PlayerScreenState extends State<PlayerScreen>
           return MapEntry<String, List<StreamSource>>(a.name, []);
         }
       }));
+      // Same fix: the 12s race fired on slow networks -> grouped came back
+      // empty -> silent fallback to the CURRENT addon only (the "Sources
+      // shows one addon" symptom).
       final results = await Future.any([
         fetchAll,
         Future<List<MapEntry<String, List<StreamSource>>>>.delayed(
-            const Duration(seconds: 12), () => []),
+            const Duration(seconds: 45), () => []),
       ]);
       final grouped = <String, List<StreamSource>>{};
       for (final e in results) {
