@@ -75,6 +75,8 @@ Future<T?> glassSheet<T>(BuildContext context, Widget child) {
           radius: 24,
           child: SafeArea(
             top: false,
+            left: false,
+            right: false,
             child: ConstrainedBox(
               constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(ctx).size.height * 0.72),
@@ -110,8 +112,9 @@ Future<StreamSource?> showSourcesPanel(
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 8),
               child: Row(children: [
+                const SizedBox(width: 36),
                 Expanded(
                   child: Text('Sources ($total)',
                       textAlign: TextAlign.center,
@@ -188,7 +191,7 @@ Future<StreamSource?> showSourcesPanel(
                               child: Padding(
                                 padding: const EdgeInsets.all(12),
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(info.title,
                                         maxLines: 1,
@@ -285,8 +288,9 @@ Future<int?> showEpisodesPanel(
     mainAxisSize: MainAxisSize.min,
     children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 8),
         child: Row(children: [
+          const SizedBox(width: 36),
           Expanded(
             child: Text('Episodes (${episodes.length})',
                 textAlign: TextAlign.center,
