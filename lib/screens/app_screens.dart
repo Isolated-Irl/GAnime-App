@@ -191,35 +191,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return mins < 1 ? 'less than 1 min left' : '$mins min left';
   }
 
-  /// Resume info line: "EP 5 · 12 min left" with progress bar of how far
-  /// into this episode you are.
-  Widget _resumeInfo(ResumeItem r) {
-    final leftMs = (r.durMs - r.posMs).clamp(0, r.durMs).toInt();
-    final mins = Duration(milliseconds: leftMs).inMinutes;
-    final leftTxt = mins < 1 ? 'less than 1 min left' : '$mins min left';
-    final ratio = (r.posMs / r.durMs).clamp(0.0, 1.0).toDouble();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'EP ${r.ep} · $leftTxt',
-          style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF4CAF50),
-              fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 4),
-        LinearProgressIndicator(
-          value: ratio,
-          backgroundColor: const Color(0xFF333333),
-          minHeight: 5,
-          valueColor: const AlwaysStoppedAnimation<Color>(
-              Color(0xFF4CAF50)),
-        ),
-      ],
-    );
-  }
-
   @override
   void initState() {
     super.initState();
