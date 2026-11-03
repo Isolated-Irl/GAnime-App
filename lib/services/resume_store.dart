@@ -108,6 +108,22 @@ class ResumeStore {
   static Future<void> clear(String pid, int animeId, int ep) => _put(pid,
       animeId, ep, {'p': 0, 'd': 0, 't': DateTime.now().millisecondsSinceEpoch, 'x': 1});
 
+  /// Remove an anime entirely from Continue Watching (all episodes).
+  /// Only touches resume spots — watched checkmarks and library are untouched.
+  static Future<void> clearAnime(String pid, int animeId) =>
+      _run(() async {
+        final all = await _readAll();
+        final prof = _profile(all, pid);
+        final prefix = '$animeId:';
+        final toRemove = prof.keys.where((k) => k.startsWith(prefix)).toList();
+        for (final k in toRemove) {
+          prof.remove(k);
+        }
+        all[pid] = prof;
+        await _writeAll(all);
+        changed.value++;
+      });
+
   static Future<void> _put(
           String pid, int animeId, int ep, Map<String, dynamic> v,
           [bool notify = true]) =>

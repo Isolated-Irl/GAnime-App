@@ -191,6 +191,40 @@ class _HomeScreenState extends State<HomeScreen> {
     return mins < 1 ? 'less than 1 min left' : '$mins min left';
   }
 
+  /// Long-press menu on a Continue Watching card: remove from CW only.
+  /// Does NOT touch watched checkmarks, library, or tracking.
+  void _showRemoveCwDialog(BuildContext context, LibraryEntry entry) {
+    final animeId = entry.anilistId ?? 0;
+    if (animeId <= 0) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(entry.title,
+            maxLines: 2, overflow: TextOverflow.ellipsis),
+        content:
+            const Text('Remove from Continue Watching? Watched episodes stay marked.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              final pid = widget.profileId;
+              if (pid != null) {
+                await ResumeStore.clearAnime(pid, animeId);
+                _loadResume();
+              }
+            },
+            child:
+                const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -800,11 +834,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           return SizedBox(
                             width: 280,
                             child: InkWell(
+                              splashColor: Colors.transparent,
+                              highlightColor: Colors.transparent,
                               onTap: () => openDetails(context,
                                   anime: anime,
                                   profileId: widget.profileId,
                                   settings: widget.settings,
                                   onMarkWatched: widget.onMarkWatched),
+                              onLongPress: () =>
+                                  _showRemoveCwDialog(context, e),
+                              // No shadow/ripple on long-press.
+                              splashColor: Colors.transparent,
+                              highlightColor: Colors.transparent,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: GaColors.of(context).card,
@@ -974,6 +1015,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                         padding:
                                             const EdgeInsets.only(left: 8),
                                         child: InkWell(
+                                          splashColor: Colors.transparent,
+                                          highlightColor: Colors.transparent,
                                           onTap: () async {
                                             final ra = Anime(
                                               id: resume.animeId,
@@ -1591,6 +1634,8 @@ class _SearchScreenState extends State<SearchScreen> {
     return Tooltip(
       message: tooltip,
       child: InkWell(
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         onTap: () async {
           setState(() => _view = view);
           final st = await Store.settings();
@@ -1626,6 +1671,8 @@ class _SearchScreenState extends State<SearchScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         onTap: () => openDetails(context,
             anime: a,
             profileId: widget.profileId,
@@ -1758,6 +1805,8 @@ class _SearchScreenState extends State<SearchScreen> {
                 child: Opacity(
                   opacity: enabled ? 1.0 : 0.5,
                   child: InkWell(
+                    splashColor: Colors.transparent,
+                    highlightColor: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                     onTap: enabled
                         ? () => setSheet(
@@ -1837,6 +1886,8 @@ class _SearchScreenState extends State<SearchScreen> {
                           padding:
                               const EdgeInsets.symmetric(horizontal: 6),
                           child: InkWell(
+                            splashColor: Colors.transparent,
+                            highlightColor: Colors.transparent,
                             borderRadius: BorderRadius.circular(8),
                             onTap: () {
                               setSheet(() => _openFilterPanel = null);
@@ -2344,6 +2395,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: InkWell(
+                  splashColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
                   // Calendar entries carry AniList ids; the catalogue is
                   // AniList-based so open directly.
