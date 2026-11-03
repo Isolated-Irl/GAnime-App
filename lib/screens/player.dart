@@ -1035,7 +1035,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (addons.isEmpty) {
         addons = (await Store.allAddons()).where((a) => a.enabled).toList();
       }
-      final fallback = AddonIds(kitsu: '${widget.anime.id}');
+      final fallback = AddonIds(
+        anilist: widget.anime.anilistId ?? widget.anime.id,
+        mal: widget.anime.malId,
+      );
       final ids = await Future.any([
         AddonIdResolver.resolve(widget.anime),
         Future<AddonIds>.delayed(const Duration(seconds: 6), () => fallback),
@@ -1476,7 +1479,10 @@ class _PlayerScreenState extends State<PlayerScreen>
         // Fallback to current streams
         return {widget.addonName ?? 'Current': List.from(widget.streams)};
       }
-      final fallback = AddonIds(kitsu: '${widget.anime.id}');
+      final fallback = AddonIds(
+        anilist: widget.anime.anilistId ?? widget.anime.id,
+        mal: widget.anime.malId,
+      );
       final ids = await Future.any([
         AddonIdResolver.resolve(widget.anime),
         Future<AddonIds>.delayed(const Duration(seconds: 6), () => fallback),

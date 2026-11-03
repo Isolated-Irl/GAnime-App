@@ -29,7 +29,7 @@ class EpisodesService {
     if (eps.isEmpty) {
       var total = a.episodes ?? 0;
       if (total <= 0 && (a.nextEpisode ?? 0) > 0) {
-        total = a.nextEpisode!;
+        total = (a.nextEpisode! - 1).clamp(1, 9999);
       }
       if (total > 0) {
         eps = List.generate(
