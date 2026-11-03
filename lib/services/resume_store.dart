@@ -17,8 +17,9 @@ class ResumeEntry {
 class ResumeItem {
   final int animeId, ep, posMs, durMs, at;
   final String title, cover;
+  final int? total; // total episodes, null when unknown (display only)
   const ResumeItem(this.animeId, this.ep, this.posMs, this.durMs, this.at,
-      this.title, this.cover);
+      this.title, this.cover, [this.total]);
 }
 
 class ResumeStore {
@@ -88,7 +89,7 @@ class ResumeStore {
 
   static Future<void> save(
           String pid, int animeId, int ep, int posMs, int durMs,
-          {String title = '', String cover = '', bool notify = true}) =>
+          {String title = '', String cover = '', int? total, bool notify = true}) =>
       _put(
           pid,
           animeId,
@@ -99,6 +100,7 @@ class ResumeStore {
             't': DateTime.now().millisecondsSinceEpoch,
             if (title.isNotEmpty) 'ti': title,
             if (cover.isNotEmpty) 'cv': cover,
+            if (total != null && total > 0) 'tt': total,
           },
           notify);
 
@@ -148,7 +150,8 @@ class ResumeStore {
           if (aid == null || ep == null) return;
           if (p < 10000 || d <= 0 || title.isEmpty || t < cutoff) return;
           final item = ResumeItem(
-              aid, ep, p, d, t, title, (v['cv'] as String?) ?? '');
+              aid, ep, p, d, t, title, (v['cv'] as String?) ?? '',
+              (v['tt'] as num?)?.toInt());
           final cur = byAnime[aid];
           if (cur == null || item.at > cur.at) byAnime[aid] = item;
         });

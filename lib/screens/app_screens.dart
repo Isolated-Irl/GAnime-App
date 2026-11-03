@@ -177,10 +177,18 @@ class _HomeScreenState extends State<HomeScreen> {
           cover: r.cover,
           progress: r.ep > 1 ? r.ep - 1 : 0,
           anilistId: r.animeId,
+          total: r.total,
         ));
       }
     }
     return [...first, ...cw.where((e) => !used.contains(e.key))];
+  }
+
+  /// "23 min left" text for a resume spot (display only).
+  String _resumeLeftText(ResumeItem r) {
+    final leftMs = (r.durMs - r.posMs).clamp(0, r.durMs).toInt();
+    final mins = Duration(milliseconds: leftMs).inMinutes;
+    return mins < 1 ? 'less than 1 min left' : '$mins min left';
   }
 
   /// Resume info line: "EP 5 · 12 min left" with progress bar of how far
@@ -872,16 +880,66 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   fontWeight:
                                                       FontWeight.w600)),
                                           const SizedBox(height: 4),
-                                          Text(
-                                            done
-                                                ? 'Completed ✓'
-                                                : 'EP ${e.progress + 1}'
-                                                    '${total > 0 ? ' · ${e.progress}/$total watched' : ''}',
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                color:
-                                                    Colors.grey.shade400),
-                                          ),
+                                          if (done)
+                                            const Text(
+                                              'Completed ✓',
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Color(0xFF4CAF50),
+                                                  fontWeight:
+                                                      FontWeight.w600),
+                                            )
+                                          else if (resume != null)
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 3),
+                                                  decoration:
+                                                      BoxDecoration(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                            alpha: 0.12),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            6),
+                                                  ),
+                                                  child: Text(
+                                                    'EP ${resume.ep}',
+                                                    style: const TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: Colors.white),
+                                                  ),
+                                                ),
+                                                const Text(
+                                                  ' · ',
+                                                  style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.grey),
+                                                ),
+                                                Text(
+                                                  _resumeLeftText(resume),
+                                                  style: const TextStyle(
+                                                      fontSize: 11,
+                                                      color:
+                                                          Color(0xFF4CAF50),
+                                                      fontWeight:
+                                                          FontWeight.w600),
+                                                ),
+                                              ],
+                                            )
+                                          else
+                                            Text(
+                                              'EP ${e.progress + 1}',
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color:
+                                                      Colors.grey.shade400),
+                                            ),
                                           const SizedBox(height: 8),
                                           // Dimmed grey bar like the library
                                           // ("5 / ? eps") when total is
@@ -931,10 +989,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                           // released, airing date if known.
                                           // If there's a resume spot, show it
                                           // instead with a resume button.
-                                          if (resume != null) ...[
-                                            const SizedBox(height: 4),
-                                            _resumeInfo(resume),
-                                          ],
                                           if (!done) ...[
                                             const SizedBox(height: 4),
                                             _NextEpInfo(entry: e),
@@ -3653,10 +3707,17 @@ class _NextEpInfoState extends State<_NextEpInfo> {
             _airingAt! * 1000);
         final formatted =
             '${date.day} ${_monthName(date.month)}';
-        return Text(
-          'Next EP $nextEp airs $formatted',
-          style: TextStyle(
-              fontSize: 11, color: Colors.grey.shade400),
+        return Row(
+          children: [
+            Icon(Icons.calendar_today,
+                size: 12, color: Colors.grey.shade400),
+            const SizedBox(width: 4),
+            Text(
+              'Next ep airs $formatted',
+              style: TextStyle(
+                  fontSize: 11, color: Colors.grey.shade400),
+            ),
+          ],
         );
       }
     }

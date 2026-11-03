@@ -883,7 +883,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (force) {
       }
       await ResumeStore.save(pid, animeId, ep, pos.inMilliseconds, durMs,
-          title: title, cover: cover, notify: force);
+          title: title, cover: cover,
+          total: widget.anime.episodes, notify: force);
     }
     if (widget.profileId != null) {
       ResumeStore.requestCloudPush();
