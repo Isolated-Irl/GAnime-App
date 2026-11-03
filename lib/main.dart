@@ -23,8 +23,11 @@ import 'screens/settings/settings_shell.dart';
 import 'widgets/logo.dart';
 import 'widgets/skeletons.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Lock the app to portrait; the video player overrides this via the
+  // orientation MethodChannel (sensor landscape) and restores it on exit.
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // Crash/error logging first: installs FlutterError.onError and
   // PlatformDispatcher.onError before anything else can fail.
   MediaKit.ensureInitialized();

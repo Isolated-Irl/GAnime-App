@@ -244,6 +244,30 @@ class _PlayerScreenState extends State<PlayerScreen>
   Timer? _chapterPollTimer;
   bool _marked85 = false;
   late Set<int> _mutableWatched;
+
+  /// Native orientation channel: sensor landscape in player even when the
+  /// system auto-rotate toggle is off (SystemChrome can't do this).
+  static const _orientationChannel =
+      MethodChannel('com.isolated.ganime/orientation');
+
+  Future<void> _setSensorLandscape() async {
+    try {
+      await _orientationChannel
+          .invokeMethod('setOrientation', {'mode': 'sensorLandscape'});
+    } catch (_) {}
+  }
+
+  Future<void> _setPortraitOrientation() async {
+    try {
+      await _orientationChannel
+          .invokeMethod('setOrientation', {'mode': 'portrait'});
+    } catch (_) {}
+    // Backup: also restore via SystemChrome in case the channel failed.
+    try {
+      await SystemChrome.setPreferredOrientations(
+          [DeviceOrientation.portraitUp]);
+    } catch (_) {}
+  }
   bool _autoSelected = false;
   bool _jumping = false;
   int _streamIndex = 0;
@@ -560,10 +584,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     _episode = widget.episode;
     _streamIndex = widget.initialIndex;
     _mutableWatched = Set<int>.from(widget.watchedEpisodes ?? const {});
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+    // Sensor landscape via native channel: flips with the physical sensor
+    // even when the system auto-rotate toggle is off.
+    _setSensorLandscape();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _isHw = widget.settings.hardwareDecoding;
     _player = Player(
@@ -1108,7 +1131,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         ResumeStore.requestCloudPush(force: true);
       }
     });
-    SystemChrome.setPreferredOrientations([]);
+    // Restore portrait via native channel (with SystemChrome backup).
+    _setPortraitOrientation();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _player.dispose();
     super.dispose();
