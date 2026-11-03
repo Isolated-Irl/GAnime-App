@@ -91,6 +91,18 @@ class AddonIdResolver {
       }
     }
 
+    // 1b) Kitsu ID via relations.yuna.moe (community ID mapping API).
+    // Only when ani.zip didn't provide a real kitsu_id (kitsu is still
+    // the AniList ID fallback). yuna.moe needs no special headers.
+    if (kitsu == '$anilist') {
+      final yj = await _getJson(
+          'https://relations.yuna.moe/api/ids?source=anilist&id=$anilist');
+      final yk = yj?['kitsu'];
+      if (yk != null && '$yk'.trim().isNotEmpty && '$yk' != '$anilist') {
+        return _finish(a, '$yk'.trim(), tt, mal, anilist, season, epOffset);
+      }
+    }
+
     // 2) IMDb via Jikan (MAL's external links).
     if (mal != null && tt == null) {
       final j = await _getJson(
