@@ -14,25 +14,37 @@ class EpisodesService {
 
   static Future<List<EpisodeInfo>> forAnime(Anime a) async {
     final alId = a.anilistId ?? a.id;
-    if (_cache.containsKey(alId) && _cache[alId]!.isNotEmpty) {
+
+    // How many episodes have aired or exist according to AniList?
+    final isReleasing = a.status.toUpperCase() == 'RELEASING';
+    final int? airedSoFar = (a.nextEpisode != null && a.nextEpisode! > 1)
+        ? a.nextEpisode! - 1
+        : null;
+    final int anilistTotal = a.episodes ?? 0;
+    final int thumbsCount = a.episodeThumbs.length;
+
+    // For currently airing shows where nextEpisode is known, cap/target
+    // the aired count; otherwise use total episodes or streaming thumb count.
+    int targetCount = 0;
+    if (isReleasing && airedSoFar != null && airedSoFar > 0) {
+      targetCount = airedSoFar;
+    } else if (anilistTotal > 0) {
+      targetCount = anilistTotal;
+    } else if (airedSoFar != null && airedSoFar > 0) {
+      targetCount = airedSoFar;
+    } else if (thumbsCount > 0) {
+      targetCount = thumbsCount;
+    }
+
+    if (_cache.containsKey(alId) &&
+        _cache[alId]!.isNotEmpty &&
+        _cache[alId]!.length >= targetCount) {
       return _cache[alId]!;
     }
 
-    // Determine how many episodes should exist / have aired so far.
-    // - If `nextEpisode` is present (currently airing), `nextEpisode - 1`
-    //   episodes have already aired.
-    // - Otherwise use `a.episodes` (total episodes for finished shows)
-    //   or `a.episodeThumbs.length` (from AniList streamingEpisodes).
-    final int? airedSoFar =
-        (a.nextEpisode != null && a.nextEpisode! > 1) ? a.nextEpisode! - 1 : null;
-    final int targetCount = airedSoFar ??
-        ((a.episodes != null && a.episodes! > 0)
-            ? a.episodes!
-            : a.episodeThumbs.length);
-
     List<EpisodeInfo> eps = [];
 
-    // 1. Try ani.zip (website parity — no auth needed)
+    // 1. Try ani.zip (with a 10s timeout so a hung connection never blocks UI)
     if (alId > 0) {
       try {
         eps = await _fetchFromAnizip(alId, maxAired: airedSoFar);
@@ -42,7 +54,7 @@ class EpisodesService {
     // 2. Backfill / Fallback:
     // If ani.zip returned nothing OR returned fewer episodes than have
     // already aired (common on new seasonal anime where TVDB/ani.zip
-    // lags behind), fill in the missing episode slots up to targetCount.
+    // lags behind), fill in every missing episode 1..maxEp.
     if (targetCount > 0 && eps.length < targetCount) {
       final byNum = <int, EpisodeInfo>{for (final e in eps) e.number: e};
       final maxEp = math.max(
@@ -68,23 +80,19 @@ class EpisodesService {
       eps = merged;
     }
 
-    // 3. Last-resort fallback for movies or 1-episode specials where
-    // AniList has episodes == null and ani.zip is empty.
+    // 3. Last-resort fallback: if a show is FINISHED, RELEASING, or a MOVIE/OVA
+    // and both ani.zip and AniList episode counts are null/empty, provide at
+    // least Episode 1 so the user can always open the Sources screen.
     if (eps.isEmpty &&
-        (a.format.toUpperCase() == 'MOVIE' ||
-            a.format.toUpperCase() == 'SPECIAL' ||
-            a.format.toUpperCase() == 'OVA' ||
-            a.format.toUpperCase() == 'ONA' ||
-            a.status.toUpperCase() == 'FINISHED' ||
-            a.status.toUpperCase() == 'RELEASING')) {
-      final count = (a.nextEpisode != null && a.nextEpisode! > 1)
-          ? a.nextEpisode! - 1
-          : 1;
+        a.status.toUpperCase() != 'NOT_YET_RELEASED') {
+      final fallbackCount = math.max(1, targetCount);
       eps = List.generate(
-        count,
+        fallbackCount,
         (i) => EpisodeInfo(
           number: i + 1,
-          title: 'Episode ${i + 1}',
+          title: a.format.toUpperCase() == 'MOVIE'
+              ? 'Complete Movie'
+              : 'Episode ${i + 1}',
           still: i < a.episodeThumbs.length ? a.episodeThumbs[i] : '',
         ),
       );
@@ -110,14 +118,21 @@ class EpisodesService {
     final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
     final raw = (j['episodes'] as Map<String, dynamic>?) ?? {};
     final out = <EpisodeInfo>[];
+    final todayIso = DateTime.now().toIso8601String().substring(0, 10);
+
     for (final k in raw.keys) {
       if (!RegExp(r'^\d+$').hasMatch(k)) continue;
       final e = raw[k] as Map<String, dynamic>? ?? {};
       final n = (e['episodeNumber'] as num?)?.toInt() ?? int.tryParse(k) ?? 0;
       if (n < 1) continue;
-      // If AniList tells us only `maxAired` episodes have aired so far,
-      // don't list future unaired placeholder episodes from TVDB.
+      // Filter out future unaired placeholder episodes if maxAired is known.
       if (maxAired != null && n > maxAired) continue;
+      final airDate = (e['airDate'] as String?) ?? '';
+      if (maxAired == null &&
+          airDate.length >= 10 &&
+          airDate.substring(0, 10).compareTo(todayIso) > 0) {
+        continue;
+      }
       final titleMap = e['title'] as Map<String, dynamic>?;
       final title = (titleMap?['en'] as String?)?.isNotEmpty == true
           ? titleMap!['en'] as String
@@ -130,7 +145,7 @@ class EpisodesService {
         still: (e['image'] as String?) ?? '',
         overview: (e['overview'] as String?) ?? '',
         runtime: (e['runtime'] as num?)?.toInt(),
-        airdate: (e['airDate'] as String?) ?? '',
+        airdate: airDate,
       ));
     }
     out.sort((x, y) => x.number.compareTo(y.number));
