@@ -130,10 +130,7 @@ class _StreamsScreenState extends State<StreamsScreen> {
         }
       }
       // ID bridge with a hard cap.
-      final fallback = AddonIds(
-        anilist: widget.anime.anilistId ?? widget.anime.id,
-        mal: widget.anime.malId,
-      );
+      final fallback = AddonIds(kitsu: '${widget.anime.id}');
       final ids = await Future.any([
         AddonIdResolver.resolve(widget.anime),
         Future<AddonIds>.delayed(const Duration(seconds: 6), () => fallback),
@@ -310,9 +307,7 @@ class _StreamsScreenState extends State<StreamsScreen> {
                               fontWeight: FontWeight.w800)),
                       const SizedBox(height: 4),
                       Text(
-                        '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season ${AddonIdResolver.parseSeasonFromTitle(a.title)} · Episode ${widget.episode}'}'
-                        '${a.year != null ? ' · ${a.year}' : ''}'
-                        '${a.score != null ? ' · ★ ${(a.score! / 10).toStringAsFixed(1)}' : ''}',
+                        '${a.format.toUpperCase() == 'MOVIE' ? 'Movie' : 'Season 1 · Episode ${widget.episode}'} · ${a.year} · ★ ${a.score}',
                         style:
                             const TextStyle(color: Colors.white54, fontSize: 12),
                       ),

@@ -219,8 +219,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       // refresh from AniList so posters/banner and local state agree.
       if ((_anime.anilistId != null && _anime.anilistId != _anime.id) ||
           _anime.banner.isEmpty ||
-          _anime.description.isEmpty ||
-          (_anime.episodes == null && _anime.nextEpisode == null)) {
+          _anime.description.isEmpty) {
         final targetId = _anime.anilistId ?? _anime.id;
         if (targetId > 0) {
           try {
@@ -228,7 +227,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             // Keep the airing info the calendar already knew.
             _anime = fresh.copyWith(
               anilistId: targetId,
-              nextEpisode: fresh.nextEpisode ?? _anime.nextEpisode,
+              nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
               airingAt: _anime.airingAt ?? fresh.airingAt,
             );
           } catch (_) {}
@@ -280,7 +279,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             _anime = fresh.copyWith(
               anilistId: resolved.id,
               malId: malId,
-              nextEpisode: fresh.nextEpisode ?? _anime.nextEpisode,
+              nextEpisode: _anime.nextEpisode ?? fresh.nextEpisode,
               airingAt: _anime.airingAt ?? fresh.airingAt,
             );
           }
@@ -373,7 +372,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
         // Only cache full AniList data — never thin versions.
         if (_anime.banner.isNotEmpty && _anime.description.isNotEmpty) {
           _detailsCache[initialKey] = _anime;
-          if (eps.isNotEmpty) _episodeCache[initialKey] = eps;
+          _episodeCache[initialKey] = eps;
         }
         // Also save under the resolved key so both lookups hit.
         final resolvedKey = _cacheKey;
@@ -381,7 +380,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             _anime.banner.isNotEmpty &&
             _anime.description.isNotEmpty) {
           _detailsCache[resolvedKey] = _anime;
-          if (eps.isNotEmpty) _episodeCache[resolvedKey] = eps;
+          _episodeCache[resolvedKey] = eps;
         }
       }
     } catch (e) {
