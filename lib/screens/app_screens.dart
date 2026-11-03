@@ -211,11 +211,8 @@ class _HomeScreenState extends State<HomeScreen> {
           TextButton(
             onPressed: () async {
               Navigator.of(ctx).pop();
-              final pid = widget.profileId;
-              if (pid != null) {
-                await ResumeStore.clearAnime(pid, animeId);
-                _loadResume();
-              }
+              await ResumeStore.clearAnime(widget.profileId, animeId);
+              _loadResume();
             },
             child:
                 const Text('Remove', style: TextStyle(color: Colors.red)),
@@ -843,9 +840,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                   onMarkWatched: widget.onMarkWatched),
                               onLongPress: () =>
                                   _showRemoveCwDialog(context, e),
-                              // No shadow/ripple on long-press.
-                              splashColor: Colors.transparent,
-                              highlightColor: Colors.transparent,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: GaColors.of(context).card,
